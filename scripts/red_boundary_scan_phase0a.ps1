@@ -31,6 +31,7 @@ $files = Get-ChildItem @gci -ErrorAction SilentlyContinue |
   Where-Object {
     ($_.FullName -notmatch '\\\.git\\') -and
     ($_.FullName -notmatch '\\node_modules\\') -and
+    ($_.FullName -notmatch '\\\.next\\') -and
     ($selfNames -notcontains $_.Name) -and
     ($exts -contains $_.Extension)
   }
