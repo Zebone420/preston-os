@@ -8,9 +8,9 @@ PRESTON_AI_BUSINESS_POWERSTATION_MASTER_PLAN_v2_1_REVISED.md.
 | Gate | Name | Class | Owner | Status |
 |---|---|---|---|---|
 | 0A-1 | Repo Foundation | GREEN | No | DONE (0438b5e) |
-| 0A-2 | Governance Docs | GREEN | No | IN PROGRESS |
-| 0A-3 | Supabase Schema Files | GREEN | No | Files only |
-| 0A-4 | Safety Scripts | GREEN | No | Pending |
+| 0A-2 | Governance Docs | GREEN | No | DONE (e83c352, c0c3812) |
+| 0A-3 | Supabase Schema Files | GREEN | No | DONE, files only (e83c352) |
+| 0A-4 | Safety Scripts | GREEN | No | DONE (e83c352) |
 | 0A-5 | Owner Session | YELLOW | YES | Pending |
 | 0A-6 | Exit Audit | GREEN | No | Pending |
 
@@ -43,14 +43,20 @@ named in that gate. Never spans gates. Never covers RED.
 
 ## Blocked Items Register
 
-| Item | Reason | Unblock path |
+| Item | Status | Resolution |
 |---|---|---|
-| CLAUDE.md | Corrupted preview | Owner re-supplies content |
-| BUILDER_ACCESS_PASS_v1.md | Corrupted preview | Owner re-supplies content |
+| CLAUDE.md | RESOLVED | Committed at ed17eb5 |
+| BUILDER_ACCESS_PASS_v1.md | RESOLVED | Committed at c0c3812 |
 
-Blocked file paths in full: CLAUDE.md at repo root, and
-docs/PRESTON_AI_BUILDER_ACCESS_PASS_v1.md. Unblock path for both: owner
-re-supplies or re-approves content, then a single clean write.
+Closeout notes:
+- CLAUDE.md resolved and committed at ed17eb5.
+- docs/PRESTON_AI_BUILDER_ACCESS_PASS_v1.md resolved and committed at
+  c0c3812.
+- The master plan doc remains untracked/local pending owner decision.
+- docs/PRESTON_AI_ACTION_CLASSES_v1.md is deliberately not created under
+  Option B; CLAUDE.md references the Action Classes summary in this
+  document instead.
+- Next gate: 0A-5 Owner Session.
 
 ## Exit Gate (Phase 0A PASS requires)
 
