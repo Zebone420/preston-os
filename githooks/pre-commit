@@ -1,0 +1,16 @@
+#!/bin/sh
+# Preston AI pre-commit hook: block commits on secret or RED findings.
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "scripts/secret_scan_phase0a.ps1"
+if [ $? -ne 0 ]; then
+  echo "pre-commit: secret scan failed - commit blocked"
+  exit 1
+fi
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "scripts/red_boundary_scan_phase0a.ps1"
+if [ $? -ne 0 ]; then
+  echo "pre-commit: RED boundary scan failed - commit blocked"
+  exit 1
+fi
+
+exit 0
