@@ -1,0 +1,30 @@
+# --- Secrets: never committed ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+id_rsa*
+id_ed25519*
+known_hosts
+*.credentials.json
+secrets/
+
+# --- Local-only Claude Code settings ---
+.claude/settings.local.json
+.claude/*.local.*
+
+# --- Build / dependencies ---
+node_modules/
+.next/
+dist/
+out/
+coverage/
+
+# --- Temp / local ---
+reports/tmp/
+*.log
+Thumbs.db
+.DS_Store
