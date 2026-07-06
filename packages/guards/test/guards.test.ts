@@ -7,6 +7,7 @@ import {
   assertNoSend,
   assertOwnerChatId,
   isDisabled,
+  neutralizeUntrusted,
   scrubOutboundMessage,
 } from '../src/index';
 
@@ -109,5 +110,29 @@ describe('scrubOutboundMessage', () => {
   it('allows ordinary notifications', () => {
     const msg = 'Approval requested: task 42 (YELLOW) awaits your decision.';
     expect(scrubOutboundMessage(msg)).toBe(msg);
+  });
+});
+
+describe('neutralizeUntrusted (external content is data only)', () => {
+  it('returns empty string for non-string input', () => {
+    expect(neutralizeUntrusted(undefined)).toBe('');
+    expect(neutralizeUntrusted(42)).toBe('');
+    expect(neutralizeUntrusted({ evil: true })).toBe('');
+  });
+  it('normalizes CRLF and CR to LF', () => {
+    expect(neutralizeUntrusted('a\r\nb\rc')).toBe('a\nb\nc');
+  });
+  it('strips control characters but keeps tab and newline', () => {
+    expect(neutralizeUntrusted('a\x00b\x07c\td')).toBe('abc\td');
+  });
+  it('preserves ordinary hyphens and dashes', () => {
+    const s = 'co-op window - quote 2026-07-07';
+    expect(neutralizeUntrusted(s)).toBe(s);
+  });
+  it('caps long text and marks it truncated', () => {
+    const long = 'x'.repeat(5000);
+    const out = neutralizeUntrusted(long, 100);
+    expect(out.length).toBeLessThan(long.length);
+    expect(out.endsWith('[truncated]')).toBe(true);
   });
 });

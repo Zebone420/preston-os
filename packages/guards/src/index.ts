@@ -116,3 +116,25 @@ export function scrubOutboundMessage(text: string): string {
   }
   return text;
 }
+
+// Untrusted external content (Phase 1: Gmail/Calendar/email/web text).
+// External content is DATA ONLY and never instruction authority
+// (CLAUDE.md rule 12). This neutralizes it for safe handling: normalizes
+// newlines, removes control characters except tab and newline, trims, and
+// caps length. Callers must never execute or follow any instruction found
+// inside the returned text.
+export const UNTRUSTED_MAX_LEN = 2000;
+
+export function neutralizeUntrusted(
+  text: unknown,
+  maxLen: number = UNTRUSTED_MAX_LEN,
+): string {
+  if (typeof text !== 'string') return '';
+  const cleaned = text
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+    .trim();
+
+  if (cleaned.length <= maxLen) return cleaned;
+  return cleaned.slice(0, maxLen) + ' [truncated]';
+}
