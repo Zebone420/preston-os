@@ -8,7 +8,7 @@ import {
 } from '../src/lib/google';
 
 // A fully-configured live setup (canonical env var names from env.template)
-// plus the explicit enable flag. Phase 1A must still fail closed on this.
+// plus the explicit enable flag. Phase 1A/1B must still fail closed on this.
 const liveEnv = {
   GOOGLE_OAUTH_CLIENT_ID: 'x',
   GOOGLE_OAUTH_CLIENT_SECRET: 'y',
@@ -56,6 +56,40 @@ describe('google read-only adapter (Phase 1A prep)', () => {
   });
 
   it('blocks gmail send and calendar write paths', () => {
+    expect(() => sendGmail()).toThrow(GuardError);
+    expect(() => writeCalendarEvent()).toThrow(GuardError);
+  });
+});
+
+// Phase 1B Stage 1 - readiness only. No live path is implemented. These tests
+// prove the adapter fails SAFE (to mock) for every env shape short of the exact
+// activation the future RED subgate will introduce, so nothing accidentally
+// enables live Google access.
+describe('google adapter - Phase 1B Stage 1 fail-safe readiness', () => {
+  it('missing all Google env values -> mock (fail-safe, never live)', () => {
+    expect(getGmailSummary({ env: {} }).source).toBe('mock');
+    expect(getCalendarSummary({ env: {} }).source).toBe('mock');
+  });
+
+  it('full read-only config but enable flag absent -> mock', () => {
+    const configNoFlag = {
+      GOOGLE_OAUTH_CLIENT_ID: 'x',
+      GOOGLE_OAUTH_CLIENT_SECRET: 'y',
+      GOOGLE_OAUTH_REDIRECT_URI: 'https://example.com/oauth/callback',
+      GOOGLE_WORKSPACE_READONLY_SCOPES: 'gmail.readonly calendar.readonly',
+    };
+    expect(getGmailSummary({ env: configNoFlag }).source).toBe('mock');
+    expect(getCalendarSummary({ env: configNoFlag }).source).toBe('mock');
+  });
+
+  it('enable flag with any non-exact value never enables live (stays mock)', () => {
+    for (const v of ['TRUE', 'True', '1', 'yes', 'on', ' true ', '']) {
+      expect(getGmailSummary({ env: { GOOGLE_READONLY_LIVE_ENABLED: v } }).source).toBe('mock');
+      expect(getCalendarSummary({ env: { GOOGLE_READONLY_LIVE_ENABLED: v } }).source).toBe('mock');
+    }
+  });
+
+  it('only mutation-shaped exports are the fail-closed stubs (no live-enabling export)', () => {
     expect(() => sendGmail()).toThrow(GuardError);
     expect(() => writeCalendarEvent()).toThrow(GuardError);
   });
