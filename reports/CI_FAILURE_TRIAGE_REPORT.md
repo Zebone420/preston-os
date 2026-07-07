@@ -63,3 +63,31 @@ Owner received GitHub Actions "run failed" emails. Per the owner:
 - Obtain the dashboard job log (Actions tab -> failed run -> dashboard job ->
   failing step -> last ~20 lines). No secrets appear in these logs.
 - Patch the confirmed failing step directly.
+
+## Second CI failure (distinct) - npm ci lockfile out of sync (@emnapi)
+
+After the Node alignment (ff1ebe5) turned CI green, a later run (on commit
+13f7e31) failed again - but at a DIFFERENT step. The owner's initial read was
+"npm test"; the pasted log showed the real failing step was `npm ci`:
+
+    npm error code EUSAGE
+    npm error `npm ci` can only install packages when your package.json and
+    npm error package-lock.json ... are in sync.
+    npm error Missing: @emnapi/runtime@1.11.2 from lock file
+    npm error Missing: @emnapi/core@1.11.2 from lock file
+
+Root cause: apps/dashboard/package-lock.json was missing the nested
+node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/* deps
+(@napi-rs/wasm-runtime, @emnapi/wasi-threads, @tybys/wasm-util, tslib) that the
+Linux WASM oxide fallback needs. @emnapi/runtime 1.11.2 was published after the
+lockfile was generated, so CI's Linux npm ci resolved that edge to a version
+missing from the lockfile. Windows npm ci uses the native oxide-win32 variant
+and never evaluates that edge - which is why it passed locally.
+
+Fix: regenerated the lockfile with `npm install --package-lock-only` (lockfile
+only; node_modules untouched; package.json unchanged). Diff: +46 lines, 0
+removed - it added the previously-missing nested wasm32-wasi dependency entries.
+
+Local validation after the fix: npm ci OK, tsc --noEmit OK, npm test 76/76 OK.
+Final confirmation is the next CI run (a lockfile-consistency fix can only be
+fully proven on the Linux runner).
