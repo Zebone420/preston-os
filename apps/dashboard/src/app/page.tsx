@@ -57,6 +57,9 @@ export default async function Home() {
           <Link href="/audit" className="text-sm text-slate-300 underline">
             Audit View
           </Link>
+          <Link href="/approvals" className="text-sm text-slate-300 underline">
+            Approval Center
+          </Link>
           {setupMode() ? (
             <span className="rounded bg-amber-900 px-2 py-1 text-xs">
               SETUP MODE - Supabase env not configured
