@@ -72,9 +72,9 @@ export interface BuildBriefOpts {
   approvals?: ApprovalRequest[];
 }
 
-function safeGmail(opts: BuildBriefOpts): BriefSection<GmailMessageSummary> {
+async function safeGmail(opts: BuildBriefOpts): Promise<BriefSection<GmailMessageSummary>> {
   try {
-    const res = opts.gmail ?? getGmailSummary({ env: opts.env });
+    const res = opts.gmail ?? (await getGmailSummary({ env: opts.env }));
     return {
       source: res.source,
       note: res.note,
@@ -91,9 +91,9 @@ function safeGmail(opts: BuildBriefOpts): BriefSection<GmailMessageSummary> {
   }
 }
 
-function safeCalendar(opts: BuildBriefOpts): BriefSection<CalendarEventSummary> {
+async function safeCalendar(opts: BuildBriefOpts): Promise<BriefSection<CalendarEventSummary>> {
   try {
-    const res = opts.calendar ?? getCalendarSummary({ env: opts.env });
+    const res = opts.calendar ?? (await getCalendarSummary({ env: opts.env }));
     return {
       source: res.source,
       note: res.note,
@@ -140,9 +140,9 @@ function toStops(items: CalendarEventSummary[]): AppointmentStop[] {
     .map((e) => ({ id: e.id, title: e.title, start: e.start, location: e.location }));
 }
 
-export function buildDailyBrief(opts: BuildBriefOpts): DailyBrief {
-  const gmail = safeGmail(opts);
-  const calendar = safeCalendar(opts);
+export async function buildDailyBrief(opts: BuildBriefOpts): Promise<DailyBrief> {
+  const gmail = await safeGmail(opts);
+  const calendar = await safeCalendar(opts);
 
   const pendingSeed = opts.approvals ?? MOCK_APPROVALS;
   const pending = listPendingApprovals(pendingSeed, opts.now);

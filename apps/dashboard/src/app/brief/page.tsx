@@ -8,9 +8,9 @@ import { buildDailyBrief } from '@/lib/daily-brief';
 
 export const dynamic = 'force-dynamic';
 
-export default function BriefPage() {
+export default async function BriefPage() {
   const now = new Date().toISOString();
-  const brief = buildDailyBrief({ now, env: process.env as Record<string, string | undefined> });
+  const brief = await buildDailyBrief({ now, env: process.env as Record<string, string | undefined> });
 
   return (
     <main className="min-h-screen bg-slate-950 p-8 text-slate-100">
