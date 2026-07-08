@@ -1,49 +1,56 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
+import { evaluateOwnerGate, isAuthConfigured } from './lib/owner-auth';
 
 // Owner auth gate (Next 16 proxy convention, replaces middleware.ts).
-// SETUP MODE: when Supabase env is not configured, enforcement is off
-// and the app renders with mock data only. Enforcement activates the
-// moment the owner sets env values (gate 0B owner session).
+// Thin adapter: all decisions live in lib/owner-auth.ts (unit-tested).
+// FAIL-CLOSED SETUP MODE (Phase 1B owner-login gate): when the Supabase
+// auth env is not configured, every matched path except /login redirects
+// to /login, which renders a safe setup notice and no data. Enforcement
+// with real sessions activates the moment the owner sets the Supabase
+// env values AND OWNER_EMAIL_ALLOWLIST (empty allowlist blocks everyone).
 export async function proxy(request: NextRequest) {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !key) return NextResponse.next();
-
-  let response = NextResponse.next({ request });
-  const supabase = createServerClient(url, key, {
-    cookies: {
-      getAll() {
-        return request.cookies.getAll();
-      },
-      setAll(cookiesToSet) {
-        cookiesToSet.forEach(({ name, value }) =>
-          request.cookies.set(name, value),
-        );
-        response = NextResponse.next({ request });
-        cookiesToSet.forEach(({ name, value, options }) =>
-          response.cookies.set(name, value, options),
-        );
-      },
-    },
-  });
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const env = process.env;
   const path = request.nextUrl.pathname;
 
-  if (!user && path !== '/login') {
-    const to = request.nextUrl.clone();
-    to.pathname = '/login';
-    return NextResponse.redirect(to);
+  let response = NextResponse.next({ request });
+  let userEmail: string | null = null;
+
+  if (isAuthConfigured(env)) {
+    const supabase = createServerClient(
+      env.NEXT_PUBLIC_SUPABASE_URL as string,
+      env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string,
+      {
+        cookies: {
+          getAll() {
+            return request.cookies.getAll();
+          },
+          setAll(cookiesToSet) {
+            cookiesToSet.forEach(({ name, value }) =>
+              request.cookies.set(name, value),
+            );
+            response = NextResponse.next({ request });
+            cookiesToSet.forEach(({ name, value, options }) =>
+              response.cookies.set(name, value, options),
+            );
+          },
+        },
+      },
+    );
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    userEmail = user?.email ?? null;
   }
-  if (user && path === '/login') {
-    const to = request.nextUrl.clone();
-    to.pathname = '/';
-    return NextResponse.redirect(to);
-  }
-  return response;
+
+  const decision = evaluateOwnerGate({ path, userEmail, env });
+  if (decision === 'allow') return response;
+
+  const to = request.nextUrl.clone();
+  // 'home' sends a signed-in owner away from /login; every blocked
+  // state ('setup', 'login', 'deny') lands on the safe /login surface.
+  to.pathname = decision === 'home' ? '/' : '/login';
+  return NextResponse.redirect(to);
 }
 
 export const config = {
