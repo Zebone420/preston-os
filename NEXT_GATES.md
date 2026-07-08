@@ -29,3 +29,17 @@ wait for a future owner-approved gate.
   owner-only login (Supabase auth) or the alias protected (Vercel Pro
   "All Deployments" or Password Protection). Never enable live reads
   while the alias is publicly readable.
+- Owner-login gate (Phase 1B, closed 2026-07-08): app-level owner-only
+  login is now enforced by apps/dashboard/src/proxy.ts with decisions
+  in src/lib/owner-auth.ts (unit-tested). Fail-closed on all axes:
+  missing Supabase auth env -> only /login renders (safe setup notice,
+  no data, mock included); unauthenticated -> redirect to /login;
+  authenticated but not in OWNER_EMAIL_ALLOWLIST -> blocked (missing
+  or empty allowlist blocks everyone). This satisfies the staging
+  exposure gate's owner-login precondition. Owner action before
+  Stage 4: set NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  and OWNER_EMAIL_ALLOWLIST in Vercel, and create the single owner
+  user in Supabase Auth (no signup flow exists). Note: the OAuth
+  callback route (/api/google/oauth/callback) is also behind the gate;
+  revisit the matcher at Stage 4 activation if the consent flow needs
+  it reachable.
