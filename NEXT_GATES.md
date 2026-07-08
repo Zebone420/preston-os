@@ -17,3 +17,15 @@ wait for a future owner-approved gate.
   owner-only auth policies once the owner user exists (0B session).
 - npm audit: 2 moderate advisories in dashboard dependency tree to
   review (no --force fixes without approval).
+- Staging exposure gate (recorded 2026-07-08, deployment governance
+  audit): the Vercel production alias (preston-os-staging.vercel.app)
+  is publicly reachable on the Hobby plan. Vercel Authentication
+  "Standard Protection" is ON but covers previews only; "All
+  Deployments" and Password Protection require a paid plan. This is
+  acceptable ONLY while the app serves MOCK data with no live env
+  vars. HARD PRECONDITION for Phase 1B Stage 4 activation (or setting
+  ANY live env var in Vercel, e.g. GOOGLE_READONLY_LIVE_ENABLED,
+  SUPABASE_*, AIRTABLE_*): the dashboard must first be gated by
+  owner-only login (Supabase auth) or the alias protected (Vercel Pro
+  "All Deployments" or Password Protection). Never enable live reads
+  while the alias is publicly readable.
