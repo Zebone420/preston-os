@@ -5,10 +5,21 @@ import {
   type ApprovalStatus,
   type RiskClass,
 } from '@/lib/approvals';
+import {
+  listApprovalRows,
+  type ApprovalRow,
+  type ControlPlaneClient,
+} from '@/lib/approvals-store';
+import { getServerSupabase } from '@/lib/supabase/server';
+import { decideApproval } from './actions';
 
-// Approval Center - Phase 2 GREEN local foundation (read-only, fail-closed).
-// Shows command packets awaiting owner decision. Approve/Reject controls are
-// INERT placeholders: no execution path exists here. Nothing sends or writes.
+// Approval Center - Gate 3 control-plane wiring.
+// Setup mode (no Supabase env): MOCK rows, INERT buttons, exactly as in
+// the Phase 2 foundation - nothing changed in the fail-closed posture.
+// Connected mode (owner logged in, RLS-bound): real `approvals` rows
+// from Supabase staging; Approve/Reject record an owner DECISION in the
+// control plane and execute NOTHING (see lib/approvals-store.ts and the
+// evaluateExecution guard, which still blocks every live action type).
 
 export const dynamic = 'force-dynamic';
 
@@ -27,9 +38,190 @@ const STATUS_STYLE: Record<ApprovalStatus, string> = {
   blocked: 'bg-red-950',
 };
 
-export default function ApprovalsPage() {
+const MSG_TEXT: Record<string, string> = {
+  decided: 'Decision recorded. Nothing was executed.',
+  setup_mode: 'Setup mode: Supabase env is not configured.',
+  denied: 'Denied: owner login required.',
+  invalid: 'Invalid request.',
+  invalid_decision: 'Invalid decision value.',
+  invalid_id: 'Invalid approval id.',
+  not_pending: 'Approval not found or no longer pending; nothing changed.',
+  write_failed: 'Decision write failed; nothing changed.',
+  audit_failed: 'Decision recorded but the audit write FAILED - investigate.',
+};
+
+function riskStyle(actionClass: string): string {
+  return RISK_STYLE[actionClass as RiskClass] ?? 'bg-slate-700';
+}
+
+function statusStyle(decision: string): string {
+  const map: Record<string, string> = {
+    pending: STATUS_STYLE.pending,
+    approved: STATUS_STYLE.approved,
+    rejected: STATUS_STYLE.rejected,
+    expired: STATUS_STYLE.expired,
+  };
+  return map[decision] ?? 'bg-slate-700';
+}
+
+function MockTable() {
   const now = new Date().toISOString();
-  const rows = MOCK_APPROVALS.map((r) => ({ req: r, status: resolveStatus(r, now) }));
+  const rows = MOCK_APPROVALS.map((r) => ({
+    req: r,
+    status: resolveStatus(r, now),
+  }));
+  return (
+    <table className="w-full text-left text-sm">
+      <thead className="text-slate-400">
+        <tr>
+          <th className="p-2">Task</th>
+          <th className="p-2">Action</th>
+          <th className="p-2">Risk</th>
+          <th className="p-2">Status</th>
+          <th className="p-2">Summary</th>
+          <th className="p-2">Created</th>
+          <th className="p-2">Decision</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(({ req, status }) => (
+          <tr
+            key={req.approval_id}
+            className="border-t border-slate-800 align-top"
+          >
+            <td className="p-2 text-slate-300">{req.packet.task_id}</td>
+            <td className="p-2">{req.packet.action_type}</td>
+            <td className="p-2">
+              <span
+                className={
+                  'rounded px-2 py-0.5 text-xs ' +
+                  RISK_STYLE[req.packet.risk_class]
+                }
+              >
+                {req.packet.risk_class}
+              </span>
+            </td>
+            <td className="p-2">
+              <span
+                className={'rounded px-2 py-0.5 text-xs ' + STATUS_STYLE[status]}
+              >
+                {status}
+              </span>
+            </td>
+            <td className="p-2 text-slate-400">{req.packet.summary}</td>
+            <td className="p-2 text-slate-500">{req.created_at}</td>
+            <td className="p-2">
+              <span className="flex gap-2">
+                <button
+                  disabled
+                  title="Inert placeholder - setup mode has no write path"
+                  className="cursor-not-allowed rounded bg-emerald-950 px-2 py-0.5 text-xs text-slate-500"
+                >
+                  Approve
+                </button>
+                <button
+                  disabled
+                  title="Inert placeholder - setup mode has no write path"
+                  className="cursor-not-allowed rounded bg-red-950 px-2 py-0.5 text-xs text-slate-500"
+                >
+                  Reject
+                </button>
+              </span>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function LiveTable({ rows }: { rows: ApprovalRow[] }) {
+  return (
+    <table className="w-full text-left text-sm">
+      <thead className="text-slate-400">
+        <tr>
+          <th className="p-2">Requested action</th>
+          <th className="p-2">Risk</th>
+          <th className="p-2">Decision</th>
+          <th className="p-2">Decided at</th>
+          <th className="p-2">Notes</th>
+          <th className="p-2">Created</th>
+          <th className="p-2">Decide</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.id} className="border-t border-slate-800 align-top">
+            <td className="p-2 text-slate-300">{row.requested_action}</td>
+            <td className="p-2">
+              <span
+                className={
+                  'rounded px-2 py-0.5 text-xs ' + riskStyle(row.action_class)
+                }
+              >
+                {row.action_class}
+              </span>
+            </td>
+            <td className="p-2">
+              <span
+                className={
+                  'rounded px-2 py-0.5 text-xs ' + statusStyle(row.decision)
+                }
+              >
+                {row.decision}
+              </span>
+            </td>
+            <td className="p-2 text-slate-500">{row.decision_at ?? '-'}</td>
+            <td className="p-2 text-slate-400">{row.notes ?? ''}</td>
+            <td className="p-2 text-slate-500">{row.created_at}</td>
+            <td className="p-2">
+              {row.decision === 'pending' ? (
+                <form action={decideApproval} className="flex gap-2">
+                  <input type="hidden" name="approval_id" value={row.id} />
+                  <button
+                    type="submit"
+                    name="decision"
+                    value="approved"
+                    className="rounded bg-emerald-800 px-2 py-0.5 text-xs hover:bg-emerald-700"
+                  >
+                    Approve
+                  </button>
+                  <button
+                    type="submit"
+                    name="decision"
+                    value="rejected"
+                    className="rounded bg-red-800 px-2 py-0.5 text-xs hover:bg-red-700"
+                  >
+                    Reject
+                  </button>
+                </form>
+              ) : (
+                <span className="text-xs text-slate-500">decided</span>
+              )}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+export default async function ApprovalsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ msg?: string }>;
+}) {
+  const { msg } = await searchParams;
+  const supabase = (await getServerSupabase()) as unknown as
+    | ControlPlaneClient
+    | null;
+
+  let live: { rows: ApprovalRow[]; error?: string } | null = null;
+  if (supabase) {
+    live = await listApprovalRows(supabase);
+  }
+
+  const banner = msg ? MSG_TEXT[msg] : undefined;
 
   return (
     <main className="min-h-screen bg-slate-950 p-8 text-slate-100">
@@ -43,73 +235,44 @@ export default function ApprovalsPage() {
             Audit View
           </Link>
           <span className="rounded bg-amber-900 px-2 py-1 text-xs">
-            PHASE 2 - fail-closed, no execution
+            {supabase
+              ? 'CONTROL PLANE - decisions only, no execution'
+              : 'SETUP MODE - fail-closed, no execution'}
           </span>
         </nav>
       </header>
 
+      {banner && (
+        <p className="mb-4 rounded bg-slate-800 p-3 text-xs text-amber-300">
+          {banner}
+        </p>
+      )}
+
       <p className="mb-4 rounded bg-slate-900 p-3 text-xs text-slate-400">
-        MOCK data. Every action requires an explicit owner approval and nothing
-        executes a live send or write in Phase 2. Approve / Reject buttons below
-        are inert placeholders.
+        {supabase
+          ? 'SUPABASE STAGING control plane. Approve / Reject record an ' +
+            'owner decision only. No decision here sends, writes to any ' +
+            'business system, or executes anything: every live action ' +
+            'type is blocked by the fail-closed execution guard.'
+          : 'MOCK data. Every action requires an explicit owner approval ' +
+            'and nothing executes a live send or write. Approve / Reject ' +
+            'buttons below are inert placeholders.'}
       </p>
 
       <div className="overflow-x-auto">
-        <table className="w-full text-left text-sm">
-          <thead className="text-slate-400">
-            <tr>
-              <th className="p-2">Task</th>
-              <th className="p-2">Action</th>
-              <th className="p-2">Risk</th>
-              <th className="p-2">Status</th>
-              <th className="p-2">Summary</th>
-              <th className="p-2">Created</th>
-              <th className="p-2">Decision</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(({ req, status }) => (
-              <tr key={req.approval_id} className="border-t border-slate-800 align-top">
-                <td className="p-2 text-slate-300">{req.packet.task_id}</td>
-                <td className="p-2">{req.packet.action_type}</td>
-                <td className="p-2">
-                  <span
-                    className={
-                      'rounded px-2 py-0.5 text-xs ' + RISK_STYLE[req.packet.risk_class]
-                    }
-                  >
-                    {req.packet.risk_class}
-                  </span>
-                </td>
-                <td className="p-2">
-                  <span className={'rounded px-2 py-0.5 text-xs ' + STATUS_STYLE[status]}>
-                    {status}
-                  </span>
-                </td>
-                <td className="p-2 text-slate-400">{req.packet.summary}</td>
-                <td className="p-2 text-slate-500">{req.created_at}</td>
-                <td className="p-2">
-                  <span className="flex gap-2">
-                    <button
-                      disabled
-                      title="Inert placeholder - no execution in Phase 2"
-                      className="cursor-not-allowed rounded bg-emerald-950 px-2 py-0.5 text-xs text-slate-500"
-                    >
-                      Approve
-                    </button>
-                    <button
-                      disabled
-                      title="Inert placeholder - no execution in Phase 2"
-                      className="cursor-not-allowed rounded bg-red-950 px-2 py-0.5 text-xs text-slate-500"
-                    >
-                      Reject
-                    </button>
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        {live ? (
+          live.error ? (
+            <p className="rounded bg-red-950 p-3 text-xs">{live.error}</p>
+          ) : live.rows.length === 0 ? (
+            <p className="rounded bg-slate-900 p-3 text-xs text-slate-400">
+              No approval rows in the control plane yet.
+            </p>
+          ) : (
+            <LiveTable rows={live.rows} />
+          )
+        ) : (
+          <MockTable />
+        )}
       </div>
     </main>
   );
