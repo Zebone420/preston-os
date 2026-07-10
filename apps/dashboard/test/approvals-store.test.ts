@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   decideApprovalRow,
+  interpretApprovalsError,
   listApprovalRows,
   type ControlPlaneClient,
   type StoreResult,
@@ -246,5 +247,51 @@ describe('decideApprovalRow - audit trail', () => {
       reason: 'x'.repeat(2000),
     });
     expect(String(calls.updates[0].patch['notes'])).toHaveLength(500);
+  });
+});
+
+describe('interpretApprovalsError', () => {
+  it('returns undefined for no error', () => {
+    expect(interpretApprovalsError(undefined)).toBeUndefined();
+    expect(interpretApprovalsError('')).toBeUndefined();
+  });
+
+  it('flags permission denied as a missing GRANT (Branch B)', () => {
+    const hint = interpretApprovalsError(
+      'approvals read failed: permission denied for table approvals',
+    );
+    expect(hint).toContain('GRANT');
+    expect(hint).toContain('Branch B');
+  });
+
+  it('flags RLS violations as owner-row/policy (Branch A/C)', () => {
+    const hint = interpretApprovalsError(
+      'new row violates row-level security policy for table "approvals"',
+    );
+    expect(hint).toContain('RLS');
+    expect(hint).toContain('Branch A/C');
+  });
+
+  it('flags missing relation/function as incomplete migrations', () => {
+    expect(
+      interpretApprovalsError('relation "approvals" does not exist'),
+    ).toContain('migrations');
+    expect(
+      interpretApprovalsError('function public.is_owner() does not exist'),
+    ).toContain('migrations');
+  });
+
+  it('returns undefined for an unrecognized error (no false hint)', () => {
+    expect(
+      interpretApprovalsError('approvals read failed: network timeout'),
+    ).toBeUndefined();
+  });
+
+  it('never echoes secret-shaped input back in the hint', () => {
+    const hint = interpretApprovalsError(
+      'permission denied for table approvals; token=SECRET123',
+    );
+    // Hint is fixed guidance text; it must not contain the raw input.
+    expect(hint).not.toContain('SECRET123');
   });
 });

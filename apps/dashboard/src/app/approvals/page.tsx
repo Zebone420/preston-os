@@ -6,6 +6,7 @@ import {
   type RiskClass,
 } from '@/lib/approvals';
 import {
+  interpretApprovalsError,
   listApprovalRows,
   type ApprovalRow,
   type ControlPlaneClient,
@@ -222,6 +223,7 @@ export default async function ApprovalsPage({
   }
 
   const banner = msg ? MSG_TEXT[msg] : undefined;
+  const errorHint = live?.error ? interpretApprovalsError(live.error) : undefined;
 
   return (
     <main className="min-h-screen bg-slate-950 p-8 text-slate-100">
@@ -262,7 +264,10 @@ export default async function ApprovalsPage({
       <div className="overflow-x-auto">
         {live ? (
           live.error ? (
-            <p className="rounded bg-red-950 p-3 text-xs">{live.error}</p>
+            <div className="rounded bg-red-950 p-3 text-xs">
+              <p>{live.error}</p>
+              {errorHint && <p className="mt-1 text-amber-300">{errorHint}</p>}
+            </div>
           ) : live.rows.length === 0 ? (
             <p className="rounded bg-slate-900 p-3 text-xs text-slate-400">
               No approval rows in the control plane yet.

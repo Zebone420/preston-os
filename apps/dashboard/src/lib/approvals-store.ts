@@ -98,6 +98,31 @@ export async function listApprovalRows(
   return { rows };
 }
 
+// Maps a known Supabase/Postgres read error (from listApprovalRows) to a
+// plain-English cause hint for the owner, tied to the Stage 5 approvals SQL
+// packet. Pure and secret-free: it matches only stable error substrings and
+// returns fixed guidance text - never any env value, key, or row data.
+export function interpretApprovalsError(
+  message: string | undefined,
+): string | undefined {
+  if (!message) return undefined;
+  const m = message.toLowerCase();
+  if (m.includes('permission denied')) {
+    return 'Likely cause: the authenticated role lacks a table GRANT on approvals (Stage 5 packet, Branch B). Owner: run preflight P3.';
+  }
+  if (m.includes('row-level security') || m.includes('violates row-level')) {
+    return 'Likely cause: RLS check failed - owner row missing or a policy mismatch (Stage 5 packet, Branch A/C). Owner: run preflight P2/P4.';
+  }
+  if (
+    m.includes('does not exist') ||
+    m.includes('undefined table') ||
+    m.includes('undefined function')
+  ) {
+    return 'Likely cause: a table or the is_owner() function is missing - migrations may be incomplete (Stage 5 packet, preflight P1/P5).';
+  }
+  return undefined;
+}
+
 export interface DecideInput {
   approvalId: string;
   decision: 'approved' | 'rejected';
