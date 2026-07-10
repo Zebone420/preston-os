@@ -49,7 +49,12 @@ export default async function BriefPage() {
         </section>
 
         <section className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-          <h2 className="mb-2 font-medium">Today&apos;s appointments</h2>
+          <h2 className="mb-2 font-medium">
+            Today&apos;s appointments ({brief.calendar.source})
+          </h2>
+          {brief.calendar.note && (
+            <p className="mb-2 text-xs text-slate-500">{brief.calendar.note}</p>
+          )}
           <p className="mb-2 text-xs text-slate-500">{brief.appointments.note}</p>
           <ul className="space-y-1 text-sm text-slate-300">
             {brief.appointments.stops.map((s) => (
