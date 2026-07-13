@@ -97,6 +97,9 @@ export default async function Home() {
               {c.data.items.map((item) => (
                 <li key={item.id} className="text-sm text-slate-300">
                   {item.title}
+                  {item.detail && (
+                    <span className="text-slate-500"> - {item.detail}</span>
+                  )}
                 </li>
               ))}
             </ul>

@@ -1,8 +1,9 @@
 import { GuardError, assertAirtableTestOnly } from './guards';
 
-// Airtable TEST/DEV read-only wrapper. Server-only. Field IDs, not
-// field names (returnFieldsByFieldId). Base allowlist enforced by the
-// shared guard. Writes are physically blocked in Phase 0B.
+// Airtable TEST/DEV read-only wrapper. Server-only. Returns human field
+// NAMES (Stage 7 dashboard mapping keys by name; Airtable returns names by
+// default). Base allowlist enforced by the shared guard. Writes are
+// physically blocked in Phase 0B.
 
 export interface AirtableRecord {
   id: string;
@@ -29,14 +30,15 @@ export async function listRecords(
   }
 
   const max = opts?.maxRecords ?? 25;
+  // Read by field NAME (Stage 7): omit returnFieldsByFieldId so Airtable
+  // keys fields by their human names, which cards.ts maps for display.
   const url =
     'https://api.airtable.com/v0/' +
     baseId +
     '/' +
     tableId +
     '?maxRecords=' +
-    max +
-    '&returnFieldsByFieldId=true';
+    max;
 
   const res = await fetchImpl(url, {
     headers: { authorization: 'Bearer ' + pat },

@@ -52,19 +52,136 @@ function mock(key: string, note: string): CardData {
   return { source: 'mock', items: MOCKS[key] ?? [], note };
 }
 
-function firstText(fields: Record<string, unknown>, fallback: string): string {
-  for (const v of Object.values(fields)) {
-    if (typeof v === 'string' && v.trim() !== '') return v;
-  }
-  return fallback;
+export type CardKey = 'today' | 'leads' | 'projects' | 'quotes';
+
+export interface FieldMapping {
+  title: string[];
+  detail: string[];
 }
 
-function toItems(records: AirtableRecord[]): CardItem[] {
-  return records.map((r) => ({ id: r.id, title: firstText(r.fields, r.id) }));
+// Per-card field-NAME priority lists (Stage 7). For each record the first
+// present, non-empty, displayable field in the list wins. Owner chose names
+// over field IDs for readability; if Airtable field names change, update
+// these lists. Read-only display only - nothing here writes.
+export const CARD_FIELDS: Record<CardKey, FieldMapping> = {
+  today: {
+    title: ['Type', 'Appointment Type', 'Subject', 'Name', 'Title'],
+    detail: [
+      'Date',
+      'Appointment Date',
+      'Start Time',
+      'Location',
+      'Address',
+      'Project',
+    ],
+  },
+  leads: {
+    title: [
+      'Lead Name',
+      'Name',
+      'Client Name',
+      'Full Name',
+      'Address',
+      'Project Address',
+    ],
+    detail: ['Status', 'Stage', 'Phone', 'Email', 'Source'],
+  },
+  projects: {
+    title: ['Project Name', 'Name', 'Address', 'Project Address', 'Client Name'],
+    detail: ['Status', 'Stage', 'Blocker', 'Next Step'],
+  },
+  quotes: {
+    title: ['Quote Name', 'Name', 'Client Name', 'Project Address', 'Address'],
+    detail: ['Status', 'Quote Status', 'Date', 'Created', 'Total', 'Amount'],
+  },
+};
+
+const MONTHS = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+// Airtable record/field/base/table/view ids - never shown to a user.
+function isAirtableId(s: string): boolean {
+  return /^(rec|fld|app|tbl|viw)[A-Za-z0-9]{14,}$/.test(s);
+}
+
+// Clean display for an ISO date-only or datetime string; undefined if the
+// value is not an ISO date. Pure string math (no Date) so it is timezone-
+// and locale-stable and deterministic in tests.
+export function formatDateValue(value: string): string | undefined {
+  const m = value.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/);
+  if (!m) return undefined;
+  const month = MONTHS[Number(m[2]) - 1];
+  if (!month) return undefined;
+  let out = month + ' ' + Number(m[3]) + ', ' + m[1];
+  if (m[4] !== undefined && m[5] !== undefined) {
+    let h = Number(m[4]);
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12;
+    if (h === 0) h = 12;
+    out += ', ' + h + ':' + m[5] + ' ' + ampm;
+  }
+  return out;
+}
+
+// Raw Airtable value -> display string, or undefined if empty or id-shaped.
+// Arrays (multi-select, linked records) are joined from displayable parts.
+function formatCell(value: unknown): string | undefined {
+  if (typeof value === 'number') return String(value);
+  if (typeof value === 'string') {
+    const s = value.trim();
+    if (s === '' || isAirtableId(s)) return undefined;
+    return formatDateValue(s) ?? s;
+  }
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((v) =>
+        typeof v === 'number' ? String(v) : typeof v === 'string' ? v.trim() : '',
+      )
+      .filter((s) => s !== '' && !isAirtableId(s));
+    return parts.length ? parts.join(', ') : undefined;
+  }
+  return undefined;
+}
+
+function pickByPriority(
+  fields: Record<string, unknown>,
+  names: string[],
+): string | undefined {
+  for (const name of names) {
+    if (name in fields) {
+      const cell = formatCell(fields[name]);
+      if (cell !== undefined) return cell;
+    }
+  }
+  return undefined;
+}
+
+// Title fallback when no priority field matched: the first displayable value
+// in the record - never a rec.../fld... id and never the raw record id.
+function fallbackTitle(fields: Record<string, unknown>): string {
+  for (const v of Object.values(fields)) {
+    const cell = formatCell(v);
+    if (cell !== undefined) return cell;
+  }
+  return '(untitled record)';
+}
+
+export function toCardItems(
+  records: AirtableRecord[],
+  mapping: FieldMapping,
+): CardItem[] {
+  return records.map((r) => {
+    const fields = r.fields ?? {};
+    const title = pickByPriority(fields, mapping.title) ?? fallbackTitle(fields);
+    const detail = pickByPriority(fields, mapping.detail);
+    return detail ? { id: r.id, title, detail } : { id: r.id, title };
+  });
 }
 
 async function airtableCard(
-  key: string,
+  key: CardKey,
   tableEnvName: string,
   opts?: AdapterOpts,
 ): Promise<CardData> {
@@ -83,7 +200,10 @@ async function airtableCard(
       fetchImpl: opts?.fetchImpl,
       maxRecords: 5,
     });
-    return { source: 'airtable_test', items: toItems(records) };
+    return {
+      source: 'airtable_test',
+      items: toCardItems(records, CARD_FIELDS[key]),
+    };
   } catch (err) {
     return mock(key, 'airtable read failed: ' + (err as Error).message);
   }

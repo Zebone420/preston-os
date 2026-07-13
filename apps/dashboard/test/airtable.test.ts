@@ -49,7 +49,7 @@ describe('airtable read-only wrapper', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('reads records from the TEST base by field id (mocked network)', async () => {
+  it('reads records from the TEST base by field name (mocked network)', async () => {
     const fetchSpy = recordsFetch();
     const records = await listRecords(TEST_BASE, 'tbl1', {
       env: baseEnv,
@@ -59,7 +59,9 @@ describe('airtable read-only wrapper', () => {
     expect(records[0].id).toBe('rec1');
     const calledUrl = (fetchSpy as unknown as ReturnType<typeof vi.fn>).mock
       .calls[0][0] as string;
-    expect(calledUrl).toContain('returnFieldsByFieldId=true');
+    // Stage 7: read by field name -> the field-id flag must be absent.
+    expect(calledUrl).not.toContain('returnFieldsByFieldId');
+    expect(calledUrl).toContain('maxRecords=');
   });
 
   it('write path is physically blocked in Phase 0B', () => {
