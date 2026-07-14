@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { buildDailyBrief } from '@/lib/daily-brief';
+import { googleConfigStatus } from '@/lib/google';
 
 // Chief-of-Staff Daily Brief - Phase 3 GREEN (read-only). Composes mock/
 // read-only Gmail + Calendar summaries, pending approvals, a routing
@@ -10,7 +11,11 @@ export const dynamic = 'force-dynamic';
 
 export default async function BriefPage() {
   const now = new Date().toISOString();
-  const brief = await buildDailyBrief({ now, env: process.env as Record<string, string | undefined> });
+  const env = process.env as Record<string, string | undefined>;
+  const brief = await buildDailyBrief({ now, env });
+  // Presence-only credential mode for the Google read-only path (no secret
+  // value is read). 'refresh_token' = durable; 'access_token' = legacy ~1h.
+  const googleStatus = googleConfigStatus(env);
 
   return (
     <main className="min-h-screen bg-slate-950 p-8 text-slate-100">
@@ -23,6 +28,9 @@ export default async function BriefPage() {
           <Link href="/approvals" className="text-sm text-slate-300 underline">
             Approval Center
           </Link>
+          <span className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300">
+            google: {googleStatus}
+          </span>
           <span className="rounded bg-amber-900 px-2 py-1 text-xs">
             PHASE 3 - read-only, drafts only
           </span>

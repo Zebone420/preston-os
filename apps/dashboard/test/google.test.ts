@@ -3,6 +3,7 @@ import { GuardError, neutralizeUntrusted } from '../src/lib/guards';
 import {
   getCalendarSummary,
   getGmailSummary,
+  googleConfigStatus,
   sendGmail,
   writeCalendarEvent,
   type GoogleReadClient,
@@ -96,6 +97,138 @@ describe('google adapter - live read-only path (injected mocks only)', () => {
   it('a failed live response throws (does not silently mock)', async () => {
     const badFetch = (async () => ({ ok: false, status: 401, json: async () => ({}) }) as unknown as Response) as unknown as typeof fetch;
     await expect(getCalendarSummary({ env: liveEnv, fetchImpl: badFetch })).rejects.toThrow(GuardError);
+  });
+});
+
+describe('google adapter - durable refresh-token path (injected fetch only)', () => {
+  // Env with a durable refresh-token config and NO pre-minted access token.
+  const refreshEnv = {
+    GOOGLE_OAUTH_CLIENT_ID: 'cid',
+    GOOGLE_OAUTH_CLIENT_SECRET: 'csecret',
+    GOOGLE_OAUTH_REFRESH_TOKEN: 'REFRESH-not-a-real-token',
+    GOOGLE_WORKSPACE_READONLY_SCOPES: 'gmail.readonly calendar.readonly',
+    GOOGLE_OAUTH_TOKEN_URI: 'https://oauth2.example.com/token',
+    GOOGLE_READONLY_LIVE_ENABLED: 'true',
+  };
+
+  it('mints a fresh access token from the refresh token, then reads', async () => {
+    const calls: { url: string; method: string; auth: string }[] = [];
+    const mockFetch = vi.fn(
+      async (
+        url: string,
+        init?: { method?: string; headers?: Record<string, string> },
+      ) => {
+        calls.push({
+          url,
+          method: init?.method ?? 'GET',
+          auth: init?.headers?.Authorization ?? '',
+        });
+        if (url.includes('/token')) {
+          return {
+            ok: true,
+            json: async () => ({ access_token: 'MINTED-abc', expires_in: 3599 }),
+          } as unknown as Response;
+        }
+        return {
+          ok: true,
+          json: async () => ({
+            items: [{ id: 'e1', summary: 'Meet', start: { dateTime: '2026-07-07T09:30:00' }, location: 'Shop' }],
+          }),
+        } as unknown as Response;
+      },
+    );
+    const r = await getCalendarSummary({
+      env: refreshEnv,
+      fetchImpl: mockFetch as unknown as typeof fetch,
+    });
+    expect(r.source).toBe('google_readonly');
+    // First call = token exchange (POST to the token URI); second = calendar
+    // read using the minted bearer token.
+    expect(calls[0].url).toContain('/token');
+    expect(calls[0].method).toBe('POST');
+    expect(calls[1].url).toContain('calendar/v3');
+    expect(calls[1].auth).toBe('Bearer MINTED-abc');
+  });
+
+  it('fails closed when the refresh token is rejected (revoked/expired)', async () => {
+    const badToken = (async (url: string) =>
+      url.includes('/token')
+        ? ({ ok: false, status: 400, json: async () => ({}) } as unknown as Response)
+        : ({ ok: true, json: async () => ({}) } as unknown as Response)) as unknown as typeof fetch;
+    await expect(
+      getGmailSummary({ env: refreshEnv, fetchImpl: badToken }),
+    ).rejects.toThrow(GuardError);
+  });
+
+  it('fails closed when the exchange returns no access token', async () => {
+    const emptyToken = (async () =>
+      ({ ok: true, json: async () => ({}) } as unknown as Response)) as unknown as typeof fetch;
+    await expect(
+      getGmailSummary({ env: refreshEnv, fetchImpl: emptyToken }),
+    ).rejects.toThrow(GuardError);
+  });
+
+  it('fails closed when neither access token nor refresh config is present', async () => {
+    const env = {
+      GOOGLE_WORKSPACE_READONLY_SCOPES: 'gmail.readonly',
+      GOOGLE_READONLY_LIVE_ENABLED: 'true',
+    };
+    await expect(getGmailSummary({ env })).rejects.toThrow(GuardError);
+  });
+
+  it('prefers an explicit access token over refresh config (no token POST)', async () => {
+    const calls: string[] = [];
+    const mockFetch = vi.fn(async (url: string) => {
+      calls.push(url);
+      return {
+        ok: true,
+        json: async () => ({ items: [] }),
+      } as unknown as Response;
+    });
+    await getCalendarSummary({
+      env: { ...refreshEnv, GOOGLE_OAUTH_ACCESS_TOKEN: 'EXPLICIT-tok' },
+      fetchImpl: mockFetch as unknown as typeof fetch,
+    });
+    // No call to the token endpoint - the explicit token was used directly.
+    expect(calls.some((u) => u.includes('/token'))).toBe(false);
+  });
+});
+
+describe('googleConfigStatus (presence-only, no secret values)', () => {
+  const scopes = 'gmail.readonly calendar.readonly';
+  it('disabled when the live flag is not exactly true', () => {
+    expect(googleConfigStatus({})).toBe('disabled');
+    expect(googleConfigStatus({ GOOGLE_READONLY_LIVE_ENABLED: 'TRUE' })).toBe('disabled');
+  });
+  it('misconfigured when enabled without readonly scopes', () => {
+    expect(
+      googleConfigStatus({ GOOGLE_READONLY_LIVE_ENABLED: 'true', GOOGLE_WORKSPACE_READONLY_SCOPES: 'gmail.modify' }),
+    ).toBe('misconfigured');
+  });
+  it('reports access_token mode', () => {
+    expect(
+      googleConfigStatus({
+        GOOGLE_READONLY_LIVE_ENABLED: 'true',
+        GOOGLE_WORKSPACE_READONLY_SCOPES: scopes,
+        GOOGLE_OAUTH_ACCESS_TOKEN: 'tok',
+      }),
+    ).toBe('access_token');
+  });
+  it('reports refresh_token mode when the durable config is complete', () => {
+    expect(
+      googleConfigStatus({
+        GOOGLE_READONLY_LIVE_ENABLED: 'true',
+        GOOGLE_WORKSPACE_READONLY_SCOPES: scopes,
+        GOOGLE_OAUTH_REFRESH_TOKEN: 'r',
+        GOOGLE_OAUTH_CLIENT_ID: 'c',
+        GOOGLE_OAUTH_CLIENT_SECRET: 's',
+      }),
+    ).toBe('refresh_token');
+  });
+  it('misconfigured when enabled with scopes but no usable credential', () => {
+    expect(
+      googleConfigStatus({ GOOGLE_READONLY_LIVE_ENABLED: 'true', GOOGLE_WORKSPACE_READONLY_SCOPES: scopes }),
+    ).toBe('misconfigured');
   });
 });
 
