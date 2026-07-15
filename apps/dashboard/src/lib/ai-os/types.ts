@@ -126,6 +126,7 @@ export type EventType =
   | 'HermesStopped'
   | 'LockAcquired'
   | 'LockReleased'
+  | 'HermesObserved'
   | 'ExecutionBlocked';
 
 export interface OsEvent {

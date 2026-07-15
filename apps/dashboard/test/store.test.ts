@@ -4,9 +4,16 @@ import { DEFAULT_CONTROLS } from '../src/lib/ai-os/controls';
 import { makeEnvelope } from '../src/lib/ai-os/transport';
 import {
   RUNTIME_TABLES,
+  insertAttempt,
   insertCommandPacket,
+  insertDeadLetter,
   insertEvent,
+  insertJob,
+  insertMemory,
+  insertOrchestrationDecision,
   readSystemControls,
+  releaseLease,
+  updateJobStatus,
   type QueryResult,
   type RuntimeClient,
 } from '../src/lib/ai-os/store';
@@ -15,28 +22,43 @@ const NOW = '2026-07-14T12:00:00.000Z';
 
 interface Captured {
   table: string;
-  op: 'insert' | 'select';
+  op: 'insert' | 'select' | 'update';
   row?: Record<string, unknown>;
 }
 
-// Fake RuntimeClient capturing every call, returning a scripted result.
+// Fake RuntimeClient capturing every call, returning a scripted result across
+// insert().select(), select().eq()/.order()/.limit(), and update().eq()[.eq()].select().
 function fakeClient(result: QueryResult): { client: RuntimeClient; calls: Captured[] } {
   const calls: Captured[] = [];
+  const thenable = async () => result;
   const client: RuntimeClient = {
     from(table: string) {
       return {
         insert(row: Record<string, unknown>) {
           calls.push({ table, op: 'insert', row });
-          return { select: async () => result };
+          return { select: thenable };
         },
         select() {
           calls.push({ table, op: 'select' });
           return {
-            order() {
-              return { limit: async () => result };
+            eq() {
+              return { limit: thenable };
             },
-            limit: async () => result,
+            order() {
+              return { limit: thenable };
+            },
+            limit: thenable,
           };
+        },
+        update(row: Record<string, unknown>) {
+          calls.push({ table, op: 'update', row });
+          const eqNode = {
+            select: thenable,
+            eq() {
+              return { select: thenable };
+            },
+          };
+          return { eq: () => eqNode };
         },
       };
     },
@@ -130,5 +152,53 @@ describe('store adapters - events', () => {
     const r = await insertEvent(client, e);
     expect(r.ok).toBe(true);
     expect(calls[0].table).toBe('os_events');
+  });
+});
+
+describe('store adapters - remaining runtime tables', () => {
+  it('exposes distinct, unique table names', () => {
+    const vals = Object.values(RUNTIME_TABLES);
+    expect(new Set(vals).size).toBe(vals.length);
+    expect(RUNTIME_TABLES.jobs).toBe('os_jobs');
+    expect(RUNTIME_TABLES.memory).toBe('agent_memory');
+  });
+
+  it('insertJob targets os_jobs and forces execution_enabled=false', async () => {
+    const { client, calls } = fakeClient(okResult);
+    const r = await insertJob(client, { id: 'j1', command_id: 'c1', correlation_id: 'corr', idempotency_key: 'k', risk_class: 'GREEN', expires_at: NOW, not_before: NOW });
+    expect(r.ok).toBe(true);
+    expect(calls[0].table).toBe('os_jobs');
+    expect(calls[0].row?.execution_enabled).toBe(false);
+  });
+
+  it('updateJobStatus is a conditional CAS - zero matched rows fails closed', async () => {
+    const { client, calls } = fakeClient({ data: [], error: null });
+    const r = await updateJobStatus(client, 'j1', 'queued', 'leased', NOW);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('lost race');
+    expect(calls[0].op).toBe('update');
+  });
+
+  it('releaseLease updates worker_leases with an owner guard', async () => {
+    const { client, calls } = fakeClient(okResult);
+    await releaseLease(client, 'j1', 'w1', NOW);
+    expect(calls[0].table).toBe('worker_leases');
+    expect(calls[0].op).toBe('update');
+  });
+
+  it('insertMemory redacts secret-shaped values before write', async () => {
+    const { client, calls } = fakeClient(okResult);
+    await insertMemory(client, { id: 'm1', memory_type: 'decision', key: 'k', value: { client_secret: 'x', note: 'ok' }, actor: 'a', source: 's', version: 1, correlation_id: 'c' });
+    expect(calls[0].table).toBe('agent_memory');
+    expect((calls[0].row?.value as Record<string, unknown>).client_secret).toBe('[REDACTED]');
+    expect((calls[0].row?.value as Record<string, unknown>).note).toBe('ok');
+  });
+
+  it('append-only writers target their tables', async () => {
+    const { client, calls } = fakeClient(okResult);
+    await insertDeadLetter(client, { id: 'd1', reason: 'x', correlation_id: 'c' });
+    await insertOrchestrationDecision(client, { id: 'o1', hermes_mode: 'observe_only', decision: 'observe', reasons: [], correlation_id: 'c' });
+    await insertAttempt(client, { id: 'a1', job_id: 'j1', attempt_no: 1, worker: 'w', correlation_id: 'c' });
+    expect(calls.map((c) => c.table)).toEqual(['dead_letters', 'orchestration_decisions', 'job_attempts']);
   });
 });
