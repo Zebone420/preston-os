@@ -14,16 +14,34 @@ only tables append-only; do not bypass safety guards.
 
 Prereq: 0002 + 0003 applied (public.is_owner exists; Phase 2 tables present).
 
-Preflight (read-only):
+NAMING / COLLISION FIX: the first 0004 attempt named the Phase 3 intake table
+'command_packets', which already exists as a LEGACY table (migration 0001, a
+different schema with no expires_at). CREATE TABLE IF NOT EXISTS silently
+matched the legacy table and the expires_at index failed (ERROR 42703). The
+Phase 3 table is now runtime_command_packets. The legacy command_packets is
+NOT dropped, renamed, or altered.
+
+Preflight A (read-only) - the nine NEW Phase 3 tables should be ABSENT:
 
     select proname from pg_proc where proname='is_owner';
     select table_name from information_schema.tables
     where table_schema='public' and table_name in
-     ('command_packets','os_jobs','worker_leases','job_attempts','job_checkpoints',
-      'dead_letters','repository_worktrees','orchestration_decisions','system_controls')
+     ('runtime_command_packets','os_jobs','worker_leases','job_attempts',
+      'job_checkpoints','dead_letters','repository_worktrees',
+      'orchestration_decisions','system_controls')
     order by table_name;
 
-Expect is_owner present and the nine tables ABSENT (first run).
+Expect is_owner present and the nine tables ABSENT (the failed run rolled back;
+confirm rather than assume).
+
+Preflight B (read-only) - the LEGACY table must exist and be left intact:
+
+    select column_name from information_schema.columns
+    where table_schema='public' and table_name='command_packets'
+    order by ordinal_position;
+
+Expect the legacy columns (id, tenant_id, created_at, task_id, requested_by,
+... status, result) and NO expires_at. This packet never modifies this table.
 
 Apply: in the Supabase SQL editor (STAGING), paste and run the full contents of
 supabase/migrations/0004_phase3_runtime.sql once.
@@ -44,14 +62,15 @@ SELECT+INSERT for authenticated.
 
 Expected result: runtime schema present, everything disabled. Nothing runs.
 
-Rollback (owner-run, STAGING; additive tables are safe to drop):
+Rollback (owner-run, STAGING; only the NEW additive tables are dropped - the
+legacy command_packets is intentionally NOT listed and stays untouched):
 
     drop table if exists orchestration_decisions, repository_worktrees, dead_letters,
-      job_checkpoints, job_attempts, worker_leases, os_jobs, command_packets,
+      job_checkpoints, job_attempts, worker_leases, os_jobs, runtime_command_packets,
       system_controls cascade;
 
-Verification after rollback: the nine tables are absent; Phase 0-2 tables
-unaffected.
+Verification after rollback: the nine NEW tables are absent; legacy
+command_packets and all Phase 0-2 tables unaffected.
 
 ## Packet 2 - Remote staging server setup (owner-run, no activation)
 

@@ -5,11 +5,18 @@
 -- only RLS. Depends on 0002 (public.is_owner()) and 0003. Rollback SQL lives in
 -- the owner packet (markdown), not here, to keep this file free of destructive
 -- statements. Nothing here activates a worker, Hermes, or execution.
+--
+-- NAMING NOTE: the Phase 3 command-intake table is runtime_command_packets, a
+-- DISTINCT name chosen to avoid colliding with the legacy public.command_packets
+-- table created in 0001 (a different schema, no expires_at). The legacy table is
+-- left completely untouched by this migration. The first 0004 attempt named this
+-- table 'command_packets', so CREATE TABLE IF NOT EXISTS silently matched the
+-- legacy table and the expires_at index then failed (42703). Renamed here.
 
 -- ============================================================
--- 1. command_packets - unified command intake (all sources)
+-- 1. runtime_command_packets - unified command intake (all sources)
 -- ============================================================
-create table if not exists command_packets (
+create table if not exists runtime_command_packets (
   id uuid primary key default gen_random_uuid(),
   actor text not null,
   source text not null
@@ -31,14 +38,14 @@ create table if not exists command_packets (
   created_at timestamptz not null default now(),
   expires_at timestamptz not null
 );
-create index if not exists idx_command_packets_status on command_packets (status, expires_at);
+create index if not exists idx_runtime_command_packets_status on runtime_command_packets (status, expires_at);
 
 -- ============================================================
 -- 2. os_jobs - job queue lifecycle
 -- ============================================================
 create table if not exists os_jobs (
   id uuid primary key default gen_random_uuid(),
-  command_id uuid references command_packets (id),
+  command_id uuid references runtime_command_packets (id),
   approval_id uuid,
   status text not null default 'proposed'
     check (status in ('proposed','validated','awaiting_approval','approved','queued',
@@ -179,7 +186,7 @@ create table if not exists system_controls (
 -- ============================================================
 -- 10. RLS - owner-only everywhere
 -- ============================================================
-alter table command_packets enable row level security;
+alter table runtime_command_packets enable row level security;
 alter table os_jobs enable row level security;
 alter table worker_leases enable row level security;
 alter table job_attempts enable row level security;
@@ -190,7 +197,7 @@ alter table orchestration_decisions enable row level security;
 alter table system_controls enable row level security;
 
 -- Mutable tables: owner-only, all operations.
-create policy command_packets_owner_all on command_packets
+create policy runtime_command_packets_owner_all on runtime_command_packets
   for all to authenticated using (public.is_owner()) with check (public.is_owner());
 create policy os_jobs_owner_all on os_jobs
   for all to authenticated using (public.is_owner()) with check (public.is_owner());
@@ -228,7 +235,7 @@ revoke update, delete on orchestration_decisions from authenticated, anon;
 -- ============================================================
 -- 11. Grants (authenticated/owner only; never anon)
 -- ============================================================
-grant select, insert, update on command_packets to authenticated;
+grant select, insert, update on runtime_command_packets to authenticated;
 grant select, insert, update on os_jobs to authenticated;
 grant select, insert, update on worker_leases to authenticated;
 grant select, insert, update on repository_worktrees to authenticated;

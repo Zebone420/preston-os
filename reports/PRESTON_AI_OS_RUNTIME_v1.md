@@ -32,7 +32,12 @@ dead_lettered. EventStore interface (Supabase later; InMemory for tests).
 Append is idempotent by idempotency_key; consume() is replay-safe (skips
 processed keys). Payloads reject/redact secrets. No persistent consumer runs.
 
-## 4. Command intake (commands.ts / command_packets)
+## 4. Command intake (commands.ts / runtime_command_packets)
+
+Note: the Phase 3 runtime table is `runtime_command_packets` (migration 0004),
+a distinct name from the legacy `public.command_packets` (migration 0001, a
+different schema). The legacy table is left untouched.
+
 
 ONE CommandPacket for every source (chatgpt, telegram, dashboard, owner_cli,
 claude, codex, hermes, scheduler). Provenance + idempotency + expiry.
