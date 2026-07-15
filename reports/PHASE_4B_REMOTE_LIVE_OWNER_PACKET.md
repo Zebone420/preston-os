@@ -149,6 +149,52 @@ shows fully stopped. Also `systemctl stop preston-worker preston-hermes-observe`
 - Git: `git revert <hash>` for any commit.
 All non-destructive to business data.
 
+## 8b. Phase 4B.1 - deployable dispatcher + systemd (tracked artifacts)
+All artifacts are now in the repo; the owner writes NO runtime code on the host.
+
+Build the dispatcher (deterministic):
+    cd apps/dashboard && npm ci && npm run build:os-runtime
+  Produces dist/os-runtime/bin.js (+ dist/lib/ai-os/*.js), CommonJS, Next-free.
+  Health check (proves startup; exits 78 with no env, 0 when configured):
+    node dist/os-runtime/bin.js health
+
+Runtime env file /etc/preston/runtime.env (host only; never in Git), names:
+    SUPABASE_URL, SUPABASE_RUNTIME_KEY (anon), SUPABASE_RUNTIME_TOKEN
+    (owner-allowlisted service-identity access token; NOT the service-role key)
+
+Install services (disabled; no auto-start):
+    sudo cp deploy/systemd/preston-worker.service /etc/systemd/system/
+    sudo cp deploy/systemd/preston-worker.timer /etc/systemd/system/
+    sudo cp deploy/systemd/preston-hermes-observe.service /etc/systemd/system/
+    sudo cp deploy/systemd/preston-hermes-observe.timer /etc/systemd/system/
+    sudo systemctl daemon-reload
+  Validate unit syntax: `systemd-analyze verify /etc/systemd/system/preston-*.{service,timer}`.
+  NOTHING runs yet - the timers are not enabled.
+
+Enable the beta (owner, when ready; still simulation/observe only):
+    sudo systemctl enable --now preston-hermes-observe.timer   # after setting hermes_mode=observe_only
+    sudo systemctl enable --now preston-worker.timer
+  Each fires a bounded oneshot (node dist/os-runtime/bin.js worker-loop/hermes-loop --max 5);
+  execution stays disabled by controls; workers only simulate.
+
+Health / status:
+    sudo systemctl list-timers 'preston-*'
+    node dist/os-runtime/bin.js health
+    GET /api/os/status ; /os control center
+
+Uninstall / rollback:
+    sudo systemctl disable --now preston-worker.timer preston-hermes-observe.timer
+    sudo rm /etc/systemd/system/preston-worker.* /etc/systemd/system/preston-hermes-observe.*
+    sudo systemctl daemon-reload
+  Plus the global kill (section 7). Non-destructive; no business data touched.
+
+Telegram intake (Phase 4B.1 hardened; still owner-gated):
+    Set TELEGRAM_WEBHOOK_SECRET (also as the setWebhook secret_token),
+    TELEGRAM_OWNER_USER_ID, TELEGRAM_OWNER_CHAT_ID, TELEGRAM_INTAKE_ENABLED=true.
+    The /api/telegram route verifies the secret token in constant time before
+    reading the body, enforces size/freshness/owner/replay, and never sends.
+    Command insertion via the service identity is a later gate.
+
 ## 9. Non-execution statement
 The AI wrote docs + fail-closed code only. It installed nothing, started no
 service, mutated no server, sent no message, ran no SQL, and enabled no
