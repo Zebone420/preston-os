@@ -1,0 +1,134 @@
+import { describe, expect, it } from 'vitest';
+import { normalizeCommand } from '../src/lib/ai-os/commands';
+import { DEFAULT_CONTROLS } from '../src/lib/ai-os/controls';
+import { makeEnvelope } from '../src/lib/ai-os/transport';
+import {
+  RUNTIME_TABLES,
+  insertCommandPacket,
+  insertEvent,
+  readSystemControls,
+  type QueryResult,
+  type RuntimeClient,
+} from '../src/lib/ai-os/store';
+
+const NOW = '2026-07-14T12:00:00.000Z';
+
+interface Captured {
+  table: string;
+  op: 'insert' | 'select';
+  row?: Record<string, unknown>;
+}
+
+// Fake RuntimeClient capturing every call, returning a scripted result.
+function fakeClient(result: QueryResult): { client: RuntimeClient; calls: Captured[] } {
+  const calls: Captured[] = [];
+  const client: RuntimeClient = {
+    from(table: string) {
+      return {
+        insert(row: Record<string, unknown>) {
+          calls.push({ table, op: 'insert', row });
+          return { select: async () => result };
+        },
+        select() {
+          calls.push({ table, op: 'select' });
+          return {
+            order() {
+              return { limit: async () => result };
+            },
+            limit: async () => result,
+          };
+        },
+      };
+    },
+  };
+  return { client, calls };
+}
+
+const okResult: QueryResult = { data: [{ id: 'row-1' }], error: null };
+const errResult = (message: string): QueryResult => ({ data: null, error: { message } });
+
+const cmd = normalizeCommand({
+  id: 'c1', actor: 'owner', source: 'chatgpt', requested_action: 'read status',
+  target_project: 'preston-os', target_repository: 'preston-os',
+  correlation_id: 'corr', idempotency_key: 'idem-1', now: NOW,
+});
+
+describe('store adapters - command packets', () => {
+  it('writes to runtime_command_packets, NEVER legacy command_packets', () => {
+    expect(RUNTIME_TABLES.commandPackets).toBe('runtime_command_packets');
+    expect(RUNTIME_TABLES.commandPackets).not.toBe('command_packets');
+  });
+
+  it('inserts a valid packet and forces execution_eligible=false on write', async () => {
+    const { client, calls } = fakeClient(okResult);
+    const r = await insertCommandPacket(client, cmd);
+    expect(r.ok).toBe(true);
+    expect(calls[0].table).toBe('runtime_command_packets');
+    expect(calls[0].row?.execution_eligible).toBe(false);
+  });
+
+  it('rejects an invalid (eligible-at-intake) packet before any write', async () => {
+    const { client, calls } = fakeClient(okResult);
+    const r = await insertCommandPacket(client, { ...cmd, execution_eligible: true });
+    expect(r.ok).toBe(false);
+    expect(calls.length).toBe(0); // never touched the DB
+  });
+
+  it('treats a unique-violation as an idempotent success', async () => {
+    const { client } = fakeClient(errResult('duplicate key value violates unique constraint'));
+    const r = await insertCommandPacket(client, cmd);
+    expect(r.ok).toBe(true);
+    expect(r.duplicate).toBe(true);
+  });
+
+  it('fails closed on a non-idempotent DB error', async () => {
+    const { client } = fakeClient(errResult('permission denied for table runtime_command_packets'));
+    const r = await insertCommandPacket(client, cmd);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('permission denied');
+  });
+});
+
+describe('store adapters - system controls (fail-closed reads)', () => {
+  it('returns DEFAULT_CONTROLS (fully stopped) when the row is missing', async () => {
+    const { client } = fakeClient({ data: [], error: null });
+    expect(await readSystemControls(client)).toEqual(DEFAULT_CONTROLS);
+  });
+
+  it('returns DEFAULT_CONTROLS on an RLS/permission error', async () => {
+    const { client } = fakeClient(errResult('permission denied for table system_controls'));
+    const c = await readSystemControls(client);
+    expect(c.execution_enabled).toBe(false);
+    expect(c.hermes_mode).toBe('disabled');
+    expect(c.remote_runner_enabled).toBe(false);
+  });
+
+  it('maps a live row and coerces unknown hermes_mode to disabled', async () => {
+    const { client } = fakeClient({
+      data: [{ execution_enabled: true, owner_stop: false, paused: false, hermes_mode: 'bogus', remote_runner_enabled: true, updated_at: NOW }],
+      error: null,
+    });
+    const c = await readSystemControls(client);
+    expect(c.execution_enabled).toBe(true);
+    expect(c.remote_runner_enabled).toBe(true);
+    expect(c.hermes_mode).toBe('disabled'); // unknown -> fail-closed
+  });
+});
+
+describe('store adapters - events', () => {
+  it('rejects an event carrying an unredacted secret', async () => {
+    const { client, calls } = fakeClient(okResult);
+    const bad = { ...makeEnvelope({ id: 'e1', type: 'TaskCreated', actor: 'a', source: 's', correlation_id: 'c', idempotency_key: 'k', now: NOW }), payload: { api_key: 'sk-raw' } };
+    const r = await insertEvent(client, bad);
+    expect(r.ok).toBe(false);
+    expect(calls.length).toBe(0);
+  });
+
+  it('writes a clean event to os_events', async () => {
+    const { client, calls } = fakeClient(okResult);
+    const e = makeEnvelope({ id: 'e1', type: 'TaskCreated', actor: 'a', source: 's', correlation_id: 'c', idempotency_key: 'k', now: NOW, payload: { note: 'ok' } });
+    const r = await insertEvent(client, e);
+    expect(r.ok).toBe(true);
+    expect(calls[0].table).toBe('os_events');
+  });
+});
