@@ -194,6 +194,13 @@ describe('store adapters - remaining runtime tables', () => {
     expect((calls[0].row?.value as Record<string, unknown>).note).toBe('ok');
   });
 
+  it('insertMemory rejects a secret-shaped key before any write', async () => {
+    const { client, calls } = fakeClient(okResult);
+    const r = await insertMemory(client, { id: 'm2', memory_type: 'connector', key: 'openai_api_key', value: {}, actor: 'a', source: 's', version: 1, correlation_id: 'c' });
+    expect(r.ok).toBe(false);
+    expect(calls.length).toBe(0);
+  });
+
   it('append-only writers target their tables', async () => {
     const { client, calls } = fakeClient(okResult);
     await insertDeadLetter(client, { id: 'd1', reason: 'x', correlation_id: 'c' });

@@ -137,4 +137,11 @@ describe('hermes service - observe-only, bounded', () => {
     expect(r.stoppedReason).toBe('max_rounds');
     expect(r.totalRecorded).toBe(2);
   });
+
+  it('loop halts on a soft pause and records nothing', async () => {
+    const client = fakeClient({ hermes_mode: 'observe_only', paused: true });
+    const r = await hermesObserveLoop(client, [[{ id: 'j1', input: hermesInput() }]], 5, NOW);
+    expect(r.stoppedReason).toBe('halted');
+    expect(r.totalRecorded).toBe(0);
+  });
 });

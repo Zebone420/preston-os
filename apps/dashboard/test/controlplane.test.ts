@@ -93,6 +93,14 @@ describe('control-plane - submit command proposal', () => {
     expect(inserts.length).toBe(0); // nothing written to the command table
     expect(audits.some((a) => a.action.includes('production_target'))).toBe(true);
   });
+
+  it('rejects a production requested_action even with a benign target', async () => {
+    const { deps: d, inserts } = deps({ data: [{ id: 'cmd-1' }], error: null });
+    const r = await submitCommandProposal(d, baseInput({ requested_action: 'deploy to production' }));
+    expect(r.ok).toBe(false);
+    expect(r.code).toBe('production_rejected');
+    expect(inserts.length).toBe(0);
+  });
 });
 
 describe('control-plane - owner controls', () => {

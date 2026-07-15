@@ -64,7 +64,7 @@ export async function submitCommandProposal(
     return { ok: false, code: 'denied', message: 'owner authorization required' };
   }
   const actor = input.ownerEmail as string;
-  if (mentionsProduction(input.target_project, input.target_repository, input.requested_scope)) {
+  if (mentionsProduction(input.target_project, input.target_repository, input.requested_scope, input.requested_action)) {
     await logAudit(
       { actor, action: 'command_rejected:production_target', action_class: 'RED', detail: { target_project: input.target_project } },
       { supabase: deps.audit },

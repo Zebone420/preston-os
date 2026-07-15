@@ -6,7 +6,8 @@ import {
 } from './controls';
 import { validateEnvelope, type EventEnvelope } from './transport';
 import { validateCheckpoint, type Checkpoint } from './checkpoint';
-import { redactSecrets } from './memory';
+import { redactSecrets, validateMemoryEntry } from './memory';
+import type { MemoryType } from './types';
 
 // Preston AI OS - Supabase runtime adapters (Phase 3 wiring). Server-side,
 // RLS-bound (owner session via the anon key). The service-role key is NEVER
@@ -381,6 +382,17 @@ export async function insertMemory(
   client: RuntimeClient,
   entry: { id: string; memory_type: string; key: string; value: unknown; actor: string; source: string; version: number; correlation_id: string; audit_ref?: string | null },
 ): Promise<WriteOutcome> {
+  // Enforce the memory contract before any write: provenance + reject
+  // secret-shaped keys / bad version (matches every sibling adapter).
+  const v = validateMemoryEntry({
+    memory_type: entry.memory_type as MemoryType,
+    key: entry.key,
+    actor: entry.actor,
+    source: entry.source,
+    version: entry.version,
+    correlation_id: entry.correlation_id,
+  });
+  if (!v.ok) return { ok: false, error: 'invalid memory: ' + v.errors.join(', ') };
   const row = { ...entry, value: redactSecrets(entry.value), audit_ref: entry.audit_ref ?? null };
   return appendRow(client, RUNTIME_TABLES.memory, row, entry.id);
 }

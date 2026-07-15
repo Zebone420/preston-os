@@ -36,9 +36,10 @@ export async function hermesObserveLoop(
     if (controls.hermes_mode === 'disabled' || controls.hermes_mode === 'stopped') {
       return { rounds: r, stoppedReason: 'disabled', totalRecorded: recorded };
     }
-    // Observe-only reads/records; it is safe while execution is disabled, so
-    // only a hard owner_stop halts it (not execution_enabled).
-    if (controls.owner_stop) {
+    // Observe-only reads/records; it is safe while execution is disabled, so we
+    // do NOT gate on execution_enabled. But it must stop on a hard owner_stop OR
+    // a soft pause OR hermes paused mode (mirrors the worker loop).
+    if (controls.owner_stop || controls.paused || controls.hermes_mode === 'paused') {
       return { rounds: r, stoppedReason: 'halted', totalRecorded: recorded };
     }
     const res = await runHermesObserveOnce(client, batch, now);
