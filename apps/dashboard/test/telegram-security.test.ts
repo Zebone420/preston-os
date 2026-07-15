@@ -50,6 +50,10 @@ describe('evaluateWebhook - fail-closed authenticity', () => {
   it('rejects an oversize body', () => {
     expect(evalW({ contentLength: MAX_UPDATE_BYTES + 1 }).status).toBe('too_large');
   });
+  it('rejects a missing or NaN Content-Length (fail-closed)', () => {
+    expect(evalW({ contentLength: null }).status).toBe('too_large');
+    expect(evalW({ contentLength: Number.NaN }).status).toBe('too_large');
+  });
   it('forbids a missing or wrong secret token (before trusting the body)', () => {
     expect(evalW({ secretHeader: null }).status).toBe('forbidden');
     expect(evalW({ secretHeader: 'wrong' }).status).toBe('forbidden');

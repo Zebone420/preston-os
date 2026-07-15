@@ -76,7 +76,9 @@ export function evaluateWebhook(input: WebhookInput): WebhookResult {
   const ownerUserId = env['TELEGRAM_OWNER_USER_ID'];
   if (!secret || !ownerChatId || !ownerUserId) return res('unconfigured', 503);
 
-  if (input.contentLength !== null && input.contentLength > MAX_UPDATE_BYTES) {
+  // Fail-closed on missing/NaN/oversize length (the route also enforces this
+  // BEFORE reading the body, so a large payload is never buffered pre-auth).
+  if (input.contentLength === null || Number.isNaN(input.contentLength) || input.contentLength > MAX_UPDATE_BYTES) {
     return res('too_large', 413);
   }
   // Authenticity: constant-time secret-token check BEFORE trusting the body.

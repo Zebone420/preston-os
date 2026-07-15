@@ -19,7 +19,9 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/log/preston
+# Creates/owns /var/log/preston (0755, user preston) and grants write access,
+# so ProtectSystem=strict does not abort startup on a fresh host.
+LogsDirectory=preston
 StandardOutput=append:/var/log/preston/worker.log
 StandardError=append:/var/log/preston/worker.log
 # No [Install]: the SERVICE never auto-starts. The timer (owner-enabled) fires it.

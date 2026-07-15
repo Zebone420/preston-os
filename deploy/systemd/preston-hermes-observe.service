@@ -19,7 +19,9 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/log/preston
+# Creates/owns /var/log/preston (0755, user preston) and grants write access,
+# so ProtectSystem=strict does not abort startup on a fresh host.
+LogsDirectory=preston
 StandardOutput=append:/var/log/preston/hermes.log
 StandardError=append:/var/log/preston/hermes.log
 # No [Install]: never auto-starts; the timer (owner-enabled) fires it.
