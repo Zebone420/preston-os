@@ -1,0 +1,16 @@
+[Unit]
+Description=Preston AI OS worker timer (DISABLED by default)
+
+[Timer]
+# Fires 5 min after boot and 5 min after the previous run FINISHES, so a
+# bounded oneshot never overlaps itself (single-worker for the beta).
+OnBootSec=5min
+OnUnitInactiveSec=5min
+AccuracySec=30s
+Unit=preston-worker.service
+
+[Install]
+WantedBy=timers.target
+# Present in the repo but INACTIVE until the owner runs:
+#   systemctl enable --now preston-worker.timer
+# Placing these files (or pulling repo changes) never activates anything.

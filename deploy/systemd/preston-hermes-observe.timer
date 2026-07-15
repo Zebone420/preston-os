@@ -1,0 +1,14 @@
+[Unit]
+Description=Preston AI OS Hermes observe timer (DISABLED by default)
+
+[Timer]
+OnBootSec=6min
+OnUnitInactiveSec=5min
+AccuracySec=30s
+Unit=preston-hermes-observe.service
+
+[Install]
+WantedBy=timers.target
+# INACTIVE until the owner runs:
+#   systemctl enable --now preston-hermes-observe.timer
+# Hermes still does nothing unless system_controls.hermes_mode='observe_only'.

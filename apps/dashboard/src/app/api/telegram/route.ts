@@ -1,65 +1,39 @@
 import { NextResponse } from 'next/server';
-import { intakeTelegram, type TelegramUpdate } from '@/lib/ai-os/bridges/telegram';
+import { evaluateWebhook } from '@/lib/ai-os/telegram-security';
 
-// Preston AI OS - Telegram receiver (Phase 4B). DISABLED by default.
-// A webhook endpoint that VALIDATES an owner command (owner user + chat
-// allowlist, freshness) and classifies it. It NEVER sends a Telegram message,
-// never runs shell, and never executes a business action. State-changing
-// commands are flagged as requiring confirmation. Turning real command
-// insertion on (with a service identity) is a separate owner activation gate;
-// until then this only acknowledges and reports the parsed intent.
-//
-// Durable replay protection at activation is the command idempotency_key
-// (telegram:<message_id>), which the DB unique constraint dedupes; this handler
-// additionally checks owner identity + freshness.
+// Preston AI OS - Telegram receiver (Phase 4B.1). DISABLED by default.
+// All authenticity/replay/freshness/size logic lives in evaluateWebhook (pure,
+// tested). This route only adapts the HTTP request. It NEVER sends a Telegram
+// message, runs shell, or executes a business action. Command insertion (via a
+// service identity) is a later owner gate; for now it returns the parsed intent.
 export const dynamic = 'force-dynamic';
 
-interface TgMessage {
-  message_id?: number;
-  date?: number;
-  text?: string;
-  chat?: { id?: number | string };
-  from?: { id?: number | string };
-}
-
 export async function POST(request: Request) {
-  // Fail-closed: the receiver is inert unless explicitly enabled by the owner.
-  if (process.env.TELEGRAM_INTAKE_ENABLED !== 'true') {
-    return NextResponse.json({ ok: false, disabled: true }, { status: 503 });
-  }
-  const ownerChatId = process.env.TELEGRAM_OWNER_CHAT_ID;
-  const ownerUserId = process.env.TELEGRAM_OWNER_USER_ID;
-  if (!ownerChatId || !ownerUserId) {
-    return NextResponse.json({ ok: false, error: 'intake not configured' }, { status: 503 });
-  }
+  const contentLengthRaw = request.headers.get('content-length');
+  const contentLength = contentLengthRaw ? Number(contentLengthRaw) : null;
+  const secretHeader = request.headers.get('x-telegram-bot-api-secret-token');
 
-  let body: { message?: TgMessage };
+  let body: unknown = null;
   try {
-    body = (await request.json()) as { message?: TgMessage };
+    body = await request.json();
   } catch {
-    // Acknowledge malformed updates so Telegram does not retry-storm.
-    return NextResponse.json({ ok: false, error: 'invalid update' }, { status: 200 });
+    body = null; // handled as unknown/deny by the evaluator
   }
 
-  const msg = body.message ?? {};
-  const update: TelegramUpdate = {
-    chat_id: String(msg.chat?.id ?? ''),
-    from_id: String(msg.from?.id ?? ''),
-    text: String(msg.text ?? ''),
-    message_id: Number(msg.message_id ?? 0),
-    date: Number(msg.date ?? 0),
-  };
-
-  const result = intakeTelegram(update, {
-    ownerChatId,
-    ownerUserId,
-    seenMessageIds: new Set(), // durable dedup is the command idempotency_key at activation
+  const result = evaluateWebhook({
+    secretHeader,
+    contentLength,
+    body,
+    env: process.env as Record<string, string | undefined>,
     now: new Date().toISOString(),
+    // Durable replay dedup is enforced at command insertion via the unique
+    // idempotency_key telegram:<update_id>; a later activation gate wires a
+    // persisted check here. Until then, never treat as replay.
+    isReplay: () => false,
   });
 
-  // Always 200 to Telegram (never send a message). Report the parsed intent
-  // only; accepted state-change commands still require confirmation before any
-  // effect, and command insertion is a later owner-run activation step.
+  // Never send a Telegram message; report the parsed intent only. Accepted
+  // state-change commands still require confirmation before any effect.
   return NextResponse.json(
     {
       ok: result.status === 'accepted',
@@ -67,6 +41,6 @@ export async function POST(request: Request) {
       command: result.command,
       requires_confirmation: result.requires_confirmation,
     },
-    { status: 200 },
+    { status: result.httpStatus },
   );
 }

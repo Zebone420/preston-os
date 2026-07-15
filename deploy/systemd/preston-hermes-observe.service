@@ -1,0 +1,25 @@
+[Unit]
+Description=Preston AI OS Hermes observe-only (bounded)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=preston
+Group=preston
+WorkingDirectory=/srv/preston-os/apps/dashboard
+EnvironmentFile=/etc/preston/runtime.env
+# Observe-only: reads state + records decisions/events. Never leases/executes.
+# Requires hermes_mode=observe_only in system_controls (owner-set) to do work.
+ExecStart=/usr/bin/node dist/os-runtime/bin.js hermes-loop --max 5
+Restart=no
+TimeoutStartSec=120
+RuntimeMaxSec=300
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/preston
+StandardOutput=append:/var/log/preston/hermes.log
+StandardError=append:/var/log/preston/hermes.log
+# No [Install]: never auto-starts; the timer (owner-enabled) fires it.

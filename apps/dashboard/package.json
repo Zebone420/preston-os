@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build:os-runtime": "tsc -p tsconfig.osruntime.json"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",

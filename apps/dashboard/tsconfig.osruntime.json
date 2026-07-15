@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "target": "ES2020",
+    "lib": ["ES2020"],
+    "types": ["node"],
+    "outDir": "dist",
+    "rootDir": "src",
+    "incremental": false,
+    "declaration": false,
+    "plugins": []
+  },
+  "include": [],
+  "files": ["src/os-runtime/bin.ts"]
+}
