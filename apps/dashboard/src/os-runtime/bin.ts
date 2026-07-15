@@ -5,7 +5,11 @@ import {
   runDispatcher,
   type DispatcherCommand,
 } from './dispatcher';
-import { createRuntimeClient } from './supabase-runtime';
+import {
+  createRuntimeClientWithToken,
+  missingRuntimeEnv,
+  resolveRuntimeToken,
+} from './supabase-runtime';
 
 // Preston AI OS - compiled remote dispatcher entry (Phase 4B.1).
 // Invoked by the disabled systemd oneshot services (see deploy/systemd). Builds
@@ -21,9 +25,14 @@ async function main(): Promise<void> {
 
   // `health` can run without full runtime env (it reports the gap). The working
   // commands construct the real client, which fails closed if env is missing.
+  const env = process.env as Record<string, string | undefined>;
   let client;
   try {
-    client = createRuntimeClient(process.env as Record<string, string | undefined>);
+    const missing = missingRuntimeEnv(env);
+    if (missing.length) throw new Error('missing runtime env: ' + missing.join(', '));
+    // Durable: mint a fresh access token from the refresh token at startup.
+    const token = await resolveRuntimeToken(env, fetch);
+    client = createRuntimeClientWithToken(env, token);
   } catch (err) {
     if (command !== 'health') {
       log({ level: 'error', command, correlationId, event: 'config_error', message: (err as Error).message });
