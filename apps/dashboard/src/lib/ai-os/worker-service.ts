@@ -51,7 +51,8 @@ export async function workerOnce(input: WorkerOnceInput): Promise<WorkerOnceResu
   const attemptNo = j.attempts + 1;
   const leaseGen = j.lease_token ?? 'nolease';
   const at = await insertAttempt(input.client, {
-    id: 'att-' + input.jobId + '-' + attemptNo + '-' + leaseGen,
+    // '::' separator (uncommon in ids) keeps job/lease components unambiguous.
+    id: 'att::' + input.jobId + '::' + attemptNo + '::' + leaseGen,
     job_id: input.jobId,
     attempt_no: attemptNo,
     worker: input.agentId,

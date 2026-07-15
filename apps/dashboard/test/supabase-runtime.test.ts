@@ -9,11 +9,10 @@ import {
 const BASE = { SUPABASE_URL: 'https://proj.supabase.co', SUPABASE_RUNTIME_KEY: 'anon' };
 
 describe('missingRuntimeEnv', () => {
-  it('requires url + key + (token or refresh token)', () => {
+  it('requires url + key only (token sourcing is resolveWorkerToken\'s job)', () => {
     expect(missingRuntimeEnv({})).toContain('SUPABASE_URL');
-    expect(missingRuntimeEnv(BASE)).toContain('SUPABASE_RUNTIME_TOKEN|SUPABASE_RUNTIME_REFRESH_TOKEN');
-    expect(missingRuntimeEnv({ ...BASE, SUPABASE_RUNTIME_TOKEN: 't' })).toEqual([]);
-    expect(missingRuntimeEnv({ ...BASE, SUPABASE_RUNTIME_REFRESH_TOKEN: 'r' })).toEqual([]);
+    expect(missingRuntimeEnv({ SUPABASE_URL: 'u' })).toContain('SUPABASE_RUNTIME_KEY');
+    expect(missingRuntimeEnv(BASE)).toEqual([]); // no env token needed post-bootstrap
   });
 });
 
@@ -66,14 +65,18 @@ describe('resolveWorkerToken - service mode (durable store required)', () => {
     await expect(resolveWorkerToken({ ...BASE, SUPABASE_RUNTIME_TOKEN: 'STATIC' }, noFetch, null)).rejects.toThrow('required for service operation');
   });
 
-  it('bootstraps from the env refresh token when the store is empty, then persists the rotated token', async () => {
+  it('bootstraps from the env refresh token ONLY with allowBootstrap, then persists the rotated token', async () => {
     const store = memStore(null);
     const calls: string[] = [];
     const mock = vi.fn(async (_u: string, init?: { body?: string }) => { calls.push(String(init?.body ?? '')); return { ok: true, json: async () => ({ access_token: 'A1', refresh_token: 'RT1' }) } as unknown as Response; }) as unknown as typeof fetch;
-    const t = await resolveWorkerToken({ ...BASE, SUPABASE_RUNTIME_REFRESH_TOKEN: 'BOOT' }, mock, store);
+    const t = await resolveWorkerToken({ ...BASE, SUPABASE_RUNTIME_REFRESH_TOKEN: 'BOOT' }, mock, store, { allowBootstrap: true });
     expect(t).toBe('A1');
     expect(calls[0]).toContain('BOOT'); // bootstrap token used once
     expect(store.value).toBe('RT1'); // rotated token persisted
+  });
+
+  it('an empty store WITHOUT allowBootstrap fails closed (no env re-use)', async () => {
+    await expect(resolveWorkerToken({ ...BASE, SUPABASE_RUNTIME_REFRESH_TOKEN: 'STALE' }, noFetch, memStore(null))).rejects.toThrow('run once with --bootstrap');
   });
 
   it('uses the store token and IGNORES the env after bootstrap (no consumed-token reuse)', async () => {
@@ -97,7 +100,7 @@ describe('resolveWorkerToken - service mode (durable store required)', () => {
 
   it('fails closed when the refresh response has no rotated token', async () => {
     const noRotate = (async () => ({ ok: true, json: async () => ({ access_token: 'A' }) }) as unknown as Response) as unknown as typeof fetch;
-    await expect(resolveWorkerToken({ ...BASE, SUPABASE_RUNTIME_REFRESH_TOKEN: 'BOOT' }, noRotate, memStore(null))).rejects.toThrow('reconnect required');
+    await expect(resolveWorkerToken({ ...BASE, SUPABASE_RUNTIME_REFRESH_TOKEN: 'BOOT' }, noRotate, memStore(null), { allowBootstrap: true })).rejects.toThrow('reconnect required');
   });
 
   it('fails closed on concurrent write (store lock held)', async () => {

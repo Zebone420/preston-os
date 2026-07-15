@@ -119,7 +119,7 @@ describe('worker service - simulation only', () => {
     const capturing: RuntimeClient = {
       from() {
         return {
-          insert(row: Record<string, unknown>) { if (String(row['id']).startsWith('att-')) ids.push(String(row['id'])); return { select: w }; },
+          insert(row: Record<string, unknown>) { if (String(row['id']).startsWith('att::')) ids.push(String(row['id'])); return { select: w }; },
           select() { return { eq() { return { limit: readControls }; }, order() { return { limit: w }; }, limit: readControls }; },
           update() { return { eq: () => ({ select: w, eq: () => ({ select: w }) }) }; },
         };
@@ -132,7 +132,7 @@ describe('worker service - simulation only', () => {
     });
     await workerOnce(mk(0, 't1'));
     await workerOnce(mk(1, 't2'));
-    expect(ids).toEqual(['att-j1-1-t1', 'att-j1-2-t2']);
+    expect(ids).toEqual(['att::j1::1::t1', 'att::j1::2::t2']);
     expect(new Set(ids).size).toBe(2);
   });
 });

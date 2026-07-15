@@ -23,9 +23,15 @@ Code: src/os-runtime/{supabase-runtime,bin}.ts (resolveWorkerToken + fileTokenSt
   4xx, no rotated token, write lock held} => non-zero exit + a "reconnect/
   reprovision required" state. Recovery = owner re-seeds SUPABASE_RUNTIME_REFRESH_
   TOKEN (env) once and clears the store file; next run re-bootstraps.
-Owner action: provision the initial refresh token into env for the FIRST run,
-set SUPABASE_RUNTIME_TOKEN_STORE to a 0600 path in a 0700 dir owned by the
-service user; after the first successful run, remove the env refresh token.
+Owner action: (a) set SUPABASE_RUNTIME_TOKEN_STORE to a 0600 path in a 0700 dir
+owned by the service user; (b) put the initial SUPABASE_RUNTIME_REFRESH_TOKEN in
+the env and run ONCE explicitly with the `--bootstrap` flag (an empty store on a
+normal run without --bootstrap fails closed and never re-presents a possibly-
+revoked env token); (c) after the first successful run, REMOVE the env refresh
+token - the store now owns it and rotates it each run. Store store-loss/corruption
+=> fail closed => re-provision a fresh refresh token and re-run with --bootstrap.
+Recovery from a killed-mid-write process is automatic: a pid-unique O_EXCL temp
+(0600, fsync, atomic rename) leaves no persistent lock to deadlock future runs.
 
 ## 2. Worker identity + least-privilege RLS (design; owner-run SQL, NOT executed)
 
@@ -116,9 +122,12 @@ files; the AI created none.
 ## 4. Authenticated db-health (IMPLEMENTED)
 
 `node dist/os-runtime/bin.js db-health` (service mode): resolves the token
-(refresh+store), builds the RLS client, does a read-only probeControls() read,
-refuses a production SUPABASE_URL, writes nothing, emits no secret, exits
-0 (ok) / 78 (config or prod refused) / 70 (auth/connectivity error).
+(refresh+store), builds the RLS client, does a read-only probeControls() read.
+It uses a POSITIVE staging allowlist - requires SUPABASE_RUNTIME_ENV=staging (a
+real prod URL <ref>.supabase.co would not contain 'prod', so a denylist alone is
+insufficient) - and requires an actually-readable row (an RLS-filtered empty
+result is NOT healthy). Writes nothing, emits no secret; exits 0 (ok) / 78
+(not-staging or prod refused or missing config) / 70 (auth/RLS/connectivity).
 deploy/preflight-health.sh now runs db-health as the service user with the env
 loaded via runuser. Tested (dispatcher.test.ts): pass, prod-refused, probe-error.
 

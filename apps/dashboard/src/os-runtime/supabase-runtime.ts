@@ -19,15 +19,13 @@ function present(v: string | undefined): boolean {
   return !!(v && String(v).trim() !== '');
 }
 
-// SUPABASE_URL + anon key are always required; plus EITHER a static access
-// token OR (preferred) a refresh token.
+// Only URL + anon key are strictly required here. Token sourcing (store vs
+// bootstrap vs diagnostic) is enforced by resolveWorkerToken, so the operator
+// can REMOVE the consumed bootstrap refresh token from the env after seeding.
 export function missingRuntimeEnv(env: Env): string[] {
   const missing: string[] = [];
   if (!present(env['SUPABASE_URL'])) missing.push('SUPABASE_URL');
   if (!present(env['SUPABASE_RUNTIME_KEY'])) missing.push('SUPABASE_RUNTIME_KEY');
-  if (!present(env['SUPABASE_RUNTIME_TOKEN']) && !present(env['SUPABASE_RUNTIME_REFRESH_TOKEN'])) {
-    missing.push('SUPABASE_RUNTIME_TOKEN|SUPABASE_RUNTIME_REFRESH_TOKEN');
-  }
   return missing;
 }
 
@@ -53,6 +51,11 @@ export interface ResolveOpts {
   // Local diagnostic ONLY: permit a static access token with no store. Never
   // set for systemd worker/Hermes service commands.
   diagnostic?: boolean;
+  // Explicit ONE-TIME bootstrap: only when set may an EMPTY store be seeded from
+  // the env refresh token. Normal service runs leave this false, so a lost/empty
+  // store fails closed instead of re-presenting an already-rotated (revoked) env
+  // token.
+  allowBootstrap?: boolean;
 }
 
 // Worker/Hermes token resolution. SERVICE mode requires a durable store:
@@ -80,18 +83,23 @@ export async function resolveWorkerToken(
     throw new Error('SUPABASE_RUNTIME_TOKEN_STORE is required for service operation (fail-closed)');
   }
   const current = store.read(); // may throw -> fail closed (do NOT use env)
-  const refreshToken =
-    current !== null && current.trim() !== ''
-      ? current.trim() // bootstrapped: store wins, env ignored
-      : (env['SUPABASE_RUNTIME_REFRESH_TOKEN'] ?? '').trim(); // one-time bootstrap
-  if (refreshToken === '') {
-    throw new Error('token store empty and no bootstrap refresh token set; reconnect/reprovision required (fail-closed)');
+  let refreshToken: string;
+  if (current !== null && current.trim() !== '') {
+    refreshToken = current.trim(); // bootstrapped: store wins, env ignored
+  } else if (opts.allowBootstrap) {
+    refreshToken = (env['SUPABASE_RUNTIME_REFRESH_TOKEN'] ?? '').trim();
+    if (refreshToken === '') {
+      throw new Error('bootstrap requested but no SUPABASE_RUNTIME_REFRESH_TOKEN set (fail-closed)');
+    }
+  } else {
+    // Empty store on a normal run: never re-present a possibly-revoked env token.
+    throw new Error('token store empty; run once with --bootstrap to seed, then remove the env token; reconnect/reprovision required (fail-closed)');
   }
   const r = await refreshRuntimeToken(env, fetchImpl, refreshToken);
   if (!r.refresh_token) {
     throw new Error('refresh response had no rotated token; reconnect required (fail-closed)');
   }
-  store.write(r.refresh_token); // persist rotation (single-writer lock inside)
+  store.write(r.refresh_token); // persist rotation (atomic; see fileTokenStore)
   return r.access_token;
 }
 

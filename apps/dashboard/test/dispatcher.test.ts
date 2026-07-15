@@ -10,7 +10,7 @@ import type { WorkerOnceInput } from '../src/lib/ai-os/worker-service';
 import { EXIT, jsonLogger, parseArgs, runDispatcher } from '../src/os-runtime/dispatcher';
 
 const NOW = '2026-07-14T12:00:00.000Z';
-const RUNTIME_ENV = { SUPABASE_URL: 'https://x', SUPABASE_RUNTIME_KEY: 'k', SUPABASE_RUNTIME_TOKEN: 't' };
+const RUNTIME_ENV = { SUPABASE_URL: 'https://x', SUPABASE_RUNTIME_KEY: 'k', SUPABASE_RUNTIME_TOKEN: 't', SUPABASE_RUNTIME_ENV: 'staging' };
 
 function fakeClient(controlsRow: Record<string, unknown> | null, write: QueryResult = { data: [{ id: 'x' }], error: null }): RuntimeClient {
   const w = async () => write;
@@ -76,6 +76,17 @@ describe('dispatcher - runtime packaging entry (pure)', () => {
   it('db-health refuses a production SUPABASE_URL', async () => {
     const r = await runDispatcher({ command: 'db-health', client: fakeClient(null), env: { ...RUNTIME_ENV, SUPABASE_URL: 'https://prod.supabase.co' }, now: NOW, correlationId: 'c', log: noop });
     expect(r.exitCode).toBe(EXIT.config);
+  });
+
+  it('db-health fails closed when not explicitly marked staging', async () => {
+    const noMarker = { SUPABASE_URL: 'https://x', SUPABASE_RUNTIME_KEY: 'k', SUPABASE_RUNTIME_TOKEN: 't' };
+    const r = await runDispatcher({ command: 'db-health', client: fakeClient({ hermes_mode: 'disabled' }), env: noMarker, now: NOW, correlationId: 'c', log: noop });
+    expect(r.exitCode).toBe(EXIT.config);
+  });
+
+  it('db-health fails when the control plane returns zero readable rows (RLS denial)', async () => {
+    const r = await runDispatcher({ command: 'db-health', client: fakeClient(null), env: RUNTIME_ENV, now: NOW, correlationId: 'c', log: noop });
+    expect(r.exitCode).toBe(EXIT.error); // rows 0 => not healthy
   });
 
   it('db-health reports error exit when the probe read fails', async () => {

@@ -87,16 +87,23 @@ export async function runDispatcher(input: DispatcherInput): Promise<DispatcherR
     }
 
     if (command === 'db-health') {
-      // Authenticated read-only probe: proves the (refreshed) session can reach
-      // the staging control plane. Writes nothing. A prod-looking URL is refused.
-      const url = String(env['SUPABASE_URL'] ?? '');
-      if (/\bprod(uction)?\b/i.test(url)) {
+      // Authenticated read-only probe. Positive staging ALLOWLIST (a real prod
+      // URL like <ref>.supabase.co would not contain the word "prod", so a
+      // denylist is insufficient): the operator must explicitly mark staging.
+      if (env['SUPABASE_RUNTIME_ENV'] !== 'staging') {
+        log({ level: 'error', command, correlationId, event: 'db_health', error: 'SUPABASE_RUNTIME_ENV must be staging (fail-closed)' });
+        return { exitCode: EXIT.config, summary: { error: 'not marked staging' } };
+      }
+      if (/\bprod(uction)?\b/i.test(String(env['SUPABASE_URL'] ?? ''))) {
         log({ level: 'error', command, correlationId, event: 'db_health', error: 'production target refused' });
         return { exitCode: EXIT.config, summary: { error: 'production target refused' } };
       }
       const probe = await probeControls(client);
-      log({ level: probe.ok ? 'info' : 'error', command, correlationId, event: 'db_health', ok: probe.ok, rows: probe.rows, error: probe.error });
-      return { exitCode: probe.ok ? EXIT.ok : EXIT.error, summary: { ok: probe.ok, rows: probe.rows } };
+      // Require an actually-readable row: PostgREST returns [] (no error) when RLS
+      // filters everything, which must NOT count as healthy read authorization.
+      const healthy = probe.ok && probe.rows >= 1;
+      log({ level: healthy ? 'info' : 'error', command, correlationId, event: 'db_health', ok: probe.ok, rows: probe.rows, error: probe.error });
+      return { exitCode: healthy ? EXIT.ok : EXIT.error, summary: { ok: healthy, rows: probe.rows } };
     }
 
     if (command === 'worker-loop') {
