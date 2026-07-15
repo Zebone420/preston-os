@@ -5,11 +5,33 @@ import {
   runDispatcher,
   type DispatcherCommand,
 } from './dispatcher';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import {
   createRuntimeClientWithToken,
   missingRuntimeEnv,
   resolveRuntimeToken,
+  type TokenStore,
 } from './supabase-runtime';
+
+// Atomic file store for the rotating refresh token (host only). Write to a temp
+// file then rename (atomic on one filesystem); 0600 perms. Single-worker timer
+// (no overlap) means no concurrent writers.
+function fileTokenStore(path: string): TokenStore {
+  return {
+    read() {
+      try {
+        return existsSync(path) ? readFileSync(path, 'utf8').trim() || null : null;
+      } catch {
+        return null;
+      }
+    },
+    write(refreshToken: string) {
+      const tmp = path + '.tmp';
+      writeFileSync(tmp, refreshToken, { mode: 0o600 });
+      renameSync(tmp, path);
+    },
+  };
+}
 
 // Preston AI OS - compiled remote dispatcher entry (Phase 4B.1).
 // Invoked by the disabled systemd oneshot services (see deploy/systemd). Builds
@@ -30,8 +52,11 @@ async function main(): Promise<void> {
   try {
     const missing = missingRuntimeEnv(env);
     if (missing.length) throw new Error('missing runtime env: ' + missing.join(', '));
-    // Durable: mint a fresh access token from the refresh token at startup.
-    const token = await resolveRuntimeToken(env, fetch);
+    // Durable: mint a fresh access token from the (rotating) refresh token at
+    // startup, persisting the rotated token to the store for the next run.
+    const storePath = env['SUPABASE_RUNTIME_TOKEN_STORE'];
+    const store = storePath ? fileTokenStore(storePath) : null;
+    const token = await resolveRuntimeToken(env, fetch, store);
     client = createRuntimeClientWithToken(env, token);
   } catch (err) {
     if (command !== 'health') {

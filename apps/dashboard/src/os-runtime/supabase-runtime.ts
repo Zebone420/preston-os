@@ -31,33 +31,59 @@ export function missingRuntimeEnv(env: Env): string[] {
   return missing;
 }
 
-// Exchange the stored refresh token for a fresh access token. Injectable fetch
-// for tests (no live call in CI). Fail-closed; error carries only an HTTP status.
-export async function refreshRuntimeToken(env: Env, fetchImpl: FetchLike): Promise<string> {
+export interface RefreshResult {
+  access_token: string;
+  refresh_token: string | null; // the ROTATED refresh token (Supabase rotates by default)
+}
+
+// Durable refresh-token store (atomic on the host; injected as a fake in tests).
+// Holds the CURRENT refresh token so successive oneshots present a valid one -
+// Supabase rotates refresh tokens on use, so reusing a consumed one revokes the
+// session family.
+export interface TokenStore {
+  read(): string | null;
+  write(refreshToken: string): void;
+}
+
+// Exchange a refresh token for a fresh access token AND capture the rotated
+// refresh token. Injectable fetch for tests. Fail-closed; errors carry only an
+// HTTP status - never a token.
+export async function refreshRuntimeToken(
+  env: Env,
+  fetchImpl: FetchLike,
+  refreshToken: string,
+): Promise<RefreshResult> {
   const base = String(env['SUPABASE_URL']).replace(/\/+$/, '');
   const res = await fetchImpl(base + '/auth/v1/token?grant_type=refresh_token', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: String(env['SUPABASE_RUNTIME_KEY']),
-    },
-    body: JSON.stringify({ refresh_token: String(env['SUPABASE_RUNTIME_REFRESH_TOKEN']) }),
+    headers: { 'Content-Type': 'application/json', apikey: String(env['SUPABASE_RUNTIME_KEY']) },
+    body: JSON.stringify({ refresh_token: refreshToken }),
   });
   if (!res.ok) {
     throw new Error('supabase token refresh failed with status ' + res.status + ' (reconnect required)');
   }
-  const json = (await res.json()) as { access_token?: string };
-  const token = (json.access_token ?? '').trim();
-  if (token === '') {
+  const json = (await res.json()) as { access_token?: string; refresh_token?: string };
+  const access = (json.access_token ?? '').trim();
+  if (access === '') {
     throw new Error('supabase token refresh returned no access token (fail-closed)');
   }
-  return token;
+  const rotated = (json.refresh_token ?? '').trim();
+  return { access_token: access, refresh_token: rotated !== '' ? rotated : null };
 }
 
-// Prefer the durable refresh flow; fall back to a static access token.
-export async function resolveRuntimeToken(env: Env, fetchImpl: FetchLike): Promise<string> {
-  if (present(env['SUPABASE_RUNTIME_REFRESH_TOKEN'])) {
-    return refreshRuntimeToken(env, fetchImpl);
+// Prefer the durable refresh flow (current token from the store, else env),
+// persisting the ROTATED refresh token so the next oneshot stays valid; fall
+// back to a static access token; else fail closed.
+export async function resolveRuntimeToken(
+  env: Env,
+  fetchImpl: FetchLike,
+  store?: TokenStore | null,
+): Promise<string> {
+  const current = (store?.read() ?? env['SUPABASE_RUNTIME_REFRESH_TOKEN'] ?? '').trim();
+  if (current !== '') {
+    const r = await refreshRuntimeToken(env, fetchImpl, current);
+    if (store && r.refresh_token) store.write(r.refresh_token); // persist rotation
+    return r.access_token;
   }
   const staticToken = (env['SUPABASE_RUNTIME_TOKEN'] ?? '').trim();
   if (staticToken !== '') return staticToken;
