@@ -6,7 +6,7 @@ import {
 } from '../lib/ai-os/worker-service';
 import { hermesHealth, hermesObserveLoop } from '../lib/ai-os/hermes-service';
 import type { ObserveCandidate } from '../lib/ai-os/orchestrator';
-import type { RuntimeClient } from '../lib/ai-os/store';
+import { probeControls, type RuntimeClient } from '../lib/ai-os/store';
 import { missingRuntimeEnv } from './supabase-runtime';
 
 // Preston AI OS - remote dispatcher core (Phase 4B.1). PURE + testable.
@@ -30,7 +30,7 @@ export function jsonLogger(sink: (s: string) => void = (s) => console.log(s)): L
   return (line) => sink(JSON.stringify(redactSecrets({ source: 'ai-os-dispatcher', ...line })));
 }
 
-export type DispatcherCommand = 'health' | 'worker-loop' | 'hermes-loop';
+export type DispatcherCommand = 'health' | 'db-health' | 'worker-loop' | 'hermes-loop';
 
 export interface DispatcherInput {
   command: DispatcherCommand;
@@ -49,13 +49,20 @@ export interface DispatcherResult {
   summary: Record<string, unknown>;
 }
 
-export function parseArgs(argv: string[]): { command: DispatcherCommand; maxIterations: number } {
+export function parseArgs(argv: string[]): {
+  command: DispatcherCommand;
+  maxIterations: number;
+  diagnostic: boolean;
+} {
   const cmd = argv[2];
   const command: DispatcherCommand =
-    cmd === 'worker-loop' ? 'worker-loop' : cmd === 'hermes-loop' ? 'hermes-loop' : 'health';
+    cmd === 'worker-loop' ? 'worker-loop'
+      : cmd === 'hermes-loop' ? 'hermes-loop'
+        : cmd === 'db-health' ? 'db-health'
+          : 'health';
   const maxIdx = argv.indexOf('--max');
   const maxIterations = maxIdx >= 0 ? Number(argv[maxIdx + 1]) || 5 : 5;
-  return { command, maxIterations };
+  return { command, maxIterations, diagnostic: argv.includes('--diagnostic') };
 }
 
 export async function runDispatcher(input: DispatcherInput): Promise<DispatcherResult> {
@@ -77,6 +84,19 @@ export async function runDispatcher(input: DispatcherInput): Promise<DispatcherR
       const hermes = await hermesHealth(client);
       log({ level: 'info', command, correlationId, event: 'health', worker, hermes });
       return { exitCode: EXIT.ok, summary: { worker, hermes } };
+    }
+
+    if (command === 'db-health') {
+      // Authenticated read-only probe: proves the (refreshed) session can reach
+      // the staging control plane. Writes nothing. A prod-looking URL is refused.
+      const url = String(env['SUPABASE_URL'] ?? '');
+      if (/\bprod(uction)?\b/i.test(url)) {
+        log({ level: 'error', command, correlationId, event: 'db_health', error: 'production target refused' });
+        return { exitCode: EXIT.config, summary: { error: 'production target refused' } };
+      }
+      const probe = await probeControls(client);
+      log({ level: probe.ok ? 'info' : 'error', command, correlationId, event: 'db_health', ok: probe.ok, rows: probe.rows, error: probe.error });
+      return { exitCode: probe.ok ? EXIT.ok : EXIT.error, summary: { ok: probe.ok, rows: probe.rows } };
     }
 
     if (command === 'worker-loop') {

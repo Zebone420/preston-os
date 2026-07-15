@@ -60,6 +60,38 @@ describe('dispatcher - runtime packaging entry (pure)', () => {
     expect(out).not.toContain('sk-leak');
     expect(out).toContain('ok');
   });
+
+  it('parseArgs recognizes db-health and --diagnostic', () => {
+    expect(parseArgs(['n', 'b', 'db-health']).command).toBe('db-health');
+    expect(parseArgs(['n', 'b', 'worker-loop', '--diagnostic']).diagnostic).toBe(true);
+    expect(parseArgs(['n', 'b', 'health']).diagnostic).toBe(false);
+  });
+
+  it('db-health passes on a reachable staging control plane (read-only)', async () => {
+    const r = await runDispatcher({ command: 'db-health', client: fakeClient({ hermes_mode: 'disabled' }), env: RUNTIME_ENV, now: NOW, correlationId: 'c', log: noop });
+    expect(r.exitCode).toBe(EXIT.ok);
+    expect(r.summary.ok).toBe(true);
+  });
+
+  it('db-health refuses a production SUPABASE_URL', async () => {
+    const r = await runDispatcher({ command: 'db-health', client: fakeClient(null), env: { ...RUNTIME_ENV, SUPABASE_URL: 'https://prod.supabase.co' }, now: NOW, correlationId: 'c', log: noop });
+    expect(r.exitCode).toBe(EXIT.config);
+  });
+
+  it('db-health reports error exit when the probe read fails', async () => {
+    const err = async () => ({ data: null, error: { message: 'permission denied' } });
+    const errClient: RuntimeClient = {
+      from() {
+        return {
+          insert() { return { select: err }; },
+          select() { return { eq() { return { limit: err }; }, order() { return { limit: err }; }, limit: err }; },
+          update() { return { eq: () => ({ select: err, eq: () => ({ select: err }) }) }; },
+        };
+      },
+    };
+    const r = await runDispatcher({ command: 'db-health', client: errClient, env: RUNTIME_ENV, now: NOW, correlationId: 'c', log: noop });
+    expect(r.exitCode).toBe(EXIT.error);
+  });
 });
 
 // --- owner_stop -> exit 75 (halted), with one real candidate --------------

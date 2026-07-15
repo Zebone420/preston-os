@@ -182,6 +182,21 @@ export async function readSystemControls(
   }
 }
 
+// Authenticated read-only connectivity probe (for db-health). Unlike
+// readSystemControls (which fails closed to defaults), this SURFACES the error
+// so a bad token / RLS denial is visible. Writes nothing.
+export async function probeControls(
+  client: RuntimeClient,
+): Promise<{ ok: boolean; rows: number; error?: string }> {
+  try {
+    const res = await client.from(RUNTIME_TABLES.controls).select('*').limit(1);
+    if (res.error) return { ok: false, rows: 0, error: res.error.message };
+    return { ok: true, rows: (res.data ?? []).length };
+  } catch (err) {
+    return { ok: false, rows: 0, error: (err as Error).message };
+  }
+}
+
 // --- events (append-only) --------------------------------------------------
 
 export async function insertEvent(

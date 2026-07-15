@@ -111,6 +111,30 @@ describe('worker service - simulation only', () => {
     expect(h.halted).toBe(true);
     expect(h.execution_enabled).toBe(false);
   });
+
+  it('writes a distinct attempt id per attempt + lease generation (retry history)', async () => {
+    const ids: string[] = [];
+    const w = async () => ({ data: [{ id: 'x' }], error: null });
+    const readControls = async () => ({ data: [{ hermes_mode: 'disabled' }], error: null });
+    const capturing: RuntimeClient = {
+      from() {
+        return {
+          insert(row: Record<string, unknown>) { if (String(row['id']).startsWith('att-')) ids.push(String(row['id'])); return { select: w }; },
+          select() { return { eq() { return { limit: readControls }; }, order() { return { limit: w }; }, limit: readControls }; },
+          update() { return { eq: () => ({ select: w, eq: () => ({ select: w }) }) }; },
+        };
+      },
+    };
+    const mk = (attempts: number, lease: string): WorkerOnceInput => ({
+      client: capturing,
+      cycle: { eligibility: elig({ controls: liveControls, job: job({ attempts, lease_token: lease }) }), envelope, now: NOW },
+      jobId: 'j1', agentId: 'w', checkpoint, now: NOW,
+    });
+    await workerOnce(mk(0, 't1'));
+    await workerOnce(mk(1, 't2'));
+    expect(ids).toEqual(['att-j1-1-t1', 'att-j1-2-t2']);
+    expect(new Set(ids).size).toBe(2);
+  });
 });
 
 const cmd = normalizeCommand({

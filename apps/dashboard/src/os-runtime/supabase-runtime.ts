@@ -36,13 +36,63 @@ export interface RefreshResult {
   refresh_token: string | null; // the ROTATED refresh token (Supabase rotates by default)
 }
 
-// Durable refresh-token store (atomic on the host; injected as a fake in tests).
-// Holds the CURRENT refresh token so successive oneshots present a valid one -
-// Supabase rotates refresh tokens on use, so reusing a consumed one revokes the
-// session family.
+// Durable refresh-token store (atomic + locked on the host; injected as a fake
+// in tests). Holds the CURRENT refresh token so successive oneshots present a
+// valid one - Supabase rotates refresh tokens on use, so reusing a consumed one
+// revokes the session family.
+//   read()  -> current refresh token, or null if the store is not yet
+//              bootstrapped; THROWS (non-secret message) if the store is
+//              configured but unreadable / malformed / insecurely permissioned.
+//   write() -> atomically replace under a single-writer lock; THROWS on failure.
 export interface TokenStore {
   read(): string | null;
   write(refreshToken: string): void;
+}
+
+export interface ResolveOpts {
+  // Local diagnostic ONLY: permit a static access token with no store. Never
+  // set for systemd worker/Hermes service commands.
+  diagnostic?: boolean;
+}
+
+// Worker/Hermes token resolution. SERVICE mode requires a durable store:
+//   - store empty (not bootstrapped) -> use the env bootstrap refresh token
+//     ONCE, refresh, and persist the ROTATED token to the store;
+//   - store populated -> use the store token (env is IGNORED after bootstrap,
+//     so a consumed bootstrap token is never reused);
+//   - store configured but read() throws (unreadable/malformed/insecure) ->
+//     FAIL CLOSED (do not fall back to the env token);
+//   - refresh response without a rotated token -> FAIL CLOSED (cannot persist
+//     continuity; reconnect/reprovision required).
+// DIAGNOSTIC mode allows a static access token only (no store, no refresh).
+export async function resolveWorkerToken(
+  env: Env,
+  fetchImpl: FetchLike,
+  store: TokenStore | null,
+  opts: ResolveOpts = {},
+): Promise<string> {
+  if (opts.diagnostic) {
+    const t = (env['SUPABASE_RUNTIME_TOKEN'] ?? '').trim();
+    if (t !== '') return t;
+    throw new Error('diagnostic mode requires SUPABASE_RUNTIME_TOKEN (fail-closed)');
+  }
+  if (!store) {
+    throw new Error('SUPABASE_RUNTIME_TOKEN_STORE is required for service operation (fail-closed)');
+  }
+  const current = store.read(); // may throw -> fail closed (do NOT use env)
+  const refreshToken =
+    current !== null && current.trim() !== ''
+      ? current.trim() // bootstrapped: store wins, env ignored
+      : (env['SUPABASE_RUNTIME_REFRESH_TOKEN'] ?? '').trim(); // one-time bootstrap
+  if (refreshToken === '') {
+    throw new Error('token store empty and no bootstrap refresh token set; reconnect/reprovision required (fail-closed)');
+  }
+  const r = await refreshRuntimeToken(env, fetchImpl, refreshToken);
+  if (!r.refresh_token) {
+    throw new Error('refresh response had no rotated token; reconnect required (fail-closed)');
+  }
+  store.write(r.refresh_token); // persist rotation (single-writer lock inside)
+  return r.access_token;
 }
 
 // Exchange a refresh token for a fresh access token AND capture the rotated
@@ -69,25 +119,6 @@ export async function refreshRuntimeToken(
   }
   const rotated = (json.refresh_token ?? '').trim();
   return { access_token: access, refresh_token: rotated !== '' ? rotated : null };
-}
-
-// Prefer the durable refresh flow (current token from the store, else env),
-// persisting the ROTATED refresh token so the next oneshot stays valid; fall
-// back to a static access token; else fail closed.
-export async function resolveRuntimeToken(
-  env: Env,
-  fetchImpl: FetchLike,
-  store?: TokenStore | null,
-): Promise<string> {
-  const current = (store?.read() ?? env['SUPABASE_RUNTIME_REFRESH_TOKEN'] ?? '').trim();
-  if (current !== '') {
-    const r = await refreshRuntimeToken(env, fetchImpl, current);
-    if (store && r.refresh_token) store.write(r.refresh_token); // persist rotation
-    return r.access_token;
-  }
-  const staticToken = (env['SUPABASE_RUNTIME_TOKEN'] ?? '').trim();
-  if (staticToken !== '') return staticToken;
-  throw new Error('no runtime token or refresh token configured (fail-closed)');
 }
 
 export function createRuntimeClientWithToken(env: Env, token: string): RuntimeClient {

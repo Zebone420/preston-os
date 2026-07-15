@@ -44,10 +44,16 @@ export async function workerOnce(input: WorkerOnceInput): Promise<WorkerOnceResu
     { ...input.checkpoint, status: ok ? 'complete' : 'blocked' },
     input.jobId,
   );
+  // Distinct id per attempt AND lease generation so retries do not collide (a
+  // fixed att-<jobId> would overwrite/lose retry history). The lease token
+  // fences the generation; attempt_no orders the retries.
+  const j = input.cycle.eligibility.job;
+  const attemptNo = j.attempts + 1;
+  const leaseGen = j.lease_token ?? 'nolease';
   const at = await insertAttempt(input.client, {
-    id: 'att-' + input.jobId,
+    id: 'att-' + input.jobId + '-' + attemptNo + '-' + leaseGen,
     job_id: input.jobId,
-    attempt_no: 1,
+    attempt_no: attemptNo,
     worker: input.agentId,
     correlation_id: input.checkpoint.correlation_id,
     outcome: ok ? 'completed' : 'failed',

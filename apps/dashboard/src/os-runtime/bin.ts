@@ -5,30 +5,58 @@ import {
   runDispatcher,
   type DispatcherCommand,
 } from './dispatcher';
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  openSync,
+  closeSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import {
   createRuntimeClientWithToken,
   missingRuntimeEnv,
-  resolveRuntimeToken,
+  resolveWorkerToken,
   type TokenStore,
 } from './supabase-runtime';
 
-// Atomic file store for the rotating refresh token (host only). Write to a temp
-// file then rename (atomic on one filesystem); 0600 perms. Single-worker timer
-// (no overlap) means no concurrent writers.
+// Host-side rotating refresh-token store. Security: refuse a symlink, refuse
+// group/other-accessible permissions, single-writer lock (O_EXCL lockfile),
+// same-filesystem atomic replace (temp + rename), 0600. read() THROWS on an
+// insecure/unreadable store so resolveWorkerToken fails closed. Not unit-tested
+// (fs); the decision logic is tested via a fake TokenStore.
 function fileTokenStore(path: string): TokenStore {
+  const lock = path + '.lock';
   return {
     read() {
-      try {
-        return existsSync(path) ? readFileSync(path, 'utf8').trim() || null : null;
-      } catch {
-        return null;
-      }
+      if (!existsSync(path)) return null; // not bootstrapped
+      const st = lstatSync(path);
+      if (st.isSymbolicLink()) throw new Error('token store is a symlink (insecure)');
+      if ((st.mode & 0o077) !== 0) throw new Error('token store has group/other access (insecure)');
+      const v = readFileSync(path, 'utf8').trim();
+      return v === '' ? null : v;
     },
     write(refreshToken: string) {
-      const tmp = path + '.tmp';
-      writeFileSync(tmp, refreshToken, { mode: 0o600 });
-      renameSync(tmp, path);
+      let fd: number;
+      try {
+        fd = openSync(lock, 'wx'); // exclusive: fails if another writer holds it
+      } catch {
+        throw new Error('token store is locked by another writer (concurrent access)');
+      }
+      try {
+        const tmp = path + '.tmp';
+        writeFileSync(tmp, refreshToken, { mode: 0o600 });
+        renameSync(tmp, path); // atomic on the same filesystem
+      } finally {
+        closeSync(fd);
+        try {
+          rmSync(lock);
+        } catch {
+          /* best-effort lock cleanup */
+        }
+      }
     },
   };
 }
@@ -41,22 +69,23 @@ function fileTokenStore(path: string): TokenStore {
 // and is compiled by `npm run build:os-runtime`.
 
 async function main(): Promise<void> {
-  const { command, maxIterations } = parseArgs(process.argv);
+  const { command, maxIterations, diagnostic } = parseArgs(process.argv);
   const log = jsonLogger();
   const correlationId = 'disp-' + process.pid + '-' + command;
 
-  // `health` can run without full runtime env (it reports the gap). The working
-  // commands construct the real client, which fails closed if env is missing.
+  // `health` can run without full runtime env (it reports the gap). Working
+  // commands (worker-loop/hermes-loop/db-health) require the durable token
+  // store unless --diagnostic (static access token, local only) is set.
   const env = process.env as Record<string, string | undefined>;
   let client;
   try {
     const missing = missingRuntimeEnv(env);
     if (missing.length) throw new Error('missing runtime env: ' + missing.join(', '));
-    // Durable: mint a fresh access token from the (rotating) refresh token at
-    // startup, persisting the rotated token to the store for the next run.
+    // Bootstrap-then-store: mint a fresh access token, capture + persist the
+    // rotated refresh token. Service mode REQUIRES SUPABASE_RUNTIME_TOKEN_STORE.
     const storePath = env['SUPABASE_RUNTIME_TOKEN_STORE'];
     const store = storePath ? fileTokenStore(storePath) : null;
-    const token = await resolveRuntimeToken(env, fetch, store);
+    const token = await resolveWorkerToken(env, fetch, store, { diagnostic });
     client = createRuntimeClientWithToken(env, token);
   } catch (err) {
     if (command !== 'health') {

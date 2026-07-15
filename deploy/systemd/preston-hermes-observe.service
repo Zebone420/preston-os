@@ -5,10 +5,12 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-User=preston
-Group=preston
+# Dedicated least-privilege Hermes identity (separate from the worker + owner).
+User=preston-hermes
+Group=preston-hermes
 WorkingDirectory=/srv/preston-os/apps/dashboard
-EnvironmentFile=/etc/preston/runtime.env
+# Hermes-only env + token store (distinct from the worker's).
+EnvironmentFile=/etc/preston/hermes.env
 # Observe-only: reads state + records decisions/events. Never leases/executes.
 # Requires hermes_mode=observe_only in system_controls (owner-set) to do work.
 ExecStart=/usr/bin/node dist/os-runtime/bin.js hermes-loop --max 5
