@@ -39,7 +39,18 @@ Goal: the worker uses its own Supabase authenticated identity - separate from th
 owner and from Hermes - with RLS that lets it advance jobs but NOT alter approvals
 or owner authorization.
 
-Proposed migration 0005 (owner reviews + runs in STAGING; additive):
+RECONCILIATION NOTE (2026-07-17 audit): the ACTIVE Phase 4B.1 staging-beta
+scheme is the OWNER-ALLOWLISTED service identity documented in env.template and
+src/os-runtime/supabase-runtime.ts - that is what the shipped db-health and
+readSystemControls paths assume. The least-privilege design below is the
+POST-DRILL hardening gate, and its migration is renumbered 0006 (0005 is taken
+by 0005_phase4b1_id_alignment.sql). Before adopting it, 0006 MUST also add
+non-owner SELECT policies for the runtime roles on system_controls (and the
+other tables the runtime reads); as drafted below, a non-owner identity cannot
+read system_controls, so db-health would fail (rows=0) and readSystemControls
+would silently fail closed to stopped defaults forever.
+
+Proposed migration 0006 (owner reviews + runs in STAGING; additive):
 
     -- runtime role registry (owner-only readable)
     create table if not exists runtime_roles (

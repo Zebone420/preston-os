@@ -24,58 +24,20 @@ On the staging host (SSH alias preston-agent-staging per project notes):
 Verify: `git -C /srv/preston-os status` clean; no preston process running.
 Rollback: remove the checkout + worktrees + identity.
 
-## 2. Disabled service definitions (install but do NOT enable)
-Place under /etc/systemd/system. WantedBy is intentionally omitted so nothing
-auto-starts. Least-privilege user, explicit WorkingDirectory + EnvironmentFile,
-restart caps, timeouts, bounded logs. Values are examples; adjust paths.
-
-preston-worker.service (simulation-only; execution stays disabled):
-```
-[Unit]
-Description=Preston AI OS worker (simulation only)
-After=network-online.target
-[Service]
-Type=oneshot
-User=preston
-WorkingDirectory=/srv/preston-os/apps/dashboard
-EnvironmentFile=/etc/preston/worker.env
-# Runs the tested simulate-loop dispatcher; execution disabled by controls.
-ExecStart=/usr/bin/node scripts/os/worker.mjs simulate-loop --max 5 --dry-run
-TimeoutStartSec=120
-StartLimitBurst=3
-StartLimitIntervalSec=300
-StandardOutput=append:/var/log/preston/worker.log
-StandardError=append:/var/log/preston/worker.log
-# No [Install] section => never auto-starts; owner runs `systemctl start` manually.
-```
-
-preston-hermes-observe.service (observe-only):
-```
-[Unit]
-Description=Preston AI OS Hermes observe-only
-After=network-online.target
-[Service]
-Type=oneshot
-User=preston
-WorkingDirectory=/srv/preston-os/apps/dashboard
-EnvironmentFile=/etc/preston/hermes.env
-ExecStart=/usr/bin/node scripts/os/hermes.mjs observe-loop --max 5
-TimeoutStartSec=120
-StartLimitBurst=3
-StartLimitIntervalSec=300
-StandardOutput=append:/var/log/preston/hermes.log
-StandardError=append:/var/log/preston/hermes.log
-```
+## 2. Disabled service definitions (SUPERSEDED - use the tracked units)
+SUPERSEDED by section 8b and the TRACKED artifacts in `deploy/systemd/`
+(preston-worker.service/.timer, preston-hermes-observe.service/.timer). The
+example units that previously appeared here referenced `scripts/os/*.mjs`
+dispatchers that do not exist in the repo and lacked the hardening directives;
+do NOT hand-write units. The tracked services have NO [Install] section (they
+can never auto-start; only the owner-enabled timers fire them), run the
+compiled `dist/os-runtime/bin.js` as dedicated least-privilege users, and carry
+NoNewPrivileges/ProtectSystem=strict/ProtectHome/PrivateTmp/RuntimeMaxSec.
 
 Optional preston-telegram-intake is the Next app route /api/telegram (no separate
 service); it stays disabled unless TELEGRAM_INTAKE_ENABLED=true.
 
-NOTE: scripts/os/worker.mjs and hermes.mjs are thin dispatchers the owner adds at
-deploy time; they call the TESTED wrappers (worker-service.ts workerSimulateLoop /
-hermes-service.ts hermesObserveLoop) via a build/tsx step. They default to
-dry-run and never execute. The AI did not commit live-running bins.
-
-Install (no enable): copy units, `systemctl daemon-reload`. Do NOT `enable`.
+Install (no enable): copy the tracked units, `systemctl daemon-reload` (8b).
 Rollback: remove the unit files + `systemctl daemon-reload`.
 
 ## 3. Remote repository / worktree (dry-run)
@@ -158,9 +120,20 @@ Build the dispatcher (deterministic):
   Health check (proves startup; exits 78 with no env, 0 when configured):
     node dist/os-runtime/bin.js health
 
-Runtime env file /etc/preston/runtime.env (host only; never in Git), names:
-    SUPABASE_URL, SUPABASE_RUNTIME_KEY (anon), SUPABASE_RUNTIME_TOKEN
-    (owner-allowlisted service-identity access token; NOT the service-role key)
+Runtime env files /etc/preston/worker.env and /etc/preston/hermes.env (host
+only; never in Git; one per service identity - these are the paths the tracked
+units load). Required names (see PHASE_4B_WORKER_IDENTITY_PACKET.md section 1):
+    SUPABASE_URL, SUPABASE_RUNTIME_KEY (anon), SUPABASE_RUNTIME_ENV=staging,
+    SUPABASE_RUNTIME_TOKEN_STORE (0600 file in a 0700 dir owned by the service
+    user), and - for the ONE-TIME --bootstrap run only -
+    SUPABASE_RUNTIME_REFRESH_TOKEN (removed after bootstrap; the store then owns
+    the rotating token). SUPABASE_RUNTIME_TOKEN is diagnostic-only.
+Precondition (SQL, owner, once - Phase 3 packet): the system_controls singleton
+must exist, or every control UPDATE and db-health probe matches zero rows:
+    insert into system_controls (id) values ('global') on conflict do nothing;
+Precondition (SQL, owner, once): apply migration 0005_phase4b1_id_alignment.sql
+before expecting job_attempts / orchestration_decisions / os_events rows - the
+runtime writes deterministic text ids that the pre-0005 uuid columns reject.
 
 Install services (disabled; no auto-start):
     sudo cp deploy/systemd/preston-worker.service /etc/systemd/system/
@@ -186,6 +159,11 @@ Uninstall / rollback:
     sudo systemctl disable --now preston-worker.timer preston-hermes-observe.timer
     sudo rm /etc/systemd/system/preston-worker.* /etc/systemd/system/preston-hermes-observe.*
     sudo systemctl daemon-reload
+  SECURITY: also destroy the persisted (rotated) refresh tokens + env files:
+    sudo shred -u <SUPABASE_RUNTIME_TOKEN_STORE path from worker.env and hermes.env>
+    sudo shred -u /etc/preston/worker.env /etc/preston/hermes.env
+  and revoke the service identities' sessions in Supabase (owner dashboard).
+  Optional cleanup: `userdel preston-worker preston-hermes`, remove /var/log/preston.
   Plus the global kill (section 7). Non-destructive; no business data touched.
 
 Telegram intake (Phase 4B.1 hardened; still owner-gated):

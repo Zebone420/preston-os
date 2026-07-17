@@ -8,7 +8,7 @@
 #
 # Usage (as root):  bash deploy/preflight-health.sh
 # Prereqs: npm run build:os-runtime has produced dist/os-runtime/bin.js;
-#          /etc/preston/runtime.env exists (0600, owned by the service user).
+#          /etc/preston/worker.env exists (0600, owned by the service user).
 
 set -u
 ENV_FILE="${PRESTON_ENV_FILE:-/etc/preston/worker.env}"
@@ -26,8 +26,10 @@ case "$perms" in 600|400) ;; *) echo "PREFLIGHT: WARN - $ENV_FILE perms=$perms (
 [ -f "$APP_DIR/$BIN" ] || fail "dispatcher not built: $APP_DIR/$BIN (run: npm run build:os-runtime)"
 command -v node >/dev/null 2>&1 || fail "node not found on PATH"
 
-# Report which required NAMES are present (never their values).
-for v in SUPABASE_URL SUPABASE_RUNTIME_KEY SUPABASE_RUNTIME_TOKEN SUPABASE_RUNTIME_REFRESH_TOKEN; do
+# Report which required NAMES are present (never their values). Service mode
+# requires URL + KEY + ENV=staging + TOKEN_STORE; REFRESH_TOKEN is needed once
+# for --bootstrap; TOKEN is diagnostic-only.
+for v in SUPABASE_URL SUPABASE_RUNTIME_KEY SUPABASE_RUNTIME_ENV SUPABASE_RUNTIME_TOKEN_STORE SUPABASE_RUNTIME_REFRESH_TOKEN SUPABASE_RUNTIME_TOKEN; do
   if grep -qE "^${v}=" "$ENV_FILE"; then echo "PREFLIGHT: env ${v} present"; fi
 done
 
