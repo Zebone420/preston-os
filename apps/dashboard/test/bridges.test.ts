@@ -85,4 +85,7 @@ describe('Telegram bridge', () => {
     const old = { ...base, message_id: 9, date: Math.floor(Date.parse(NOW) / 1000) - 600 };
     expect(intakeTelegram(old, topts).status).toBe('expired');
   });
+  it('expires (fail-closed) when the clock input is unparseable', () => {
+    expect(intakeTelegram(base, { ...topts, now: 'not-a-date' }).status).toBe('expired');
+  });
 });

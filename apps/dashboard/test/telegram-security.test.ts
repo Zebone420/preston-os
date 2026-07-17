@@ -72,6 +72,11 @@ describe('evaluateWebhook - fail-closed authenticity', () => {
     const stale = update('/status', { message: { message_id: 1, date: nowSec - 600, text: '/status', chat: { id: 'owner-chat' }, from: { id: 'owner-user' } } });
     expect(evalW({ body: stale }).status).toBe('expired');
   });
+  it('rejects (expired) when the clock input is unparseable - freshness fails closed', () => {
+    expect(evalW({ now: 'not-a-date' }).status).toBe('expired');
+    const badDate = update('/status', { message: { message_id: 1, date: 'garbage', text: '/status', chat: { id: 'owner-chat' }, from: { id: 'owner-user' } } });
+    expect(evalW({ body: badDate }).status).toBe('expired');
+  });
   it('rejects a replayed update_id (durable dedup predicate)', () => {
     expect(evalW({ isReplay: (id) => id === 100 }).status).toBe('replay');
   });

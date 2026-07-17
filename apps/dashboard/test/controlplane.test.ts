@@ -20,9 +20,11 @@ interface AuditCall {
 function deps(writeResult: QueryResult, controlsRow?: Record<string, unknown>): {
   deps: ControlPlaneDeps;
   inserts: Record<string, unknown>[];
+  updates: Record<string, unknown>[];
   audits: AuditCall[];
 } {
   const inserts: Record<string, unknown>[] = [];
+  const updates: Record<string, unknown>[] = [];
   const audits: AuditCall[] = [];
   const client: RuntimeClient = {
     from(table: string) {
@@ -42,8 +44,11 @@ function deps(writeResult: QueryResult, controlsRow?: Record<string, unknown>): 
             limit: async () => ({ data: controlsRow ? [controlsRow] : [], error: null }),
           };
         },
-        update() {
-          return { eq: () => ({ select: async () => writeResult, eq: () => ({ select: async () => writeResult }) }) };
+        update(row: Record<string, unknown>) {
+          if (table !== 'audit_log') updates.push(row);
+          type Node = { select: () => Promise<QueryResult>; eq: () => Node };
+          const node: Node = { select: async () => writeResult, eq: () => node };
+          return node;
         },
       };
     },
@@ -59,7 +64,7 @@ function deps(writeResult: QueryResult, controlsRow?: Record<string, unknown>): 
       };
     },
   };
-  return { deps: { client, audit, env: OWNER_ENV, now: NOW }, inserts, audits };
+  return { deps: { client, audit, env: OWNER_ENV, now: NOW }, inserts, updates, audits };
 }
 
 const baseInput = (over: Partial<SubmitInput> = {}): SubmitInput => ({
@@ -114,6 +119,28 @@ describe('control-plane - owner controls', () => {
     const r = await requestControl(d, 'info@preston.nyc', 'stop');
     expect(r.ok).toBe(true);
     expect(audits.some((a) => a.action === 'control:stop')).toBe(true);
+  });
+
+  it('resume clears paused+owner_stop but NEVER touches execution or runner flags', async () => {
+    const { deps: d, updates } = deps({ data: [{ id: 'global' }], error: null });
+    const r = await requestControl(d, 'info@preston.nyc', 'resume');
+    expect(r.ok).toBe(true);
+    const patch = updates[0];
+    expect(patch['paused']).toBe(false);
+    expect(patch['owner_stop']).toBe(false);
+    // The "installed/resumed is never live" invariant: resume must not include
+    // these keys at all, so it can never re-enable execution.
+    expect('execution_enabled' in patch).toBe(false);
+    expect('remote_runner_enabled' in patch).toBe(false);
+    expect('hermes_mode' in patch).toBe(false);
+  });
+
+  it('reports failure when the control update matches no row (unseeded singleton)', async () => {
+    const { deps: d, audits } = deps({ data: [], error: null });
+    const r = await requestControl(d, 'info@preston.nyc', 'stop');
+    expect(r.ok).toBe(false);
+    expect(r.code).toBe('write_failed');
+    expect(audits.length).toBe(0); // no success audit for a write that changed nothing
   });
 
   it('readStatus fails closed to fully-stopped when no controls row', async () => {

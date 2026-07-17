@@ -6,7 +6,7 @@ import {
 } from '../lib/ai-os/worker-service';
 import { hermesHealth, hermesObserveLoop } from '../lib/ai-os/hermes-service';
 import type { ObserveCandidate } from '../lib/ai-os/orchestrator';
-import { probeControls, type RuntimeClient } from '../lib/ai-os/store';
+import { probeControls, readSystemControls, type RuntimeClient } from '../lib/ai-os/store';
 import { missingRuntimeEnv } from './supabase-runtime';
 
 // Preston AI OS - remote dispatcher core (Phase 4B.1). PURE + testable.
@@ -107,6 +107,15 @@ export async function runDispatcher(input: DispatcherInput): Promise<DispatcherR
     }
 
     if (command === 'worker-loop') {
+      // Pre-loop halt gate: the loop only re-checks controls per candidate, so
+      // with an empty candidate set an owner stop/pause would be invisible at
+      // the exit-code level. Check once up front so a halted runtime always
+      // yields EXIT.halted from the shipped unit.
+      const pre = await readSystemControls(client);
+      if (pre.owner_stop || pre.paused) {
+        log({ level: 'info', command, correlationId, event: 'worker_loop', iterations: 0, stoppedReason: 'halted', executed: false });
+        return { exitCode: EXIT.halted, summary: { iterations: 0, stoppedReason: 'halted' } };
+      }
       const res = await workerSimulateLoop({
         client,
         candidates: input.workerCandidates ?? [],
@@ -124,6 +133,17 @@ export async function runDispatcher(input: DispatcherInput): Promise<DispatcherR
     }
 
     // hermes-loop
+    // Same pre-loop gate as worker-loop (per-round checks need a non-empty
+    // batch list). Disabled mode is a clean no-op exit, not a halt.
+    const pre = await readSystemControls(client);
+    if (pre.hermes_mode === 'disabled' || pre.hermes_mode === 'stopped') {
+      log({ level: 'info', command, correlationId, event: 'hermes_loop', rounds: 0, stoppedReason: 'disabled', recorded: 0 });
+      return { exitCode: EXIT.ok, summary: { rounds: 0, stoppedReason: 'disabled' } };
+    }
+    if (pre.owner_stop || pre.paused || pre.hermes_mode === 'paused') {
+      log({ level: 'info', command, correlationId, event: 'hermes_loop', rounds: 0, stoppedReason: 'halted', recorded: 0 });
+      return { exitCode: EXIT.halted, summary: { rounds: 0, stoppedReason: 'halted' } };
+    }
     const res = await hermesObserveLoop(
       client,
       input.hermesBatches ?? [],

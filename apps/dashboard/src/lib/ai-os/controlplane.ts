@@ -129,6 +129,11 @@ export async function requestControl(
     .eq('id', 'global')
     .select('id');
   if (res.error) return { ok: false, code: 'write_failed', message: res.error.message };
+  if (!res.data || res.data.length === 0) {
+    // Zero matched rows (e.g. unseeded singleton): an owner control that wrote
+    // nothing must not report success. Controls already fail closed to stopped.
+    return { ok: false, code: 'write_failed', message: 'no control row updated; nothing changed' };
+  }
 
   await logAudit(
     { actor, action: 'control:' + action, action_class: action === 'stop' ? 'YELLOW' : 'GREEN', detail: patch },

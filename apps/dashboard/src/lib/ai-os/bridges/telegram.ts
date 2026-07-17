@@ -96,8 +96,9 @@ export function intakeTelegram(
   }
   // Freshness (command expiration).
   const maxAge = opts.maxAgeSec ?? 120;
+  // Fail closed: a non-finite age (unparseable clock input) counts as expired.
   const ageSec = Math.floor(Date.parse(opts.now) / 1000) - update.date;
-  if (ageSec > maxAge) {
+  if (!Number.isFinite(ageSec) || ageSec > maxAge) {
     return { status: 'expired', command: null, args: [], requires_confirmation: false, reason: 'command too old' };
   }
   return {

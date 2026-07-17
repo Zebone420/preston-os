@@ -94,9 +94,10 @@ export function evaluateWebhook(input: WebhookInput): WebhookResult {
   const fromId = String(msg.from?.id ?? '');
   if (chatId !== ownerChatId || fromId !== ownerUserId) return res('forbidden', 403);
 
-  // Freshness (reject stale updates).
+  // Freshness (reject stale updates). Fail closed: a non-finite age (bad clock
+  // input or non-numeric msg.date) is rejected, never silently accepted.
   const ageSec = Math.floor(Date.parse(input.now) / 1000) - Number(msg.date ?? 0);
-  if (ageSec > 120) return res('expired', 200);
+  if (!Number.isFinite(ageSec) || ageSec > 120) return res('expired', 200);
 
   // Durable replay dedup by update_id (injected predicate).
   const updateId = Number(body.update_id ?? 0);

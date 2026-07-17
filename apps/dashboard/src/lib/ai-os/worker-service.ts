@@ -59,7 +59,11 @@ export async function workerOnce(input: WorkerOnceInput): Promise<WorkerOnceResu
     correlation_id: input.checkpoint.correlation_id,
     outcome: ok ? 'completed' : 'failed',
   });
-  const rel = await releaseLease(input.client, input.jobId, input.agentId, input.now);
+  // Token-scoped release: only this attempt's lease generation may be expired.
+  // With no lease token there is nothing this attempt owns to release.
+  const rel = j.lease_token
+    ? await releaseLease(input.client, input.jobId, input.agentId, j.lease_token, input.now)
+    : { ok: false as const, error: 'no lease token held; nothing released' };
 
   return {
     simulatedOk: ok,

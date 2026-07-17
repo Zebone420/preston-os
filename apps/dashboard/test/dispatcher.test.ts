@@ -134,4 +134,21 @@ describe('dispatcher - owner stop yields halted exit code', () => {
     const r = await runDispatcher({ command: 'worker-loop', client, env: RUNTIME_ENV, now: NOW, correlationId: 'c', log: noop, workerCandidates: [candidate] });
     expect(r.exitCode).toBe(EXIT.halted);
   });
+
+  it('worker-loop with NO candidates still honors owner_stop (shipped-unit kill visibility)', async () => {
+    const client = fakeClient({ owner_stop: true, hermes_mode: 'disabled' });
+    const r = await runDispatcher({ command: 'worker-loop', client, env: RUNTIME_ENV, now: NOW, correlationId: 'c', log: noop, workerCandidates: [] });
+    expect(r.exitCode).toBe(EXIT.halted);
+    expect(r.summary.stoppedReason).toBe('halted');
+  });
+
+  it('hermes-loop with NO batches honors pause (75) and reports disabled as a clean no-op (0)', async () => {
+    const paused = fakeClient({ hermes_mode: 'observe_only', paused: true });
+    const rp = await runDispatcher({ command: 'hermes-loop', client: paused, env: RUNTIME_ENV, now: NOW, correlationId: 'c', log: noop });
+    expect(rp.exitCode).toBe(EXIT.halted);
+    const disabled = fakeClient({ hermes_mode: 'disabled' });
+    const rd = await runDispatcher({ command: 'hermes-loop', client: disabled, env: RUNTIME_ENV, now: NOW, correlationId: 'c', log: noop });
+    expect(rd.exitCode).toBe(EXIT.ok);
+    expect(rd.summary.stoppedReason).toBe('disabled');
+  });
 });

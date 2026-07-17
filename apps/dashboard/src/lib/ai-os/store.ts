@@ -53,9 +53,11 @@ interface SelectChain {
   order(col: string, opts: { ascending: boolean }): OrderChain;
   limit(n: number): PromiseLike<QueryResult>;
 }
+// Recursive eq chain so conditional writes can stack any number of guards
+// (e.g. releaseLease filters job_id + owner + token).
 interface UpdateEqChain {
   select(cols: string): PromiseLike<QueryResult>;
-  eq(col: string, val: string): { select(cols: string): PromiseLike<QueryResult> };
+  eq(col: string, val: string): UpdateEqChain;
 }
 interface UpdateBuilder {
   eq(col: string, val: string): UpdateEqChain;
@@ -340,11 +342,14 @@ export async function readLease(
   };
 }
 
-// Release only the caller's own lease (owner match), by expiring it now.
+// Release only the caller's own lease GENERATION (owner + token match), by
+// expiring it now. The token guard fences stale generations: a delayed release
+// from a crashed/expired attempt must never expire a successor's live lease.
 export async function releaseLease(
   client: RuntimeClient,
   jobId: string,
   owner: string,
+  token: string,
   now: string,
 ): Promise<WriteOutcome> {
   const res = await client
@@ -352,6 +357,7 @@ export async function releaseLease(
     .update({ expires_at: now })
     .eq('job_id', jobId)
     .eq('owner', owner)
+    .eq('token', token)
     .select('job_id');
   if (res.error) return { ok: false, error: 'lease release failed: ' + res.error.message };
   return { ok: true, id: jobId };

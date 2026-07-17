@@ -40,7 +40,10 @@ function fakeClient(controlsRow: Record<string, unknown> | null, write: QueryRes
           };
         },
         update() {
-          return { eq: () => ({ select: w, eq: () => ({ select: w }) }) };
+          // Arbitrary-depth eq chain (releaseLease filters job_id+owner+token).
+          type Node = { select: typeof w; eq: () => Node };
+          const node: Node = { select: w, eq: () => node };
+          return node;
         },
       };
     },
@@ -121,7 +124,7 @@ describe('worker service - simulation only', () => {
         return {
           insert(row: Record<string, unknown>) { if (String(row['id']).startsWith('att::')) ids.push(String(row['id'])); return { select: w }; },
           select() { return { eq() { return { limit: readControls }; }, order() { return { limit: w }; }, limit: readControls }; },
-          update() { return { eq: () => ({ select: w, eq: () => ({ select: w }) }) }; },
+          update() { type Node = { select: typeof w; eq: () => Node }; const node: Node = { select: w, eq: () => node }; return node; },
         };
       },
     };
@@ -134,6 +137,57 @@ describe('worker service - simulation only', () => {
     await workerOnce(mk(1, 't2'));
     expect(ids).toEqual(['att::j1::1::t1', 'att::j1::2::t2']);
     expect(new Set(ids).size).toBe(2);
+  });
+
+  it('releases only its own lease generation (token-scoped release filters)', async () => {
+    const filters: Array<[string, unknown]> = [];
+    const w = async () => ({ data: [{ id: 'x' }], error: null });
+    const readControls = async () => ({ data: [{ hermes_mode: 'disabled' }], error: null });
+    const client: RuntimeClient = {
+      from(table: string) {
+        type Node = { select: typeof w; eq: (col: string, val: unknown) => Node };
+        const node: Node = {
+          select: w,
+          eq: (col, val) => { if (table === 'worker_leases') filters.push([col, val]); return node; },
+        };
+        return {
+          insert() { return { select: w }; },
+          select() { return { eq() { return { limit: readControls }; }, order() { return { limit: w }; }, limit: readControls }; },
+          update() { return node; },
+        };
+      },
+    };
+    const r = await workerOnce(candidate(client));
+    expect(r.leaseReleased).toBe(true);
+    // A stale generation must never expire a successor's lease: the release is
+    // scoped to owner AND token, not owner alone.
+    expect(filters).toContainEqual(['owner', 'claude-worker']);
+    expect(filters).toContainEqual(['token', 't']);
+  });
+
+  it('releases nothing when the job holds no lease token', async () => {
+    let leaseUpdates = 0;
+    const w = async () => ({ data: [{ id: 'x' }], error: null });
+    const readControls = async () => ({ data: [{ hermes_mode: 'disabled' }], error: null });
+    const client: RuntimeClient = {
+      from(table: string) {
+        type Node = { select: typeof w; eq: () => Node };
+        const node: Node = { select: w, eq: () => node };
+        return {
+          insert() { return { select: w }; },
+          select() { return { eq() { return { limit: readControls }; }, order() { return { limit: w }; }, limit: readControls }; },
+          update() { if (table === 'worker_leases') leaseUpdates++; return node; },
+        };
+      },
+    };
+    const input: WorkerOnceInput = {
+      client,
+      cycle: { eligibility: elig({ job: job({ lease_token: null }) }), envelope, now: NOW },
+      jobId: 'j1', agentId: 'claude-worker', checkpoint, now: NOW,
+    };
+    const r = await workerOnce(input);
+    expect(r.leaseReleased).toBe(false);
+    expect(leaseUpdates).toBe(0); // no lease write was even attempted
   });
 });
 

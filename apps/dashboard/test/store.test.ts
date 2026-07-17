@@ -24,6 +24,7 @@ interface Captured {
   table: string;
   op: 'insert' | 'select' | 'update';
   row?: Record<string, unknown>;
+  filters?: Array<[string, unknown]>;
 }
 
 // Fake RuntimeClient capturing every call, returning a scripted result across
@@ -51,14 +52,15 @@ function fakeClient(result: QueryResult): { client: RuntimeClient; calls: Captur
           };
         },
         update(row: Record<string, unknown>) {
-          calls.push({ table, op: 'update', row });
-          const eqNode = {
+          const filters: Array<[string, unknown]> = [];
+          calls.push({ table, op: 'update', row, filters });
+          // Arbitrary-depth eq chain, capturing every (column, value) filter.
+          type Node = { select: () => Promise<QueryResult>; eq: (col: string, val: unknown) => Node };
+          const node: Node = {
             select: thenable,
-            eq() {
-              return { select: thenable };
-            },
+            eq(col: string, val: unknown) { filters.push([col, val]); return node; },
           };
-          return { eq: () => eqNode };
+          return node;
         },
       };
     },
@@ -179,11 +181,16 @@ describe('store adapters - remaining runtime tables', () => {
     expect(calls[0].op).toBe('update');
   });
 
-  it('releaseLease updates worker_leases with an owner guard', async () => {
+  it('releaseLease updates worker_leases guarded by owner AND lease token', async () => {
     const { client, calls } = fakeClient(okResult);
-    await releaseLease(client, 'j1', 'w1', NOW);
+    await releaseLease(client, 'j1', 'w1', 'tok-1', NOW);
     expect(calls[0].table).toBe('worker_leases');
     expect(calls[0].op).toBe('update');
+    // Token guard fences the lease generation: a stale release must not be
+    // able to expire a successor's live lease (owner match alone is not enough).
+    expect(calls[0].filters).toContainEqual(['job_id', 'j1']);
+    expect(calls[0].filters).toContainEqual(['owner', 'w1']);
+    expect(calls[0].filters).toContainEqual(['token', 'tok-1']);
   });
 
   it('insertMemory redacts secret-shaped values before write', async () => {
