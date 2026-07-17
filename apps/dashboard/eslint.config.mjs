@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Tracked compiled os-runtime output (CommonJS by design); lint sources only.
+    "dist/**",
   ]),
 ]);
 
