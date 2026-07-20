@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import type { AuditSink } from '../src/lib/audit';
 import type { QueryResult, RuntimeClient } from '../src/lib/ai-os/store';
 import {
+  enqueueStagingJob,
   readStatus,
   requestControl,
   submitCommandProposal,
   type ControlPlaneDeps,
+  type EnqueueInput,
   type SubmitInput,
 } from '../src/lib/ai-os/controlplane';
 
@@ -17,7 +19,7 @@ interface AuditCall {
   action_class?: string;
 }
 
-function deps(writeResult: QueryResult, controlsRow?: Record<string, unknown>): {
+function deps(writeResult: QueryResult, controlsRow?: Record<string, unknown>, packetRow?: Record<string, unknown>): {
   deps: ControlPlaneDeps;
   inserts: Record<string, unknown>[];
   updates: Record<string, unknown>[];
@@ -28,26 +30,32 @@ function deps(writeResult: QueryResult, controlsRow?: Record<string, unknown>): 
   const audits: AuditCall[] = [];
   const client: RuntimeClient = {
     from(table: string) {
+      // Table-aware reads: the command-packet lookup returns packetRow; every
+      // other eq/limit read returns the controls row.
+      const readRows = async () => ({
+        data: table === 'runtime_command_packets'
+          ? (packetRow ? [packetRow] : [])
+          : (controlsRow ? [controlsRow] : []),
+        error: null,
+      });
       return {
         insert(row: Record<string, unknown>) {
           if (table !== 'audit_log') inserts.push(row);
           return { select: async () => writeResult };
         },
         select() {
+          type EqNode = { limit: typeof readRows; eq: () => EqNode; order: () => { limit: typeof readRows } };
+          const eqNode: EqNode = { limit: readRows, eq: () => eqNode, order: () => ({ limit: readRows }) };
           return {
-            eq() {
-              return { limit: async () => ({ data: controlsRow ? [controlsRow] : [], error: null }) };
-            },
-            order() {
-              return { limit: async () => writeResult };
-            },
-            limit: async () => ({ data: controlsRow ? [controlsRow] : [], error: null }),
+            eq: () => eqNode,
+            order: () => ({ limit: async () => writeResult }),
+            limit: readRows,
           };
         },
         update(row: Record<string, unknown>) {
           if (table !== 'audit_log') updates.push(row);
-          type Node = { select: () => Promise<QueryResult>; eq: () => Node };
-          const node: Node = { select: async () => writeResult, eq: () => node };
+          type Node = { select: () => Promise<QueryResult>; eq: () => Node; lte: () => Node; gt: () => Node };
+          const node: Node = { select: async () => writeResult, eq: () => node, lte: () => node, gt: () => node };
           return node;
         },
       };
@@ -105,6 +113,74 @@ describe('control-plane - submit command proposal', () => {
     expect(r.ok).toBe(false);
     expect(r.code).toBe('production_rejected');
     expect(inserts.length).toBe(0);
+  });
+});
+
+const CMD_UUID = '11111111-2222-4333-8444-555555555555';
+const APPROVAL_UUID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+const GREEN_PACKET = {
+  id: CMD_UUID, action_class: 'GREEN', requested_action: 'read status',
+  target_project: 'preston-os', target_repository: 'preston-os',
+};
+const okWrite: QueryResult = { data: [{ id: 'j-1' }], error: null };
+const einput = (over: Partial<EnqueueInput> = {}): EnqueueInput => ({
+  ownerEmail: 'info@preston.nyc', jobId: 'j-1', command_id: CMD_UUID, approval_id: APPROVAL_UUID,
+  correlation_id: 'corr', idempotency_key: 'idem-1', ...over,
+});
+
+describe('control-plane - enqueue staging job (queue-only, Phase 5D)', () => {
+  it('denies a non-owner (audited) and validates required fields', async () => {
+    const { deps: d, audits } = deps(okWrite, undefined, GREEN_PACKET);
+    expect((await enqueueStagingJob(d, einput({ ownerEmail: 'attacker@x.com' }))).code).toBe('denied');
+    expect(audits.some((a) => a.action === 'job_enqueue_rejected:denied')).toBe(true);
+    expect((await enqueueStagingJob(d, einput({ command_id: '' }))).code).toBe('invalid');
+    expect((await enqueueStagingJob(d, einput({ approval_id: '' }))).code).toBe('invalid');
+    expect((await enqueueStagingJob(d, einput({ idempotency_key: '' }))).code).toBe('invalid');
+  });
+
+  it('rejects malformed ids and unbounded priority BEFORE any DB write (clean message, no raw DB error)', async () => {
+    const { deps: d, inserts } = deps(okWrite, undefined, GREEN_PACKET);
+    expect((await enqueueStagingJob(d, einput({ command_id: 'not-a-uuid' }))).code).toBe('invalid');
+    expect((await enqueueStagingJob(d, einput({ approval_id: 'a1' }))).code).toBe('invalid');
+    expect((await enqueueStagingJob(d, einput({ priority: 2.5 }))).code).toBe('invalid');
+    expect((await enqueueStagingJob(d, einput({ priority: 10_000_000 }))).code).toBe('invalid');
+    expect(inserts.length).toBe(0);
+  });
+
+  it('refuses an unknown command packet and a non-GREEN one', async () => {
+    const { deps: none } = deps(okWrite, undefined, undefined);
+    expect((await enqueueStagingJob(none, einput())).code).toBe('unknown_command');
+    const { deps: yellow } = deps(okWrite, undefined, { ...GREEN_PACKET, action_class: 'YELLOW' });
+    expect((await enqueueStagingJob(yellow, einput())).code).toBe('not_green');
+  });
+
+  it('rejects a production-marked packet with a RED audit entry', async () => {
+    const { deps: d, inserts, audits } = deps(okWrite, undefined, { ...GREEN_PACKET, target_project: 'preston-production' });
+    const r = await enqueueStagingJob(d, einput());
+    expect(r.code).toBe('production_rejected');
+    expect(inserts.length).toBe(0);
+    expect(audits.some((a) => a.action.includes('production_target') && a.action_class === 'RED')).toBe(true);
+  });
+
+  it('queues with the forced fail-closed posture and audits it', async () => {
+    const { deps: d, inserts, audits } = deps(okWrite, undefined, GREEN_PACKET);
+    const r = await enqueueStagingJob(d, einput());
+    expect(r.ok).toBe(true);
+    expect(r.code).toBe('queued');
+    expect(inserts[0]).toMatchObject({
+      status: 'queued', execution_enabled: false, cancel_requested: false,
+      attempts: 0, risk_class: 'GREEN', approval_id: APPROVAL_UUID,
+    });
+    expect(audits.some((a) => a.action === 'job_enqueued')).toBe(true);
+  });
+
+  it('dedupes a replayed idempotency key: no second job is created', async () => {
+    const dupWrite: QueryResult = { data: null, error: { message: 'duplicate key value violates unique constraint' } };
+    const { deps: d } = deps(dupWrite, undefined, GREEN_PACKET);
+    const r = await enqueueStagingJob(d, einput());
+    expect(r.ok).toBe(true);
+    expect(r.code).toBe('duplicate');
+    expect(r.id).toBeUndefined();
   });
 });
 
