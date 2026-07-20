@@ -6,6 +6,8 @@ import {
 } from '../lib/ai-os/worker-service';
 import { hermesHealth, hermesObserveLoop } from '../lib/ai-os/hermes-service';
 import type { ObserveCandidate } from '../lib/ai-os/orchestrator';
+import { buildHermesObserveBatch, runStagingWorkerCycle } from '../lib/ai-os/staging-sim';
+import type { AgentRecord } from '../lib/ai-os/types';
 import { probeControls, readSystemControls, type RuntimeClient } from '../lib/ai-os/store';
 import { missingRuntimeEnv } from './supabase-runtime';
 
@@ -65,6 +67,44 @@ export function parseArgs(argv: string[]): {
   return { command, maxIterations, diagnostic: argv.includes('--diagnostic') };
 }
 
+// Positive staging allowlist + production-URL denylist. Shared by db-health
+// and (Phase 5) the DB-touching loops: NO loop may read or write any database
+// the operator has not explicitly marked as staging.
+function stagingGate(
+  env: Record<string, string | undefined>,
+  command: string,
+  correlationId: string,
+  log: Logger,
+): DispatcherResult | null {
+  if (env['SUPABASE_RUNTIME_ENV'] !== 'staging') {
+    log({ level: 'error', command, correlationId, event: 'staging_gate', error: 'SUPABASE_RUNTIME_ENV must be staging (fail-closed)' });
+    return { exitCode: EXIT.config, summary: { error: 'not marked staging' } };
+  }
+  if (/\bprod(uction)?\b/i.test(String(env['SUPABASE_URL'] ?? ''))) {
+    log({ level: 'error', command, correlationId, event: 'staging_gate', error: 'production target refused' });
+    return { exitCode: EXIT.config, summary: { error: 'production target refused' } };
+  }
+  return null;
+}
+
+function workerAgent(env: Record<string, string | undefined>, now: string): AgentRecord {
+  return {
+    id: env['WORKER_AGENT_ID'] ?? 'preston-worker', display_name: 'Preston Worker',
+    provider: 'anthropic', model: 'dispatcher', capabilities: ['code'],
+    allowed_connectors: ['github'], status: 'idle', current_task_id: null,
+    last_seen: now, version: '1', owner: 'owner',
+  };
+}
+
+function hermesAgent(env: Record<string, string | undefined>, now: string): AgentRecord {
+  return {
+    id: env['HERMES_AGENT_ID'] ?? 'preston-hermes', display_name: 'Preston Hermes',
+    provider: 'anthropic', model: 'dispatcher', capabilities: [],
+    allowed_connectors: [], status: 'idle', current_task_id: null,
+    last_seen: now, version: '1', owner: 'owner',
+  };
+}
+
 export async function runDispatcher(input: DispatcherInput): Promise<DispatcherResult> {
   const { command, client, env, now, correlationId, log } = input;
 
@@ -76,6 +116,9 @@ export async function runDispatcher(input: DispatcherInput): Promise<DispatcherR
       log({ level: 'error', command, correlationId, event: 'config_error', missing });
       return { exitCode: EXIT.config, summary: { error: 'missing runtime env', missing } };
     }
+    // Every non-health command touches the database - staging only, always.
+    const gate = stagingGate(env, command, correlationId, log);
+    if (gate) return gate;
   }
 
   try {
@@ -87,17 +130,8 @@ export async function runDispatcher(input: DispatcherInput): Promise<DispatcherR
     }
 
     if (command === 'db-health') {
-      // Authenticated read-only probe. Positive staging ALLOWLIST (a real prod
-      // URL like <ref>.supabase.co would not contain the word "prod", so a
-      // denylist is insufficient): the operator must explicitly mark staging.
-      if (env['SUPABASE_RUNTIME_ENV'] !== 'staging') {
-        log({ level: 'error', command, correlationId, event: 'db_health', error: 'SUPABASE_RUNTIME_ENV must be staging (fail-closed)' });
-        return { exitCode: EXIT.config, summary: { error: 'not marked staging' } };
-      }
-      if (/\bprod(uction)?\b/i.test(String(env['SUPABASE_URL'] ?? ''))) {
-        log({ level: 'error', command, correlationId, event: 'db_health', error: 'production target refused' });
-        return { exitCode: EXIT.config, summary: { error: 'production target refused' } };
-      }
+      // Authenticated read-only probe. The staging allowlist + production
+      // denylist already ran in stagingGate (shared with the loops).
       const probe = await probeControls(client);
       // Require an actually-readable row: PostgREST returns [] (no error) when RLS
       // filters everything, which must NOT count as healthy read authorization.
@@ -107,28 +141,55 @@ export async function runDispatcher(input: DispatcherInput): Promise<DispatcherR
     }
 
     if (command === 'worker-loop') {
-      // Pre-loop halt gate: the loop only re-checks controls per candidate, so
-      // with an empty candidate set an owner stop/pause would be invisible at
-      // the exit-code level. Check once up front so a halted runtime always
-      // yields EXIT.halted from the shipped unit.
+      // Pre-loop halt gate: a halted runtime always yields EXIT.halted from
+      // the shipped unit, even before any candidate work.
       const pre = await readSystemControls(client);
       if (pre.owner_stop || pre.paused) {
         log({ level: 'info', command, correlationId, event: 'worker_loop', iterations: 0, stoppedReason: 'halted', executed: false });
         return { exitCode: EXIT.halted, summary: { iterations: 0, stoppedReason: 'halted' } };
       }
-      const res = await workerSimulateLoop({
-        client,
-        candidates: input.workerCandidates ?? [],
-        maxIterations: input.maxIterations ?? 5,
+      // Injected candidates = test/simulation harness path (legacy shape).
+      if (input.workerCandidates !== undefined) {
+        const res = await workerSimulateLoop({
+          client,
+          candidates: input.workerCandidates,
+          maxIterations: input.maxIterations ?? 5,
+          now,
+        });
+        log({
+          level: 'info', command, correlationId, event: 'worker_loop',
+          iterations: res.iterations, stoppedReason: res.stoppedReason, executed: false,
+        });
+        return {
+          exitCode: res.stoppedReason === 'halted' ? EXIT.halted : EXIT.ok,
+          summary: { iterations: res.iterations, stoppedReason: res.stoppedReason },
+        };
+      }
+      // Phase 5E: DB-sourced bounded staging cycle (evidence-producing,
+      // executed ALWAYS false, staging-gated above).
+      const cycle = await runStagingWorkerCycle(client, {
+        agent: workerAgent(env, now),
+        maxJobs: input.maxIterations ?? 5,
+        leaseTtlMs: 120000,
         now,
       });
       log({
         level: 'info', command, correlationId, event: 'worker_loop',
-        iterations: res.iterations, stoppedReason: res.stoppedReason, executed: false,
+        iterations: cycle.evidence.length,
+        stoppedReason: cycle.halted ? 'halted' : 'completed',
+        executed: false,
+        considered: cycle.considered,
+        recovered: cycle.recovered,
+        outcomes: cycle.evidence.map((e) => ({ job: e.jobId, outcome: e.outcome })),
+        rejected: cycle.rejected.length,
       });
       return {
-        exitCode: res.stoppedReason === 'halted' ? EXIT.halted : EXIT.ok,
-        summary: { iterations: res.iterations, stoppedReason: res.stoppedReason },
+        exitCode: cycle.halted ? EXIT.halted : EXIT.ok,
+        summary: {
+          iterations: cycle.evidence.length,
+          stoppedReason: cycle.halted ? 'halted' : 'completed',
+          outcomes: cycle.evidence.map((e) => e.outcome),
+        },
       };
     }
 
@@ -144,9 +205,14 @@ export async function runDispatcher(input: DispatcherInput): Promise<DispatcherR
       log({ level: 'info', command, correlationId, event: 'hermes_loop', rounds: 0, stoppedReason: 'halted', recorded: 0 });
       return { exitCode: EXIT.halted, summary: { rounds: 0, stoppedReason: 'halted' } };
     }
+    // Injected batches = test path; otherwise source one bounded observe batch
+    // from queued jobs (Phase 5E). Observe-only: decisions + events, no lease.
+    const batches = input.hermesBatches !== undefined
+      ? input.hermesBatches
+      : [await buildHermesObserveBatch(client, hermesAgent(env, now), input.maxIterations ?? 5, now)];
     const res = await hermesObserveLoop(
       client,
-      input.hermesBatches ?? [],
+      batches,
       input.maxIterations ?? 5,
       now,
     );

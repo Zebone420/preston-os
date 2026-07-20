@@ -19,8 +19,8 @@ function fakeClient(controlsRow: Record<string, unknown> | null, write: QueryRes
     from() {
       return {
         insert() { return { select: w }; },
-        select() { return { eq() { return { limit: readControls }; }, order() { return { limit: w }; }, limit: readControls }; },
-        update() { return { eq: () => ({ select: w, eq: () => ({ select: w }) }) }; },
+        select() { type EqNode = { limit: typeof readControls; eq: () => EqNode; order: () => { limit: typeof readControls } }; const eqNode: EqNode = { limit: readControls, eq: () => eqNode, order: () => ({ limit: readControls }) }; return { eq: () => eqNode, order: () => ({ limit: w }), limit: readControls }; },
+        update() { type Node = { select: typeof w; eq: () => Node; lte: () => Node; gt: () => Node }; const node: Node = { select: w, eq: () => node, lte: () => node, gt: () => node }; return node; },
       };
     },
   };
@@ -95,8 +95,8 @@ describe('dispatcher - runtime packaging entry (pure)', () => {
       from() {
         return {
           insert() { return { select: err }; },
-          select() { return { eq() { return { limit: err }; }, order() { return { limit: err }; }, limit: err }; },
-          update() { return { eq: () => ({ select: err, eq: () => ({ select: err }) }) }; },
+          select() { type EqNode = { limit: typeof err; eq: () => EqNode; order: () => { limit: typeof err } }; const eqNode: EqNode = { limit: err, eq: () => eqNode, order: () => ({ limit: err }) }; return { eq: () => eqNode, order: () => ({ limit: err }), limit: err }; },
+          update() { type Node = { select: typeof err; eq: () => Node; lte: () => Node; gt: () => Node }; const node: Node = { select: err, eq: () => node, lte: () => node, gt: () => node }; return node; },
         };
       },
     };
@@ -140,6 +140,27 @@ describe('dispatcher - owner stop yields halted exit code', () => {
     const r = await runDispatcher({ command: 'worker-loop', client, env: RUNTIME_ENV, now: NOW, correlationId: 'c', log: noop, workerCandidates: [] });
     expect(r.exitCode).toBe(EXIT.halted);
     expect(r.summary.stoppedReason).toBe('halted');
+  });
+
+  it('worker-loop and hermes-loop refuse non-staging env and production URLs (exit 78)', async () => {
+    const client = fakeClient({ hermes_mode: 'disabled' });
+    const noMarker = { SUPABASE_URL: 'https://x', SUPABASE_RUNTIME_KEY: 'k', SUPABASE_RUNTIME_TOKEN: 't' };
+    for (const command of ['worker-loop', 'hermes-loop'] as const) {
+      const r1 = await runDispatcher({ command, client, env: noMarker, now: NOW, correlationId: 'c', log: noop, workerCandidates: [], hermesBatches: [] });
+      expect(r1.exitCode).toBe(EXIT.config);
+      const r2 = await runDispatcher({ command, client, env: { ...RUNTIME_ENV, SUPABASE_URL: 'https://prod.supabase.co' }, now: NOW, correlationId: 'c', log: noop, workerCandidates: [], hermesBatches: [] });
+      expect(r2.exitCode).toBe(EXIT.config);
+    }
+  });
+
+  it('worker-loop with NO injected candidates runs the DB-sourced cycle; malformed rows reject to a clean no-op', async () => {
+    // fakeClient serves the controls row for every select - listJobsByStatus
+    // therefore returns a NON-job row, which fail-closed mapping must reject.
+    const client = fakeClient({ hermes_mode: 'disabled' });
+    const r = await runDispatcher({ command: 'worker-loop', client, env: RUNTIME_ENV, now: NOW, correlationId: 'c', log: noop });
+    expect(r.exitCode).toBe(EXIT.ok);
+    expect(r.summary.stoppedReason).toBe('completed');
+    expect(r.summary.outcomes).toEqual([]); // nothing leased, nothing written
   });
 
   it('hermes-loop with NO batches honors pause (75) and reports disabled as a clean no-op (0)', async () => {
