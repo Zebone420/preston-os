@@ -43,14 +43,16 @@ RECONCILIATION NOTE (2026-07-17 audit): the ACTIVE Phase 4B.1 staging-beta
 scheme is the OWNER-ALLOWLISTED service identity documented in env.template and
 src/os-runtime/supabase-runtime.ts - that is what the shipped db-health and
 readSystemControls paths assume. The least-privilege design below is the
-POST-DRILL hardening gate, and its migration is renumbered 0006 (0005 is taken
-by 0005_phase4b1_id_alignment.sql). Before adopting it, 0006 MUST also add
-non-owner SELECT policies for the runtime roles on system_controls (and the
-other tables the runtime reads); as drafted below, a non-owner identity cannot
-read system_controls, so db-health would fail (rows=0) and readSystemControls
-would silently fail closed to stopped defaults forever.
+POST-DRILL hardening gate. UPDATE (Phase 5H): the migration is now AUTHORED as
+supabase/migrations/0007_phase5h_runtime_roles.sql (0005 = id alignment,
+0006 = telegram dedup). It supersedes the draft below and includes the fix
+this note demanded: non-owner SELECT policies for the runtime roles on
+system_controls / os_jobs / agents (plus per-role reads), without which a
+non-owner identity's db-health probe reads zero rows and readSystemControls
+silently fails closed forever. The owner packet for applying it is
+reports/PHASE_5_LEAST_PRIVILEGE_IDENTITY_PACKET.md. Historical draft follows.
 
-Proposed migration 0006 (owner reviews + runs in STAGING; additive):
+Superseded draft (see 0007 for the authoritative SQL):
 
     -- runtime role registry (owner-only readable)
     create table if not exists runtime_roles (
