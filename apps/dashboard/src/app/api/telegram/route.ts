@@ -14,6 +14,18 @@ import {
 // runs shell, or executes a business action.
 export const dynamic = 'force-dynamic';
 
+// Bounded in-process replay memory (layer 1 of the Phase 5G dedup; see below).
+// Insertion-ordered; oldest ids are evicted at the cap so memory stays bounded.
+const SEEN_CAP = 5000;
+const seenUpdateIds = new Set<number>();
+function rememberUpdateId(id: number): void {
+  seenUpdateIds.add(id);
+  if (seenUpdateIds.size > SEEN_CAP) {
+    const oldest = seenUpdateIds.values().next().value;
+    if (oldest !== undefined) seenUpdateIds.delete(oldest);
+  }
+}
+
 export async function POST(request: Request) {
   const env = process.env as Record<string, string | undefined>;
 
@@ -52,11 +64,22 @@ export async function POST(request: Request) {
     body,
     env,
     now: new Date().toISOString(),
-    // Durable replay dedup is enforced at command insertion via the unique
-    // idempotency_key telegram:<update_id> (a later activation gate wires a
-    // persisted check here). This route performs no side effect.
-    isReplay: () => false,
+    // Replay dedup, two layers (Phase 5G):
+    //  1. HERE: a bounded in-process update_id set - best-effort, per-instance,
+    //     lost on restart, and check-then-set (not atomic). Acceptable ONLY
+    //     because this route performs no side effect.
+    //  2. DURABLE (authored, NOT yet bound): migration 0006 telegram_updates +
+    //     store.recordTelegramUpdate (unique update_id, atomic, cross-instance).
+    //     It MUST be wired before this route ever gains a side effect - that
+    //     is the command-insertion activation gate, which also supplies the
+    //     service-identity client this credential-less route lacks.
+    isReplay: (updateId) => seenUpdateIds.has(updateId),
   });
+
+  if (result.status === 'accepted') {
+    const updateId = Number((body as { update_id?: unknown } | null)?.update_id ?? 0);
+    if (Number.isInteger(updateId) && updateId > 0) rememberUpdateId(updateId);
+  }
 
   return NextResponse.json(
     {
