@@ -29,20 +29,14 @@ function fakeClient(controlsRow: Record<string, unknown> | null, write: QueryRes
           return { select: w };
         },
         select() {
-          return {
-            eq() {
-              return { limit: readControls };
-            },
-            order() {
-              return { limit: w };
-            },
-            limit: readControls,
-          };
+          type EqNode = { limit: () => Promise<QueryResult>; eq: () => EqNode; order: () => { limit: () => Promise<QueryResult> } };
+          const eqNode: EqNode = { limit: readControls, eq: () => eqNode, order: () => ({ limit: readControls }) };
+          return { eq: () => eqNode, order: () => ({ limit: w }), limit: readControls };
         },
         update() {
-          // Arbitrary-depth eq chain (releaseLease filters job_id+owner+token).
-          type Node = { select: typeof w; eq: () => Node };
-          const node: Node = { select: w, eq: () => node };
+          // Arbitrary-depth guard chain (releaseLease filters job_id+owner+token).
+          type Node = { select: typeof w; eq: () => Node; lte: () => Node; gt: () => Node };
+          const node: Node = { select: w, eq: () => node, lte: () => node, gt: () => node };
           return node;
         },
       };
@@ -123,8 +117,8 @@ describe('worker service - simulation only', () => {
       from() {
         return {
           insert(row: Record<string, unknown>) { if (String(row['id']).startsWith('att::')) ids.push(String(row['id'])); return { select: w }; },
-          select() { return { eq() { return { limit: readControls }; }, order() { return { limit: w }; }, limit: readControls }; },
-          update() { type Node = { select: typeof w; eq: () => Node }; const node: Node = { select: w, eq: () => node }; return node; },
+          select() { type EqNode = { limit: () => Promise<{ data: Record<string, unknown>[]; error: null }>; eq: () => EqNode; order: () => { limit: typeof readControls } }; const eqNode: EqNode = { limit: readControls, eq: () => eqNode, order: () => ({ limit: readControls }) }; return { eq: () => eqNode, order: () => ({ limit: w }), limit: readControls }; },
+          update() { type Node = { select: typeof w; eq: () => Node; lte: () => Node; gt: () => Node }; const node: Node = { select: w, eq: () => node, lte: () => node, gt: () => node }; return node; },
         };
       },
     };
@@ -145,14 +139,16 @@ describe('worker service - simulation only', () => {
     const readControls = async () => ({ data: [{ hermes_mode: 'disabled' }], error: null });
     const client: RuntimeClient = {
       from(table: string) {
-        type Node = { select: typeof w; eq: (col: string, val: unknown) => Node };
+        type Node = { select: typeof w; eq: (col: string, val: unknown) => Node; lte: (col: string, val: unknown) => Node; gt: (col: string, val: unknown) => Node };
         const node: Node = {
           select: w,
           eq: (col, val) => { if (table === 'worker_leases') filters.push([col, val]); return node; },
+          lte: (col, val) => { if (table === 'worker_leases') filters.push([col, val]); return node; },
+          gt: (col, val) => { if (table === 'worker_leases') filters.push([col, val]); return node; },
         };
         return {
           insert() { return { select: w }; },
-          select() { return { eq() { return { limit: readControls }; }, order() { return { limit: w }; }, limit: readControls }; },
+          select() { type EqNode = { limit: () => Promise<{ data: Record<string, unknown>[]; error: null }>; eq: () => EqNode; order: () => { limit: typeof readControls } }; const eqNode: EqNode = { limit: readControls, eq: () => eqNode, order: () => ({ limit: readControls }) }; return { eq: () => eqNode, order: () => ({ limit: w }), limit: readControls }; },
           update() { return node; },
         };
       },
@@ -171,11 +167,11 @@ describe('worker service - simulation only', () => {
     const readControls = async () => ({ data: [{ hermes_mode: 'disabled' }], error: null });
     const client: RuntimeClient = {
       from(table: string) {
-        type Node = { select: typeof w; eq: () => Node };
-        const node: Node = { select: w, eq: () => node };
+        type Node = { select: typeof w; eq: () => Node; lte: () => Node; gt: () => Node };
+        const node: Node = { select: w, eq: () => node, lte: () => node, gt: () => node };
         return {
           insert() { return { select: w }; },
-          select() { return { eq() { return { limit: readControls }; }, order() { return { limit: w }; }, limit: readControls }; },
+          select() { type EqNode = { limit: () => Promise<{ data: Record<string, unknown>[]; error: null }>; eq: () => EqNode; order: () => { limit: typeof readControls } }; const eqNode: EqNode = { limit: readControls, eq: () => eqNode, order: () => ({ limit: readControls }) }; return { eq: () => eqNode, order: () => ({ limit: w }), limit: readControls }; },
           update() { if (table === 'worker_leases') leaseUpdates++; return node; },
         };
       },

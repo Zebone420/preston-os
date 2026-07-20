@@ -106,3 +106,49 @@ export function renderTelegram(c: Checkpoint): string {
 export function toHandoff(c: Checkpoint, toAgent: string, now: string): Checkpoint {
   return { ...c, agent_id: toAgent, status: 'handoff', created_at: now };
 }
+
+// --- crash-recovery resume resolution (Phase 5C) ---------------------------
+
+const CHECKPOINT_STATUSES: ReadonlySet<string> = new Set<CheckpointStatus>([
+  'in_progress', 'blocked', 'complete', 'failed', 'handoff',
+]);
+
+export interface ResumeDecision {
+  // fresh          -> no usable prior state; start a new bounded attempt
+  // skip_completed -> this job's work already completed; do NOT rerun (idempotent)
+  // reject         -> checkpoint is corrupt/stale/foreign; fail closed: touch nothing
+  action: 'fresh' | 'skip_completed' | 'reject';
+  reason: string;
+}
+
+// Decide, after a crash/restart, what the latest persisted checkpoint row for
+// a job permits. Fail-closed: a corrupt or mismatched checkpoint REJECTS (no
+// attempt at all) rather than guessing; only a verifiably-matching 'complete'
+// checkpoint short-circuits to idempotent completion; everything else is a
+// fresh bounded attempt (checkpoints are append-only evidence, so a fresh
+// attempt never overwrites history). The lease-generation fence is separate
+// (attempt ids embed the lease token; completion is token-guarded in the DB).
+export function resolveResume(
+  row: Record<string, unknown> | null,
+  job: { id: string; correlation_id: string },
+): ResumeDecision {
+  if (row === null) return { action: 'fresh', reason: 'no prior checkpoint' };
+
+  const jobId = typeof row['job_id'] === 'string' ? row['job_id'] : null;
+  const corr = typeof row['correlation_id'] === 'string' ? row['correlation_id'] : null;
+  const status = typeof row['status'] === 'string' ? row['status'] : null;
+
+  if (!jobId || !corr || !status || !CHECKPOINT_STATUSES.has(status)) {
+    return { action: 'reject', reason: 'checkpoint corrupt (missing/invalid fields); fail closed' };
+  }
+  if (jobId !== job.id) {
+    return { action: 'reject', reason: 'checkpoint belongs to a different job; fail closed' };
+  }
+  if (corr !== job.correlation_id) {
+    return { action: 'reject', reason: 'checkpoint correlation mismatch (stale generation); fail closed' };
+  }
+  if (status === 'complete') {
+    return { action: 'skip_completed', reason: 'work already completed; idempotent no-op' };
+  }
+  return { action: 'fresh', reason: 'prior checkpoint is non-terminal (' + status + '); new bounded attempt' };
+}

@@ -1,4 +1,5 @@
 import { decide, type HermesInput } from './hermes';
+import { simulationEligible } from './candidates';
 import { eligibleWorker, type EligibilityInput } from './leases';
 import { runPermitted, simulate, type ExecutionEnvelope } from './runner';
 import { makeEnvelope } from './transport';
@@ -24,6 +25,11 @@ export interface WorkerCycleInput {
   eligibility: EligibilityInput; // agent + job + controls + required caps/connectors
   envelope: ExecutionEnvelope;
   now: string;
+  // 'execution' (default) applies the FULL gate set including execution_enabled.
+  // 'simulation' (Phase 5) omits only the execution-enabled gate - nothing
+  // executes either way (executed is ALWAYS false), so staging evidence can be
+  // produced while execution stays globally disabled.
+  mode?: 'execution' | 'simulation';
 }
 
 export interface WorkerCycleResult {
@@ -42,7 +48,9 @@ export interface WorkerCycleResult {
 // false and runPermitted is only true if the owner has enabled the runner AND
 // the runtime (both default false).
 export function runWorkerCycleSimulation(input: WorkerCycleInput): WorkerCycleResult {
-  const elig = eligibleWorker(input.eligibility);
+  const elig = input.mode === 'simulation'
+    ? simulationEligible(input.eligibility)
+    : eligibleWorker(input.eligibility);
   const sim = simulate(input.envelope);
   const permitted = runPermitted(input.envelope, input.eligibility.controls);
   const ok = elig.ok && sim.valid;
@@ -98,7 +106,12 @@ export async function runHermesObserveOnce(
   for (const c of candidates) {
     const res = decide(c.input); // decision only; this loop never acts on it
     observations.push({ id: c.id, decision: res.decision, reasons: res.reasons });
-    const corr = c.input.command?.correlation_id ?? 'na';
+    // Correlation: command's when present, else the JOB's - so the decision +
+    // event rows stay linkable to the drill evidence chain (audit fix; the
+    // literal 'na' is the last resort for command-less, job-less candidates).
+    const corr = c.input.command?.correlation_id
+      || c.input.eligibility.job.correlation_id
+      || 'na';
     const w = await insertOrchestrationDecision(client, {
       id: 'od-' + c.id,
       job_id: c.id,
@@ -107,7 +120,7 @@ export async function runHermesObserveOnce(
       reasons: res.reasons,
       correlation_id: corr,
     });
-    if (w.ok) recorded++;
+    if (w.ok && !w.duplicate) recorded++; // duplicates are idempotent no-ops, not new records
     await insertEvent(
       client,
       makeEnvelope({

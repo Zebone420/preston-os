@@ -41,24 +41,25 @@ function fakeClient(result: QueryResult): { client: RuntimeClient; calls: Captur
         },
         select() {
           calls.push({ table, op: 'select' });
-          return {
-            eq() {
-              return { limit: thenable };
-            },
-            order() {
-              return { limit: thenable };
-            },
-            limit: thenable,
-          };
+          type EqNode = { limit: () => Promise<QueryResult>; eq: () => EqNode; order: () => { limit: () => Promise<QueryResult> } };
+          const eqNode: EqNode = { limit: thenable, eq: () => eqNode, order: () => ({ limit: thenable }) };
+          return { eq: () => eqNode, order: () => ({ limit: thenable }), limit: thenable };
         },
         update(row: Record<string, unknown>) {
           const filters: Array<[string, unknown]> = [];
           calls.push({ table, op: 'update', row, filters });
-          // Arbitrary-depth eq chain, capturing every (column, value) filter.
-          type Node = { select: () => Promise<QueryResult>; eq: (col: string, val: unknown) => Node };
+          // Arbitrary-depth guard chain, capturing every (column, value) filter.
+          type Node = {
+            select: () => Promise<QueryResult>;
+            eq: (col: string, val: unknown) => Node;
+            lte: (col: string, val: unknown) => Node;
+            gt: (col: string, val: unknown) => Node;
+          };
           const node: Node = {
             select: thenable,
             eq(col: string, val: unknown) { filters.push([col, val]); return node; },
+            lte(col: string, val: unknown) { filters.push([col, val]); return node; },
+            gt(col: string, val: unknown) { filters.push([col, val]); return node; },
           };
           return node;
         },

@@ -32,6 +32,7 @@ export const RUNTIME_TABLES = {
   executionQueue: 'execution_queue',
   worktrees: 'repository_worktrees',
   orchestration: 'orchestration_decisions',
+  telegramUpdates: 'telegram_updates', // migration 0006 (durable replay dedup)
 } as const;
 
 export interface QueryResult {
@@ -45,19 +46,26 @@ interface InsertChain {
 interface OrderChain {
   limit(n: number): PromiseLike<QueryResult>;
 }
+// eq() is recursive and may be followed by order()+limit() so reads can stack
+// filters deterministically (e.g. status filter -> priority order -> bound).
 interface EqLimitChain {
   limit(n: number): PromiseLike<QueryResult>;
+  eq(col: string, val: string): EqLimitChain;
+  order(col: string, opts: { ascending: boolean }): OrderChain;
 }
 interface SelectChain {
   eq(col: string, val: string): EqLimitChain;
   order(col: string, opts: { ascending: boolean }): OrderChain;
   limit(n: number): PromiseLike<QueryResult>;
 }
-// Recursive eq chain so conditional writes can stack any number of guards
-// (e.g. releaseLease filters job_id + owner + token).
+// Recursive guard chain so conditional writes can stack any number of guards
+// (e.g. releaseLease filters job_id + owner + token; lease takeover filters
+// job_id + expired-by lte; renewal filters live-until gt).
 interface UpdateEqChain {
   select(cols: string): PromiseLike<QueryResult>;
   eq(col: string, val: string): UpdateEqChain;
+  lte(col: string, val: string): UpdateEqChain;
+  gt(col: string, val: string): UpdateEqChain;
 }
 interface UpdateBuilder {
   eq(col: string, val: string): UpdateEqChain;
@@ -181,6 +189,25 @@ export async function readSystemControls(
     return mapControls(res.data[0]);
   } catch {
     return { ...DEFAULT_CONTROLS };
+  }
+}
+
+// Controls read that DISTINGUISHES an unreadable control plane from a healthy
+// "everything stopped" row (audit fix: the simulation loop must treat a read
+// FAILURE as halted, because DEFAULT_CONTROLS' owner_stop=false would
+// otherwise fail OPEN for the halt gate). readOk=false also covers a missing
+// singleton row - the loop must not proceed on an unseeded control plane.
+export async function readSystemControlsChecked(
+  client: RuntimeClient,
+): Promise<{ controls: SystemControls; readOk: boolean }> {
+  try {
+    const res = await client.from(RUNTIME_TABLES.controls).select('*').limit(1);
+    if (res.error || !res.data || res.data.length === 0) {
+      return { controls: { ...DEFAULT_CONTROLS }, readOk: false };
+    }
+    return { controls: mapControls(res.data[0]), readOk: true };
+  } catch {
+    return { controls: { ...DEFAULT_CONTROLS }, readOk: false };
   }
 }
 
@@ -361,6 +388,284 @@ export async function releaseLease(
     .select('job_id');
   if (res.error) return { ok: false, error: 'lease release failed: ' + res.error.message };
   return { ok: true, id: jobId };
+}
+
+// --- lease acquisition / renewal (Phase 5B; DB unique(job_id) is the CAS) ---
+
+export interface LeaseAcquisition {
+  ok: boolean;
+  via?: 'fresh' | 'takeover';
+  error?: string;
+}
+
+// Atomically acquire the lease for a job. Two paths, both race-safe:
+//  1. INSERT a new lease row - the unique(job_id) constraint means exactly one
+//     concurrent acquirer wins; a duplicate here is NOT idempotent success (a
+//     second worker must lose), so this deliberately does not use appendRow.
+//  2. If a lease row exists, TAKE OVER only when it is already expired, via a
+//     conditional update guarded by lte(expires_at, now) - an unexpired lease
+//     can never be stolen, and two takeover racers resolve by rows-matched.
+export async function acquireLease(
+  client: RuntimeClient,
+  jobId: string,
+  owner: string,
+  token: string,
+  ttlMs: number,
+  now: string,
+): Promise<LeaseAcquisition> {
+  if (!(ttlMs > 0)) return { ok: false, error: 'ttl must be > 0 (no permanent leases)' };
+  if (!owner || !token) return { ok: false, error: 'owner and token required' };
+  const expires = new Date(Date.parse(now) + ttlMs).toISOString();
+
+  const ins = await client
+    .from(RUNTIME_TABLES.leases)
+    .insert({ job_id: jobId, owner, token, acquired_at: now, expires_at: expires })
+    .select('job_id');
+  if (!ins.error) return { ok: true, via: 'fresh' };
+  if (!isUniqueViolation(ins.error.message)) {
+    return { ok: false, error: 'lease insert failed: ' + ins.error.message };
+  }
+
+  const take = await client
+    .from(RUNTIME_TABLES.leases)
+    .update({ owner, token, acquired_at: now, expires_at: expires })
+    .eq('job_id', jobId)
+    .lte('expires_at', now)
+    .select('job_id');
+  if (take.error) return { ok: false, error: 'lease takeover failed: ' + take.error.message };
+  if (!take.data || take.data.length === 0) {
+    return { ok: false, error: 'lease held by a live owner (not stealable)' };
+  }
+  return { ok: true, via: 'takeover' };
+}
+
+// Renew only the caller's own LIVE lease (owner+token+not-yet-expired). Zero
+// matched rows = the lease was lost (expired/taken) - the caller must treat
+// that as lease loss and stop writing.
+export async function renewLeaseDb(
+  client: RuntimeClient,
+  jobId: string,
+  owner: string,
+  token: string,
+  ttlMs: number,
+  now: string,
+): Promise<WriteOutcome> {
+  if (!(ttlMs > 0)) return { ok: false, error: 'ttl must be > 0' };
+  const res = await client
+    .from(RUNTIME_TABLES.leases)
+    .update({ expires_at: new Date(Date.parse(now) + ttlMs).toISOString() })
+    .eq('job_id', jobId)
+    .eq('owner', owner)
+    .eq('token', token)
+    .gt('expires_at', now)
+    .select('job_id');
+  if (res.error) return { ok: false, error: 'lease renew failed: ' + res.error.message };
+  if (!res.data || res.data.length === 0) {
+    return { ok: false, error: 'lease lost (expired or taken over); stop work' };
+  }
+  return { ok: true, id: jobId };
+}
+
+// CAS the job row into 'leased' and stamp the lease fields, guarded on the
+// expected prior status. Zero rows = lost race; the caller must release the
+// lease row it just acquired (compensation) and move on.
+export async function markJobLeased(
+  client: RuntimeClient,
+  jobId: string,
+  owner: string,
+  token: string,
+  leaseExpiresAt: string,
+  now: string,
+): Promise<WriteOutcome> {
+  const res = await client
+    .from(RUNTIME_TABLES.jobs)
+    .update({
+      status: 'leased', lease_owner: owner, lease_token: token,
+      lease_expires_at: leaseExpiresAt, updated_at: now,
+    })
+    .eq('id', jobId)
+    .eq('status', 'queued')
+    .select('id');
+  if (res.error) return { ok: false, error: 'job lease update failed: ' + res.error.message };
+  if (!res.data || res.data.length === 0) {
+    return { ok: false, error: 'job not queued anymore (lost race); nothing changed' };
+  }
+  return { ok: true, id: jobId };
+}
+
+// Complete one bounded simulation generation: leased -> checkpointed, with the
+// attempt counter stamped from the known snapshot and the write fenced by the
+// caller's own lease token so a stale generation can never complete a job it
+// no longer owns.
+export async function completeSimulatedJob(
+  client: RuntimeClient,
+  jobId: string,
+  token: string,
+  attempts: number,
+  now: string,
+): Promise<WriteOutcome> {
+  const res = await client
+    .from(RUNTIME_TABLES.jobs)
+    .update({ status: 'checkpointed', attempts, updated_at: now })
+    .eq('id', jobId)
+    .eq('status', 'leased')
+    .eq('lease_token', token)
+    .select('id');
+  if (res.error) return { ok: false, error: 'job completion failed: ' + res.error.message };
+  if (!res.data || res.data.length === 0) {
+    return { ok: false, error: 'job not leased by this generation (fenced); nothing changed' };
+  }
+  return { ok: true, id: jobId };
+}
+
+// Recover jobs stranded in 'leased' by a crashed generation (audit fix: the
+// selector only considers 'queued', so without this sweep a crash between
+// markJobLeased and completion strands the job forever). Time-fenced: only
+// rows whose lease_expires_at has passed are requeued, so a LIVE generation
+// can never be yanked. Attempts are not incremented here - the crashed
+// generation's attempt (if written) is already dedup-keyed by its lease token.
+export async function recoverExpiredLeasedJobs(
+  client: RuntimeClient,
+  now: string,
+): Promise<{ recovered: number; error?: string }> {
+  const res = await client
+    .from(RUNTIME_TABLES.jobs)
+    .update({ status: 'queued', updated_at: now })
+    .eq('status', 'leased')
+    .lte('lease_expires_at', now)
+    .select('id');
+  if (res.error) return { recovered: 0, error: res.error.message };
+  return { recovered: (res.data ?? []).length };
+}
+
+// Requeue a job after a blocked/failed simulation attempt: leased -> queued,
+// attempts stamped, fenced by the caller's lease token. The lease fields stay
+// on the row as evidence of the last generation; selection ignores them.
+export async function requeueJob(
+  client: RuntimeClient,
+  jobId: string,
+  token: string,
+  attempts: number,
+  now: string,
+): Promise<WriteOutcome> {
+  const res = await client
+    .from(RUNTIME_TABLES.jobs)
+    .update({ status: 'queued', attempts, updated_at: now })
+    .eq('id', jobId)
+    .eq('status', 'leased')
+    .eq('lease_token', token)
+    .select('id');
+  if (res.error) return { ok: false, error: 'job requeue failed: ' + res.error.message };
+  if (!res.data || res.data.length === 0) {
+    return { ok: false, error: 'job not leased by this generation (fenced); nothing changed' };
+  }
+  return { ok: true, id: jobId };
+}
+
+// Bounded, deterministic read of jobs in one status (selection logic itself is
+// pure - candidates.selectCandidateJobs). Read-only; no side effect.
+export async function listJobsByStatus(
+  client: RuntimeClient,
+  status: string,
+  limit: number,
+): Promise<{ rows: Record<string, unknown>[]; error?: string }> {
+  const res = await client
+    .from(RUNTIME_TABLES.jobs)
+    .select('*')
+    .eq('status', status)
+    .order('priority', { ascending: false })
+    .limit(Math.max(0, limit));
+  if (res.error) return { rows: [], error: res.error.message };
+  return { rows: res.data ?? [] };
+}
+
+// --- checkpoint read path (Phase 5C) ---------------------------------------
+
+export async function readLatestCheckpoint(
+  client: RuntimeClient,
+  jobId: string,
+): Promise<{ row: Record<string, unknown> | null; error?: string }> {
+  const res = await client
+    .from(RUNTIME_TABLES.checkpoints)
+    .select('*')
+    .eq('job_id', jobId)
+    .order('created_at', { ascending: false })
+    .limit(1);
+  if (res.error) return { row: null, error: res.error.message };
+  return { row: res.data?.[0] ?? null };
+}
+
+// --- staging job intake (Phase 5D; queue-only, never executable) -----------
+
+export interface StagingJobInput {
+  id: string;
+  command_id: string;
+  approval_id: string;
+  risk_class: string;
+  priority?: number;
+  not_before: string;
+  expires_at: string;
+  idempotency_key: string;
+  correlation_id: string;
+  max_attempts?: number;
+}
+
+// Insert a QUEUED staging job. Forces the fail-closed posture on write:
+// execution_enabled=false, cancel_requested=false, attempts=0. GREEN only -
+// anything else is refused before any write. idempotency_key is DB-unique, so
+// a replayed intake dedupes to the existing job (duplicate:true) and can never
+// create a second one.
+export async function insertStagingJob(
+  client: RuntimeClient,
+  job: StagingJobInput,
+): Promise<WriteOutcome> {
+  if (job.risk_class !== 'GREEN') {
+    return { ok: false, error: 'staging jobs must be GREEN (got ' + job.risk_class + ')' };
+  }
+  if (!job.approval_id) return { ok: false, error: 'approval_id required (fail-closed)' };
+  if (!job.correlation_id || !job.idempotency_key) {
+    return { ok: false, error: 'correlation_id and idempotency_key required' };
+  }
+  const res = await client
+    .from(RUNTIME_TABLES.jobs)
+    .insert({
+      id: job.id, command_id: job.command_id, approval_id: job.approval_id,
+      status: 'queued', risk_class: 'GREEN', priority: job.priority ?? 0,
+      not_before: job.not_before, expires_at: job.expires_at,
+      attempts: 0, max_attempts: job.max_attempts ?? 3,
+      idempotency_key: job.idempotency_key, correlation_id: job.correlation_id,
+      execution_enabled: false, cancel_requested: false,
+    })
+    .select('id');
+  if (res.error) {
+    if (isUniqueViolation(res.error.message)) return { ok: true, duplicate: true, id: job.id };
+    return { ok: false, error: 'staging job insert failed: ' + res.error.message };
+  }
+  return { ok: true, id: firstId(res, job.id) };
+}
+
+// --- telegram durable replay dedup (Phase 5G; migration 0006) --------------
+
+// Record an update_id durably. duplicate:true = REPLAY (the caller must treat
+// the update as already consumed). Any other error fails closed (caller must
+// NOT proceed as if the update were fresh).
+export async function recordTelegramUpdate(
+  client: RuntimeClient,
+  updateId: number,
+  correlationId: string,
+): Promise<WriteOutcome> {
+  if (!Number.isInteger(updateId) || updateId <= 0) {
+    return { ok: false, error: 'invalid update_id' };
+  }
+  const res = await client
+    .from(RUNTIME_TABLES.telegramUpdates)
+    .insert({ update_id: updateId, correlation_id: correlationId })
+    .select('update_id');
+  if (res.error) {
+    if (isUniqueViolation(res.error.message)) return { ok: true, duplicate: true };
+    return { ok: false, error: 'telegram update record failed: ' + res.error.message };
+  }
+  return { ok: true };
 }
 
 // --- append-only logs ------------------------------------------------------
