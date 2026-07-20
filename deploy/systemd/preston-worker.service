@@ -21,6 +21,10 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
+# ProtectSystem=strict makes /var/lib read-only; the token store performs an
+# atomic temp+rename in this directory every run (refresh-token rotation), so
+# it must be writable or the service dies with EROFS.
+ReadWritePaths=/var/lib/preston/worker
 # Creates/owns /var/log/preston (0755, user preston) and grants write access,
 # so ProtectSystem=strict does not abort startup on a fresh host.
 LogsDirectory=preston

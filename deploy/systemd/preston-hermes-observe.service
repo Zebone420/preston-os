@@ -21,6 +21,9 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
+# Same EROFS trap as the worker: the Hermes token store rotates atomically
+# under /var/lib/preston/hermes, which ProtectSystem=strict otherwise seals.
+ReadWritePaths=/var/lib/preston/hermes
 # Creates/owns /var/log/preston (0755, user preston) and grants write access,
 # so ProtectSystem=strict does not abort startup on a fresh host.
 LogsDirectory=preston
