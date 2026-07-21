@@ -5,7 +5,12 @@
 $root = 'C:\dev\preston-os'
 $selfNames = @(
   'secret_scan_phase0a.ps1',
-  'red_boundary_scan_phase0a.ps1'
+  'red_boundary_scan_phase0a.ps1',
+  # Parity with the bash ports' self-exclusion list (SELF_A-D in
+  # scripts/secret_scan.sh / red_boundary_scan.sh, which exclude these
+  # two .ps1 files in return). Pattern definitions are not secrets.
+  'secret_scan.sh',
+  'red_boundary_scan.sh'
 )
 
 # Patterns are label = regex. The private-key regex is assembled from

@@ -5,7 +5,15 @@
 $root = 'C:\dev\preston-os'
 $selfNames = @(
   'secret_scan_phase0a.ps1',
-  'red_boundary_scan_phase0a.ps1'
+  'red_boundary_scan_phase0a.ps1',
+  # Parity with the bash ports (scripts/secret_scan.sh,
+  # red_boundary_scan.sh), which exclude these two .ps1 files in return
+  # (their SELF_A-D list). Scanner pattern DEFINITIONS are detection
+  # regexes, not runnable boundaries; without this exclusion the
+  # pre-commit hook blocks every commit on Windows by flagging the bash
+  # scanners' own pattern lists. Coverage of real code is unchanged.
+  'secret_scan.sh',
+  'red_boundary_scan.sh'
 )
 
 $patterns = @{
