@@ -103,8 +103,14 @@ owner on preston-agent-staging.
 - Rollback: none needed. Stop: a new attempt row appears.
 
 ## D10 - Token rotation continuity
-- Action: note `sudo stat -c %Y /var/lib/preston/worker/token.json` (mtime),
-  wait two firings, stat again.
+- Path note (defect #3 correction): the store path is whatever
+  SUPABASE_RUNTIME_TOKEN_STORE resolves to in each identity's env file -
+  NOT an assumed literal token.json. Resolve it first (prints a path only,
+  never a secret):
+      sudo grep -h '^SUPABASE_RUNTIME_TOKEN_STORE=' /etc/preston/worker.env
+      sudo grep -h '^SUPABASE_RUNTIME_TOKEN_STORE=' /etc/preston/hermes.env
+- Action: note `sudo stat -c %Y <resolved worker store path>` (mtime),
+  wait two firings, stat again. Repeat for the Hermes store path.
 - Expected: mtime advances (rotation persisted each authenticated run);
   firings keep succeeding (rotated token valid).
 - Rollback: none. Stop: SUCCESS firings stop after a rotation (store corruption

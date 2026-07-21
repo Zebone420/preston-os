@@ -96,6 +96,17 @@ Five routes under `apps/dashboard/src/app/api/os/`, each calling
   refresh response missing a rotated token all fail closed (no fallback to a
   stale/consumed env token) except for an explicit one-time
   `allowBootstrap` seed.
+- Token-store PATH contract: the store location is whatever
+  `SUPABASE_RUNTIME_TOKEN_STORE` is set to in that identity's protected env
+  file (`/etc/preston/worker.env`, `/etc/preston/hermes.env`). Filenames such
+  as `/var/lib/preston/worker/token.json` in earlier packets are EXAMPLES,
+  not a contract. A service run that exits 0 in service mode proves a
+  populated store exists at the configured path (an empty/missing store
+  fails closed with exit 78), and `ProtectSystem=strict` confines each
+  store to that identity's own `/var/lib/preston/<identity>` directory.
+  Verification MUST resolve the configured value (preflight-health.sh now
+  prints it) rather than stat an assumed literal filename — a renamed store
+  otherwise misreads as a missing credential (Phase 5 defect #3, Hermes).
 - Staging gate, shared by every DB-touching dispatcher command
   (`apps/dashboard/src/os-runtime/dispatcher.ts`, `stagingGate()`):
   `SUPABASE_RUNTIME_ENV` must literally equal `staging` (fail-closed on
