@@ -27,7 +27,6 @@ import {
   isMarkupMode,
   isMoneyCents,
   isScopeType,
-  MAX_MONEY_CENTS,
   RATE_DENOMINATOR,
   TAX_RATE_MILLI_PCT,
   type Jurisdiction,

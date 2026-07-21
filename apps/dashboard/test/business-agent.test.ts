@@ -225,8 +225,13 @@ describe('quote-draft agent - happy path', () => {
     expect(approvals[0].explicit_confirmation).toBe(false);
 
     const links = db.rowsOf('approval_links');
-    expect(links).toHaveLength(1);
-    expect(links[0].link_kind).toBe('quote_draft_approval');
+    expect(links).toHaveLength(2);
+    expect(new Set(links.map((l) => l.entity_type))).toEqual(
+      new Set(['quote', 'quote_version']),
+    );
+    for (const l of links) {
+      expect(l.link_kind).toBe('quote_draft_approval');
+    }
 
     const runs = db.rowsOf('quote_draft_runs');
     expect(runs).toHaveLength(1);

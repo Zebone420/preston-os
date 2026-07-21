@@ -422,12 +422,20 @@ export async function runQuoteDraftAgent(
     return failError(deps, req, base, 'schedule_persist_failed');
   }
 
-  // 7. Approval link + run record + activity ledger entry.
+  // 7. Approval links (version + quote, so the Approval Center can
+  // deep-link the draft) + run record + activity ledger entry.
   await insertApprovalLink(
     deps.client,
     approval.id,
     'quote_version',
     versionId,
+    'quote_draft_approval',
+  );
+  await insertApprovalLink(
+    deps.client,
+    approval.id,
+    'quote',
+    quoteId,
     'quote_draft_approval',
   );
 

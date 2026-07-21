@@ -12,6 +12,11 @@ import {
   type ControlPlaneClient,
 } from '@/lib/approvals-store';
 import { getServerSupabase } from '@/lib/supabase/server';
+import {
+  BUSINESS_TABLES,
+  listBusinessRows,
+} from '@/lib/business/business-store';
+import type { RuntimeClient } from '@/lib/ai-os/store';
 import { decideApproval } from './actions';
 
 // Approval Center - Gate 3 control-plane wiring.
@@ -136,7 +141,44 @@ function MockTable() {
   );
 }
 
-function LiveTable({ rows }: { rows: ApprovalRow[] }) {
+interface LinkRow {
+  entity_type: string;
+  entity_id: string;
+  link_kind: string;
+}
+
+// Business-entity context for an approval (Phase 6F). Metadata only:
+// a link never changes what approval decisions do (record-only).
+function LinkedEntities({ links }: { links: LinkRow[] }) {
+  if (links.length === 0) return null;
+  return (
+    <div className="mt-1 text-xs text-slate-500">
+      {links.map((l) =>
+        l.entity_type === 'quote' ? (
+          <Link
+            key={l.entity_type + l.entity_id}
+            href={`/business/quotes/${l.entity_id}`}
+            className="mr-2 underline"
+          >
+            view quote draft
+          </Link>
+        ) : (
+          <span key={l.entity_type + l.entity_id} className="mr-2">
+            {l.link_kind}: {l.entity_type} {l.entity_id.slice(0, 8)}
+          </span>
+        ),
+      )}
+    </div>
+  );
+}
+
+function LiveTable({
+  rows,
+  linksByApproval,
+}: {
+  rows: ApprovalRow[];
+  linksByApproval: Map<string, LinkRow[]>;
+}) {
   return (
     <table className="w-full text-left text-sm">
       <thead className="text-slate-400">
@@ -153,7 +195,12 @@ function LiveTable({ rows }: { rows: ApprovalRow[] }) {
       <tbody>
         {rows.map((row) => (
           <tr key={row.id} className="border-t border-slate-800 align-top">
-            <td className="p-2 text-slate-300">{row.requested_action}</td>
+            <td className="p-2 text-slate-300">
+              {row.requested_action}
+              <LinkedEntities
+                links={linksByApproval.get(row.id) ?? []}
+              />
+            </td>
             <td className="p-2">
               <span
                 className={
@@ -218,8 +265,25 @@ export default async function ApprovalsPage({
     | null;
 
   let live: { rows: ApprovalRow[]; error?: string } | null = null;
+  const linksByApproval = new Map<string, LinkRow[]>();
   if (supabase) {
     live = await listApprovalRows(supabase);
+    const linkRows = await listBusinessRows(
+      supabase as unknown as RuntimeClient,
+      BUSINESS_TABLES.approvalLinks,
+      { limit: 200 },
+    );
+    for (const raw of linkRows.rows) {
+      const approvalId = String(raw.approval_id ?? '');
+      if (!approvalId) continue;
+      const list = linksByApproval.get(approvalId) ?? [];
+      list.push({
+        entity_type: String(raw.entity_type ?? ''),
+        entity_id: String(raw.entity_id ?? ''),
+        link_kind: String(raw.link_kind ?? ''),
+      });
+      linksByApproval.set(approvalId, list);
+    }
   }
 
   const banner = msg ? MSG_TEXT[msg] : undefined;
@@ -232,6 +296,9 @@ export default async function ApprovalsPage({
         <nav className="flex items-center gap-3">
           <Link href="/" className="text-sm text-slate-300 underline">
             Dashboard
+          </Link>
+          <Link href="/business" className="text-sm text-slate-300 underline">
+            Business
           </Link>
           <Link href="/audit" className="text-sm text-slate-300 underline">
             Audit View
@@ -273,7 +340,7 @@ export default async function ApprovalsPage({
               No approval rows in the control plane yet.
             </p>
           ) : (
-            <LiveTable rows={live.rows} />
+            <LiveTable rows={live.rows} linksByApproval={linksByApproval} />
           )
         ) : (
           <MockTable />

@@ -7,7 +7,10 @@
 // computed by the deterministic quote engine at module load, so
 // fixtures can never disagree with the engine.
 
-import { calculateQuote } from './quote-engine';
+import {
+  calculateQuote,
+  type QuoteEngineInput,
+} from './quote-engine';
 import type {
   AgentRecommendation,
   BusinessActivityEvent,
@@ -212,7 +215,7 @@ export const leads: SalesLead[] = [
 ];
 
 // Quote numbers computed by the engine so fixtures never drift.
-export const brownstoneQuoteInput = {
+export const brownstoneQuoteInput: QuoteEngineInput = {
   scope_type: 'installation',
   jurisdiction: 'NYC',
   quote_fees_cents: 20000,
@@ -237,11 +240,11 @@ export const brownstoneQuoteInput = {
   ],
   st124_tracking: { st124_claimed: 'owner_to_review' },
   exclusions: ['Interior painting', 'Structural repairs'],
-} as const;
+};
 
 export const brownstoneCalc = calculateQuote(brownstoneQuoteInput);
 
-export const loftQuoteInput = {
+export const loftQuoteInput: QuoteEngineInput = {
   scope_type: 'product_only',
   jurisdiction: 'NYC',
   items: [
@@ -254,7 +257,7 @@ export const loftQuoteInput = {
     },
   ],
   exclusions: ['Installation', 'Disposal'],
-} as const;
+};
 
 export const loftCalc = calculateQuote(loftQuoteInput);
 
