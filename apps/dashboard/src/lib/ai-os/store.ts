@@ -354,6 +354,50 @@ export async function updateJobStatus(
   return { ok: true, id: jobId };
 }
 
+// Jobs still in flight - the only statuses a cancel request may target.
+// Anything terminal (done/failed/expired/superseded/etc.) is left untouched.
+const CANCELLABLE_JOB_STATUSES = [
+  'proposed', 'validated', 'queued', 'leased', 'running', 'checkpointed',
+] as const;
+
+// Request cancellation of one job (Phase 5J owner-cancel control). Sets
+// cancel_requested=true via a conditional per-status CAS loop (the shared
+// RuntimeClient surface has no `.in()`, so this tries each cancellable status
+// in turn and stops at the first match) - race-safe, and it NEVER changes
+// `status`, leases, or any execution field itself. The worker/dispatcher loop
+// remains solely responsible for observing the flag and stopping at its own
+// next safe checkpoint. Zero rows matched across every cancellable status
+// (job not found, or already in a terminal state) is reported as a failure;
+// the caller (controlplane.cancelJob) reads the row FIRST so an already
+// cancel_requested job is reported idempotently instead of landing here.
+//
+// Accepted races (L3): (1) two concurrent cancelJob calls can both pass the
+// caller's read-first check before either write lands, so both CAS updates
+// below may match and both audit `job_cancel_requested` - a harmless double
+// audit of an idempotent flag, not a double cancellation. (2) a job that
+// transitions to a terminal status BETWEEN this loop's per-status attempts
+// (the shared RuntimeClient has no `.in()`, so each cancellable status is
+// tried in sequence) can fall through every eq('status', ...) attempt and
+// come back not_cancellable even though it briefly held one of the
+// cancellable statuses - fail-closed, the owner simply retries the cancel.
+export async function requestJobCancel(
+  client: RuntimeClient,
+  jobId: string,
+  now: string,
+): Promise<WriteOutcome> {
+  for (const status of CANCELLABLE_JOB_STATUSES) {
+    const res = await client
+      .from(RUNTIME_TABLES.jobs)
+      .update({ cancel_requested: true, updated_at: now })
+      .eq('id', jobId)
+      .eq('status', status)
+      .select('id');
+    if (res.error) return { ok: false, error: 'job cancel failed: ' + res.error.message };
+    if (res.data && res.data.length > 0) return { ok: true, id: jobId };
+  }
+  return { ok: false, error: 'job not in a cancellable state (or not found); nothing changed' };
+}
+
 // --- worker_leases (CAS relies on the DB unique(job_id) + this decision) ----
 
 export async function readLease(

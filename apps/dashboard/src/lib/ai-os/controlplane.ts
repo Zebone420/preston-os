@@ -1,10 +1,18 @@
 import { isOwnerEmail } from '../owner-auth';
 import { logAudit, type AuditSink } from '../audit';
-import { normalizeCommand, validateCommand, type CommandSource } from './commands';
+import {
+  isValidRuntimeId,
+  normalizeCommand,
+  validateCommand,
+  RUNTIME_ID_RE,
+  type CommandPacket,
+  type CommandSource,
+} from './commands';
 import {
   insertCommandPacket,
   insertStagingJob,
   readSystemControls,
+  requestJobCancel,
   RUNTIME_TABLES,
   type RuntimeClient,
 } from './store';
@@ -37,8 +45,70 @@ function ownerOk(ownerEmail: string | null | undefined, env: Env): boolean {
   return isOwnerEmail(ownerEmail ?? null, env);
 }
 
-function mentionsProduction(...parts: (string | undefined)[]): boolean {
+// Exported (Phase 5J) so the ChatGPT intake route can re-screen a proposal
+// against the same production markers before it ever reaches this module.
+export function mentionsProduction(...parts: (string | undefined)[]): boolean {
   return parts.some((p) => /\bprod(uction)?\b/i.test(p ?? ''));
+}
+
+// Narrow deps a proposal-creation call actually needs (client + audit only) -
+// a structural subset of ControlPlaneDeps, so both the owner path (which has
+// a full ControlPlaneDeps) and the ChatGPT intake route (which has no
+// env/now) can call this with their own deps object, no adapter required.
+export interface CommandProposalDeps {
+  client: RuntimeClient;
+  audit: AuditSink | null;
+}
+
+export interface CreateProposalOptions {
+  actor: string;
+  // ChatGPT (and any other external connector) never gets an implicitly-
+  // approved proposal: forces approval_required=true/execution_eligible=false
+  // regardless of classifyRisk's verdict. The owner path leaves the packet's
+  // own normalizeCommand-computed values untouched (omit/false).
+  forceApproval?: boolean;
+}
+
+// Shared proposal-creation core (audit fix F4): screen->validate->insert->
+// audit, in that exact order (production screen BEFORE insert), used by both
+// submitCommandProposal (owner path) and processChatGptIntake (ChatGPT path)
+// so the two can never drift on ordering, audit event names, or GREEN/RED
+// classification. Mutates `packet` in place when forceApproval is set - same
+// packet object the caller already holds and will read fields back from.
+export async function createCommandProposal(
+  deps: CommandProposalDeps,
+  packet: CommandPacket,
+  opts: CreateProposalOptions,
+): Promise<HandlerResult> {
+  if (opts.forceApproval) {
+    packet.approval_required = true;
+    packet.execution_eligible = false; // defense in depth (normalizeCommand already forces this)
+  }
+
+  if (mentionsProduction(packet.target_project, packet.target_repository, packet.requested_scope, packet.requested_action)) {
+    await logAudit(
+      { actor: opts.actor, action: 'command_rejected:production_target', action_class: 'RED', detail: { target_project: packet.target_project } },
+      { supabase: deps.audit },
+    );
+    return { ok: false, code: 'production_rejected', message: 'production targets are not permitted' };
+  }
+
+  const v = validateCommand(packet);
+  if (!v.ok) return { ok: false, code: 'invalid', message: v.errors.join(', ') };
+
+  const w = await insertCommandPacket(deps.client, packet);
+  if (!w.ok) return { ok: false, code: 'write_failed', message: w.error ?? 'insert failed' };
+
+  await logAudit(
+    { actor: opts.actor, action: 'command_proposed', action_class: 'GREEN', detail: { id: packet.id, action_class: packet.action_class, source: packet.source } },
+    { supabase: deps.audit },
+  );
+  return {
+    ok: true,
+    code: w.duplicate ? 'duplicate' : 'proposed',
+    message: 'command recorded as a proposal; approval ' + (packet.approval_required ? 'required' : 'not required'),
+    id: w.id,
+  };
 }
 
 export interface SubmitInput {
@@ -65,13 +135,6 @@ export async function submitCommandProposal(
     return { ok: false, code: 'denied', message: 'owner authorization required' };
   }
   const actor = input.ownerEmail as string;
-  if (mentionsProduction(input.target_project, input.target_repository, input.requested_scope, input.requested_action)) {
-    await logAudit(
-      { actor, action: 'command_rejected:production_target', action_class: 'RED', detail: { target_project: input.target_project } },
-      { supabase: deps.audit },
-    );
-    return { ok: false, code: 'production_rejected', message: 'production targets are not permitted' };
-  }
   const packet = normalizeCommand({
     id: input.commandId,
     actor,
@@ -86,22 +149,7 @@ export async function submitCommandProposal(
     idempotency_key: input.idempotency_key,
     now: deps.now,
   });
-  const v = validateCommand(packet);
-  if (!v.ok) return { ok: false, code: 'invalid', message: v.errors.join(', ') };
-
-  const w = await insertCommandPacket(deps.client, packet);
-  if (!w.ok) return { ok: false, code: 'write_failed', message: w.error ?? 'insert failed' };
-
-  await logAudit(
-    { actor, action: 'command_proposed', action_class: 'GREEN', detail: { id: packet.id, action_class: packet.action_class, source: packet.source } },
-    { supabase: deps.audit },
-  );
-  return {
-    ok: true,
-    code: w.duplicate ? 'duplicate' : 'proposed',
-    message: 'command recorded as a proposal; approval ' + (packet.approval_required ? 'required' : 'not required'),
-    id: w.id,
-  };
+  return createCommandProposal(deps, packet, { actor });
 }
 
 export interface EnqueueInput {
@@ -217,11 +265,21 @@ export async function enqueueStagingJob(
   };
 }
 
-export type ControlAction = 'pause' | 'resume' | 'stop';
+export type ControlAction = 'pause' | 'resume' | 'stop' | 'kill';
 
-// Owner pause / resume / stop. Never enables execution or the runner. `stop`
-// sets owner_stop (hard halt); `pause` is a soft pause; `resume` clears both
-// (execution_enabled remains whatever it was - default false).
+// Owner pause / resume / stop / kill. NONE of these ever touch
+// execution_enabled, remote_runner_enabled, or hermes_mode - enabling
+// execution or the runner stays owner-run SQL / a RED gate, never this path.
+// `stop` sets owner_stop (hard halt); `pause` is a soft pause; `resume` clears
+// both (execution_enabled remains whatever it was - default false); `kill`
+// (Phase 5J) writes the IDENTICAL hard-halt patch as `stop` (owner_stop+paused
+// in one update) but is audited RED instead of YELLOW - it is the same halt,
+// just named and logged for an emergency/owner-kill-switch call site rather
+// than a routine stop. Kill invents no new control-plane flag. `resume`
+// remains the one and only reversal path for owner_stop regardless of
+// whether it was set by `stop` or `kill` - that is unchanged/existing
+// behavior (deliberately NOT special-cased here), so an owner-run `resume`
+// always clears it; there is no separate "un-kill" flag to invent.
 export async function requestControl(
   deps: ControlPlaneDeps,
   ownerEmail: string | null,
@@ -234,7 +292,7 @@ export async function requestControl(
   const patch =
     action === 'pause'
       ? { paused: true }
-      : action === 'stop'
+      : action === 'stop' || action === 'kill'
         ? { owner_stop: true, paused: true }
         : { paused: false, owner_stop: false };
   const res = await deps.client
@@ -249,11 +307,71 @@ export async function requestControl(
     return { ok: false, code: 'write_failed', message: 'no control row updated; nothing changed' };
   }
 
+  const actionClass = action === 'kill' ? 'RED' : action === 'stop' ? 'YELLOW' : 'GREEN';
   await logAudit(
-    { actor, action: 'control:' + action, action_class: action === 'stop' ? 'YELLOW' : 'GREEN', detail: patch },
+    { actor, action: 'control:' + action, action_class: actionClass, detail: patch },
     { supabase: deps.audit },
   );
   return { ok: true, code: action, message: 'runtime control updated: ' + action };
+}
+
+export interface CancelJobInput {
+  ownerEmail: string | null;
+  jobId: string; // uuid
+  correlation_id: string;
+  reason?: string;
+}
+
+// Owner job-cancel request (Phase 5J). Sets cancel_requested=true on one job
+// so the worker/dispatcher loop can observe it and stop cooperatively at its
+// next safe point - this handler itself performs NO execution, lease action,
+// or lifecycle transition. Idempotent: a job already flagged cancel_requested
+// is reported back as an already-true no-op (code 'already_requested')
+// instead of re-auditing a fresh request. Owner-gated, uuid-validated, and
+// only ever touches the one job row it targets.
+export async function cancelJob(
+  deps: ControlPlaneDeps,
+  input: CancelJobInput,
+): Promise<HandlerResult> {
+  if (!ownerOk(input.ownerEmail, deps.env)) {
+    return { ok: false, code: 'denied', message: 'owner authorization required' };
+  }
+  const actor = input.ownerEmail as string;
+  if (!UUID_RE.test(input.jobId)) {
+    return { ok: false, code: 'invalid', message: 'job_id must be a uuid' };
+  }
+  if (!isValidRuntimeId(input.correlation_id)) {
+    return { ok: false, code: 'invalid', message: 'correlation_id required and must match ' + RUNTIME_ID_RE.source };
+  }
+
+  // Read first: an already-flagged job must be reported idempotently, never
+  // re-audited as a fresh cancel request.
+  const read = await deps.client
+    .from(RUNTIME_TABLES.jobs)
+    .select('*')
+    .eq('id', input.jobId)
+    .limit(1);
+  if (read.error || !read.data || read.data.length === 0) {
+    return { ok: false, code: 'unknown_job', message: 'job not found' };
+  }
+  const row = read.data[0];
+  if (row['cancel_requested'] === true) {
+    return { ok: true, code: 'already_requested', message: 'cancellation already requested', id: input.jobId };
+  }
+
+  const w = await requestJobCancel(deps.client, input.jobId, deps.now);
+  if (!w.ok) {
+    return { ok: false, code: 'not_cancellable', message: 'job is not in a cancellable state' };
+  }
+
+  await logAudit(
+    {
+      actor, action: 'job_cancel_requested', action_class: 'YELLOW',
+      detail: { job_id: input.jobId, reason: input.reason ?? null, correlation_id: input.correlation_id },
+    },
+    { supabase: deps.audit },
+  );
+  return { ok: true, code: 'cancel_requested', message: 'cancellation requested', id: input.jobId };
 }
 
 export interface StatusView {

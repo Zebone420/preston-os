@@ -23,18 +23,26 @@ function client(controlsRow: Record<string, unknown> | null, writeResult: QueryR
           return { select: thenable };
         },
         select() {
+          const rows = async () => ({ data: controlsRow ? [controlsRow] : [], error: null });
+          const eqChain = {
+            limit: rows,
+            eq: () => eqChain,
+            order: () => ({ limit: rows }),
+          };
           return {
-            eq() {
-              return { limit: async () => ({ data: controlsRow ? [controlsRow] : [], error: null }) };
-            },
-            order() {
-              return { limit: thenable };
-            },
-            limit: async () => ({ data: controlsRow ? [controlsRow] : [], error: null }),
+            eq: () => eqChain,
+            order: () => ({ limit: thenable }),
+            limit: rows,
           };
         },
         update() {
-          return { eq: () => ({ select: thenable, eq: () => ({ select: thenable }) }) };
+          const updateEq = {
+            select: thenable,
+            eq: () => updateEq,
+            lte: () => updateEq,
+            gt: () => updateEq,
+          };
+          return { eq: () => updateEq };
         },
       };
     },

@@ -48,6 +48,15 @@ export interface CommandPacket {
 const SECRET_TEXT =
   /(secret|password|passwd|\bpat\b|api[_-]?key|client[_-]?secret|private[_-]?key|refresh[_-]?token|bearer\s|ssh-rsa|-----begin)/i;
 
+// Bounded, url-safe-ish token shape shared by every runtime-facing identifier
+// that isn't a DB-column uuid (correlation_id, idempotency_key, chatgpt
+// intake ids, job-cancel correlation_id, ...). Single-sourced here so every
+// caller agrees on the same shape instead of each re-declaring its own regex.
+export const RUNTIME_ID_RE = /^[A-Za-z0-9._:-]{8,128}$/;
+export function isValidRuntimeId(s: unknown): s is string {
+  return typeof s === 'string' && RUNTIME_ID_RE.test(s);
+}
+
 const SOURCES: readonly CommandSource[] = [
   'chatgpt', 'telegram', 'dashboard', 'owner_cli', 'claude', 'codex', 'hermes', 'scheduler',
 ];

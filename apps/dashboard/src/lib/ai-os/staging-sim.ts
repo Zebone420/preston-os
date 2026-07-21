@@ -1,6 +1,7 @@
 import type { AgentRecord } from './types';
 import type { Job } from './queue';
 import type { ObserveCandidate } from './orchestrator';
+import type { TaskTextHints } from './hermes';
 import { resolveResume } from './checkpoint';
 import {
   selectCandidateJobs,
@@ -17,6 +18,7 @@ import {
   recoverExpiredLeasedJobs,
   releaseLease,
   requeueJob,
+  RUNTIME_TABLES,
   upsertAgent,
   type RuntimeClient,
 } from './store';
@@ -220,8 +222,13 @@ export async function buildHermesObserveBatch(
     .filter((j): j is Job => j !== null)
     .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))
     .slice(0, Math.max(0, maxJobs));
-  return jobs.map((job) => ({
+  return Promise.all(jobs.map(async (job) => ({
     id: job.id,
+    // Optional, read-only classification hint (Phase 5J) - Hermes HAS SELECT
+    // on runtime_command_packets under RLS 0007. Fails closed to null and is
+    // NEVER placed on input.command, so it can only ever feed the observe-only
+    // routing recommendation, never eligibility/dispatch/propose decisions.
+    packet: await readCommandHints(client, job.command_id),
     input: {
       controls,
       command: null,
@@ -231,5 +238,34 @@ export async function buildHermesObserveBatch(
       },
       now,
     },
-  }));
+  })));
+}
+
+// Best-effort read of a command packet's free-text fields for Hermes'
+// classification. A missing id, a read error, or an unexpected row shape all
+// fail closed to null - the caller then simply classifies from the job alone.
+// This performs NO write and is the only extra read this function adds.
+async function readCommandHints(
+  client: RuntimeClient,
+  commandId: string | null | undefined,
+): Promise<TaskTextHints | null> {
+  if (!commandId) return null;
+  try {
+    const res = await client
+      .from(RUNTIME_TABLES.commandPackets)
+      .select('*')
+      .eq('id', commandId)
+      .limit(1);
+    if (res.error || !res.data || res.data.length === 0) return null;
+    const row = res.data[0];
+    const pick = (key: string): string | null =>
+      typeof row[key] === 'string' ? (row[key] as string) : null;
+    return {
+      requested_action: pick('requested_action'),
+      requested_scope: pick('requested_scope'),
+      expected_outcome: pick('expected_outcome'),
+    };
+  } catch {
+    return null;
+  }
 }

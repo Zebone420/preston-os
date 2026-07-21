@@ -1,16 +1,42 @@
 #!/bin/sh
 # Preston AI pre-commit hook: block commits on secret or RED findings.
+#
+# Platform detection: prefer the Windows PowerShell scanners when
+# powershell.exe is on PATH (kept working, unchanged); otherwise fall back
+# to the bash ports for Linux/macOS staging hosts. If NEITHER scanner can
+# run, fail closed - a commit must never proceed unscanned.
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "scripts/secret_scan_phase0a.ps1"
-if [ $? -ne 0 ]; then
-  echo "pre-commit: secret scan failed - commit blocked"
-  exit 1
+if command -v powershell.exe >/dev/null 2>&1; then
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "scripts/secret_scan_phase0a.ps1"
+  if [ $? -ne 0 ]; then
+    echo "pre-commit: secret scan failed - commit blocked"
+    exit 1
+  fi
+
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "scripts/red_boundary_scan_phase0a.ps1"
+  if [ $? -ne 0 ]; then
+    echo "pre-commit: RED boundary scan failed - commit blocked"
+    exit 1
+  fi
+
+  exit 0
 fi
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "scripts/red_boundary_scan_phase0a.ps1"
-if [ $? -ne 0 ]; then
-  echo "pre-commit: RED boundary scan failed - commit blocked"
-  exit 1
+if command -v bash >/dev/null 2>&1; then
+  bash scripts/secret_scan.sh
+  if [ $? -ne 0 ]; then
+    echo "pre-commit: secret scan failed - commit blocked"
+    exit 1
+  fi
+
+  bash scripts/red_boundary_scan.sh
+  if [ $? -ne 0 ]; then
+    echo "pre-commit: RED boundary scan failed - commit blocked"
+    exit 1
+  fi
+
+  exit 0
 fi
 
-exit 0
+echo "pre-commit: no scanner runtime available (neither powershell.exe nor bash) - commit blocked (fail-closed)"
+exit 1

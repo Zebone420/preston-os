@@ -1,4 +1,4 @@
-import { decide, type HermesInput } from './hermes';
+import { classifyTask, decide, type HermesInput, type TaskTextHints } from './hermes';
 import { simulationEligible } from './candidates';
 import { eligibleWorker, type EligibilityInput } from './leases';
 import { runPermitted, simulate, type ExecutionEnvelope } from './runner';
@@ -72,6 +72,11 @@ export function runWorkerCycleSimulation(input: WorkerCycleInput): WorkerCycleRe
 export interface ObserveCandidate {
   id: string; // job/candidate id
   input: HermesInput;
+  // Optional routing hint (Phase 5J), sourced read-only from the job's command
+  // packet when cheaply available. NEVER fed into input.command / eligibility -
+  // it only feeds the observe-only routing RECOMMENDATION below, so it cannot
+  // change a decision's dispatch/propose/observe/reject/noop outcome.
+  packet?: TaskTextHints | null;
 }
 
 export interface ObserveOutcome {
@@ -105,7 +110,14 @@ export async function runHermesObserveOnce(
   let recorded = 0;
   for (const c of candidates) {
     const res = decide(c.input); // decision only; this loop never acts on it
-    observations.push({ id: c.id, decision: res.decision, reasons: res.reasons });
+    // Attach a routing RECOMMENDATION only when Hermes actually observes
+    // (never on noop/reject/etc). This is advisory metadata carried as reason
+    // strings on the SAME 'observe' decision - it assigns nothing, mutates no
+    // job, and calls no other agent.
+    const reasons = res.decision === 'observe'
+      ? [...res.reasons, ...routingReasons(c)]
+      : res.reasons;
+    observations.push({ id: c.id, decision: res.decision, reasons });
     // Correlation: command's when present, else the JOB's - so the decision +
     // event rows stay linkable to the drill evidence chain (audit fix; the
     // literal 'na' is the last resort for command-less, job-less candidates).
@@ -117,7 +129,7 @@ export async function runHermesObserveOnce(
       job_id: c.id,
       hermes_mode: controls.hermes_mode,
       decision: res.decision,
-      reasons: res.reasons,
+      reasons,
       correlation_id: corr,
     });
     if (w.ok && !w.duplicate) recorded++; // duplicates are idempotent no-ops, not new records
@@ -136,4 +148,18 @@ export async function runHermesObserveOnce(
     );
   }
   return { hermesMode: controls.hermes_mode, observations, recorded, skipped: false };
+}
+
+// Structured, deterministic reason strings for the observe-only routing
+// recommendation. classifyTask is pure/no-I/O; this wrapper just formats its
+// output. 'route:mode=recommendation_only' makes explicit (in the audit
+// trail) that nothing here assigns or dispatches work.
+function routingReasons(c: ObserveCandidate): string[] {
+  const cls = classifyTask(c.input.eligibility.job, c.packet ?? null);
+  return [
+    'route:implementer=' + cls.implementer,
+    'route:reviewer=' + cls.reviewer,
+    'route:task_kind=' + cls.task_kind,
+    'route:mode=recommendation_only',
+  ];
 }

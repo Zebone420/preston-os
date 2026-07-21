@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import type { AuditSink } from '../src/lib/audit';
 import type { QueryResult, RuntimeClient } from '../src/lib/ai-os/store';
 import {
+  cancelJob,
   enqueueStagingJob,
   readStatus,
   requestControl,
   submitCommandProposal,
+  type CancelJobInput,
   type ControlPlaneDeps,
   type EnqueueInput,
   type SubmitInput,
@@ -225,5 +227,142 @@ describe('control-plane - owner controls', () => {
     expect(s.execution_enabled).toBe(false);
     expect(s.hermes_mode).toBe('disabled');
     expect(s.remote_runner_enabled).toBe(false);
+  });
+
+  it('denies kill for a non-owner', async () => {
+    const { deps: d } = deps({ data: [{ id: 'global' }], error: null });
+    expect((await requestControl(d, 'attacker@x.com', 'kill')).ok).toBe(false);
+  });
+
+  it('kill sets owner_stop+paused (same hard-halt patch as stop) and audits it RED', async () => {
+    const { deps: d, updates, audits } = deps({ data: [{ id: 'global' }], error: null });
+    const r = await requestControl(d, 'info@preston.nyc', 'kill');
+    expect(r.ok).toBe(true);
+    expect(r.code).toBe('kill');
+    const patch = updates[0];
+    expect(patch['owner_stop']).toBe(true);
+    expect(patch['paused']).toBe(true);
+    expect(audits.some((a) => a.action === 'control:kill' && a.action_class === 'RED')).toBe(true);
+  });
+
+  it('kill NEVER touches execution_enabled/remote_runner_enabled/hermes_mode', async () => {
+    const { deps: d, updates } = deps({ data: [{ id: 'global' }], error: null });
+    await requestControl(d, 'info@preston.nyc', 'kill');
+    const patch = updates[0];
+    expect('execution_enabled' in patch).toBe(false);
+    expect('remote_runner_enabled' in patch).toBe(false);
+    expect('hermes_mode' in patch).toBe(false);
+  });
+});
+
+// --- cancelJob (Phase 5J owner job-cancel control) --------------------------
+
+const JOB_UUID = '22222222-3333-4444-8555-666666666666';
+
+// Dedicated fake client: cancelJob needs a job-row READ (to detect an already
+// cancel_requested job idempotently) followed by a conditional UPDATE (the
+// store's per-status CAS loop) - the shared deps() helper above only models
+// one shared write outcome per call and isn't eq-value-aware, so this models
+// both independently: `jobRow` backs every select, `updateMatches` decides
+// whether the store's CAS loop finds a matching row on its update attempts.
+function cancelDeps(
+  jobRow: Record<string, unknown> | null,
+  updateMatches: boolean,
+): { deps: ControlPlaneDeps; updates: Record<string, unknown>[]; audits: AuditCall[] } {
+  const updates: Record<string, unknown>[] = [];
+  const audits: AuditCall[] = [];
+  const client: RuntimeClient = {
+    from() {
+      type SelectNode = { limit: () => Promise<QueryResult>; eq: () => SelectNode; order: () => { limit: () => Promise<QueryResult> } };
+      const selectResult = async (): Promise<QueryResult> => ({ data: jobRow ? [jobRow] : [], error: null });
+      const selectNode: SelectNode = { limit: selectResult, eq: () => selectNode, order: () => ({ limit: selectResult }) };
+      type UpdateNode = { select: () => Promise<QueryResult>; eq: () => UpdateNode; lte: () => UpdateNode; gt: () => UpdateNode };
+      return {
+        insert() {
+          return { select: async (): Promise<QueryResult> => ({ data: null, error: null }) };
+        },
+        select() {
+          return selectNode;
+        },
+        update(row: Record<string, unknown>) {
+          updates.push(row);
+          const updateResult = async (): Promise<QueryResult> =>
+            updateMatches ? { data: [{ id: String(jobRow?.['id'] ?? JOB_UUID) }], error: null } : { data: [], error: null };
+          const node: UpdateNode = { select: updateResult, eq: () => node, lte: () => node, gt: () => node };
+          return node;
+        },
+      };
+    },
+  };
+  const audit: AuditSink = {
+    from() {
+      return {
+        insert(row: Record<string, unknown>) {
+          audits.push({ action: String(row['action']), action_class: String(row['action_class']) });
+          return Promise.resolve({ error: null });
+        },
+      };
+    },
+  };
+  return { deps: { client, audit, env: OWNER_ENV, now: NOW }, updates, audits };
+}
+
+const cinput = (over: Partial<CancelJobInput> = {}): CancelJobInput => ({
+  ownerEmail: 'info@preston.nyc', jobId: JOB_UUID, correlation_id: 'corr-cancel-1', ...over,
+});
+
+describe('control-plane - cancelJob (Phase 5J)', () => {
+  it('rejects a non-owner', async () => {
+    const { deps: d, audits } = cancelDeps({ id: JOB_UUID, status: 'queued', cancel_requested: false }, true);
+    const r = await cancelJob(d, cinput({ ownerEmail: 'attacker@x.com' }));
+    expect(r.ok).toBe(false);
+    expect(r.code).toBe('denied');
+    expect(audits.length).toBe(0);
+  });
+
+  it('rejects a malformed job_id (not a uuid) before any DB read', async () => {
+    const { deps: d } = cancelDeps(null, true);
+    const r = await cancelJob(d, cinput({ jobId: 'not-a-uuid' }));
+    expect(r.ok).toBe(false);
+    expect(r.code).toBe('invalid');
+  });
+
+  it('rejects a malformed correlation_id (bad shape) before any DB read', async () => {
+    const { deps: d } = cancelDeps(null, true);
+    const r = await cancelJob(d, cinput({ correlation_id: 'short' }));
+    expect(r.ok).toBe(false);
+    expect(r.code).toBe('invalid');
+  });
+
+  it('fails for an unknown job', async () => {
+    const { deps: d } = cancelDeps(null, true);
+    const r = await cancelJob(d, cinput());
+    expect(r.ok).toBe(false);
+    expect(r.code).toBe('unknown_job');
+  });
+
+  it('happy path: flags cancel_requested and audits YELLOW', async () => {
+    const { deps: d, updates, audits } = cancelDeps({ id: JOB_UUID, status: 'queued', cancel_requested: false }, true);
+    const r = await cancelJob(d, cinput());
+    expect(r.ok).toBe(true);
+    expect(r.code).toBe('cancel_requested');
+    expect(updates[0]['cancel_requested']).toBe(true);
+    expect(audits.some((a) => a.action === 'job_cancel_requested' && a.action_class === 'YELLOW')).toBe(true);
+  });
+
+  it('is idempotent: an already cancel_requested job returns ok/already without a second audit or update', async () => {
+    const { deps: d, updates, audits } = cancelDeps({ id: JOB_UUID, status: 'queued', cancel_requested: true }, true);
+    const r = await cancelJob(d, cinput());
+    expect(r.ok).toBe(true);
+    expect(r.code).toBe('already_requested');
+    expect(updates.length).toBe(0);
+    expect(audits.length).toBe(0);
+  });
+
+  it('fails closed when the job is not in a cancellable state', async () => {
+    const { deps: d } = cancelDeps({ id: JOB_UUID, status: 'done', cancel_requested: false }, false);
+    const r = await cancelJob(d, cinput());
+    expect(r.ok).toBe(false);
+    expect(r.code).toBe('not_cancellable');
   });
 });
