@@ -132,13 +132,17 @@ export async function processChatGptIntake(
     return { httpStatus: 400, json: { ok: false, status: 'write_failed', message: 'unable to record proposal', correlation_id: correlationId } };
   }
 
+  // On a duplicate, result.id is the AUTHORITATIVE stored row's id (looked up
+  // by the store); if that lookup could not resolve, report null rather than
+  // echoing this request's attempted id, which matches no stored row.
+  const duplicate = result.code === 'duplicate';
   return {
     httpStatus: 200,
     json: {
       ok: true,
-      packet_id: result.id ?? packet.id,
-      status: result.code === 'duplicate' ? 'duplicate' : 'proposed',
-      duplicate: result.code === 'duplicate',
+      packet_id: result.id ?? (duplicate ? null : packet.id),
+      status: duplicate ? 'duplicate' : 'proposed',
+      duplicate,
       correlation_id: correlationId,
     },
   };

@@ -135,11 +135,39 @@ export async function insertCommandPacket(
     .select('id');
   if (res.error) {
     if (isUniqueViolation(res.error.message)) {
-      return { ok: true, duplicate: true, id: packet.id }; // idempotent
+      return readAuthoritativeCommandDuplicate(client, packet);
     }
     return { ok: false, error: 'command insert failed: ' + res.error.message };
   }
   return { ok: true, id: firstId(res, packet.id) };
+}
+
+// A unique violation on command intake means a row for this packet already
+// exists - usually keyed by idempotency_key (a replay arriving with a fresh
+// route-generated id), else by the id PK itself. The STORED row is the
+// authority: returning the attempted packet's id here previously produced
+// duplicate responses whose id matched no runtime_command_packets row
+// (Phase 5 defect #1). Read the existing row back and return ITS id; if
+// neither read resolves, report the duplicate with no id at all - an absent
+// id is honest, a wrong id is not.
+async function readAuthoritativeCommandDuplicate(
+  client: RuntimeClient,
+  packet: CommandPacket,
+): Promise<WriteOutcome> {
+  const lookups: Array<[string, string]> = [
+    ['idempotency_key', packet.idempotency_key],
+    ['id', packet.id],
+  ];
+  for (const [col, val] of lookups) {
+    const res = await client
+      .from(RUNTIME_TABLES.commandPackets)
+      .select('id')
+      .eq(col, val)
+      .limit(1);
+    const found = res.error ? undefined : res.data?.[0]?.['id'];
+    if (found) return { ok: true, duplicate: true, id: String(found) };
+  }
+  return { ok: true, duplicate: true };
 }
 
 export async function listCommandPackets(
