@@ -16,6 +16,7 @@ import type {
   CommunicationRecord,
   InstallationEvent,
   PaymentEvent,
+  PaymentScheduleRecord,
   Project,
   ProjectMilestone,
   Quote,
@@ -493,6 +494,18 @@ export const installationEvents: InstallationEvent[] = [
   },
 ];
 
+export const paymentSchedules: PaymentScheduleRecord[] = [
+  {
+    id: id(705),
+    quote_version_id: FIXTURE_IDS.quoteVersionBrownstone,
+    project_id: FIXTURE_IDS.projectBrownstone,
+    schedule_type: brownstoneCalc.payment_schedule.schedule_type,
+    stages: brownstoneCalc.payment_schedule.stages,
+    total_cents: brownstoneCalc.payment_schedule.total_cents,
+    created_at: T2,
+  },
+];
+
 export const paymentEvents: PaymentEvent[] = [
   {
     id: id(710),
@@ -712,6 +725,7 @@ export interface BusinessFixtureDataset {
   milestones: ProjectMilestone[];
   vendorOrders: VendorOrder[];
   installationEvents: InstallationEvent[];
+  paymentSchedules: PaymentScheduleRecord[];
   paymentEvents: PaymentEvent[];
   communications: CommunicationRecord[];
   recommendations: AgentRecommendation[];
@@ -731,6 +745,7 @@ export function buildFixtureDataset(): BusinessFixtureDataset {
     milestones,
     vendorOrders,
     installationEvents,
+    paymentSchedules,
     paymentEvents,
     communications,
     recommendations,

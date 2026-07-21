@@ -141,6 +141,16 @@ describe('migration 0009 - business foundation', () => {
     }
   });
 
+  it('adds only the insert privilege on approvals (no policy change)', () => {
+    // The 0001 approvals table gains insert (owner-RLS still applies)
+    // so business draft approvals can be recorded. Nothing else on
+    // approvals may change here.
+    expect(sql).toMatch(/grant insert on approvals to authenticated;/);
+    expect(sql).not.toMatch(/create policy \w+ on approvals\b/);
+    expect(sql).not.toMatch(/drop policy [\w ]+ on approvals\b/);
+    expect(sql).not.toMatch(/alter table approvals\b/);
+  });
+
   it('pins simulation state at the DB level', () => {
     expect(sql).toMatch(/check \(simulation_state = 'simulation'\)/);
     expect(sql).toMatch(/check \(simulation_only = true\)/);

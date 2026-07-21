@@ -638,6 +638,16 @@ create policy quote_draft_runs_owner_sel on quote_draft_runs
 grant select, insert on quote_draft_runs to authenticated;
 revoke update, delete on quote_draft_runs from authenticated;
 
+-- The Approval Center flow for business drafts creates approvals
+-- rows from the app (owner session). The approvals table (0001)
+-- has owner-only RLS (approvals_owner_all, all commands) but its
+-- table privileges were granted ad hoc (select, update only -
+-- Phase 1B Stages 5/8). Add the missing insert privilege here so
+-- draft-approval requests can be recorded. RLS still restricts
+-- every command to the owner; this weakens nothing and folds the
+-- privilege history into a tracked migration.
+grant insert on approvals to authenticated;
+
 alter table approval_links enable row level security;
 drop policy if exists approval_links_owner_ins on approval_links;
 create policy approval_links_owner_ins on approval_links

@@ -359,6 +359,16 @@ export interface InstallationEvent {
   updated_at: string;
 }
 
+export interface PaymentScheduleRecord {
+  id: string;
+  quote_version_id?: string | null;
+  project_id?: string | null;
+  schedule_type: PaymentScheduleType;
+  stages: PaymentStage[];
+  total_cents: number;
+  created_at: string;
+}
+
 export interface PaymentEvent {
   id: string;
   project_id?: string | null;
