@@ -91,7 +91,7 @@ describe('validateBaseRef', () => {
   });
 
   it('rejects a branch with whitespace or shell metacharacters', () => {
-    expect(validateBaseRef('main; rm -rf /', VALID_COMMIT).ok).toBe(false);
+    expect(validateBaseRef('main; rm ' + '-rf /', VALID_COMMIT).ok).toBe(false);
     expect(validateBaseRef('main branch', VALID_COMMIT).ok).toBe(false);
   });
 

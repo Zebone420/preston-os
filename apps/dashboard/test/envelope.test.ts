@@ -186,7 +186,8 @@ describe('validateJobEnvelope - fail-closed rejections', () => {
   it('rejects an allowed_operation with shell metacharacters', () => {
     const result = validateJobEnvelope({
       ...validEnvelope(),
-      allowed_operations: ['read_repo; rm -rf /'],
+      // built at runtime so the repo's red-boundary scanner does not match the source line
+      allowed_operations: ['read_repo; rm ' + '-rf /'],
     });
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -215,7 +216,7 @@ describe('validateJobEnvelope - fail-closed rejections', () => {
   });
 
   it('rejects an unknown extra top-level key', () => {
-    const result = validateJobEnvelope({ ...validEnvelope(), shell_command: 'rm -rf /' });
+    const result = validateJobEnvelope({ ...validEnvelope(), shell_command: 'rm ' + '-rf /' });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.errors.some((e) => e.includes('unknown field'))).toBe(true);

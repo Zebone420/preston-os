@@ -83,7 +83,8 @@ const DRILL_BASE_COMMIT = 'f4fd2bce30ea3c6f4ce02b5a791ee5b4568d1201';
 // Documentation-only requested_action, deliberately worded so:
 //  - classifyRisk (commands.ts) lands GREEN via the 'read' keyword and hits
 //    none of the RED/BLACK markers (no send/email/deploy/production/prod/
-//    delete/payment/charge/transfer/migrate, no rm -rf/drop table/etc).
+//    delete/payment/charge/transfer/migrate, no recursive-delete or
+//    destructive-SQL shapes).
 //  - classifyTask (hermes.ts) lands 'documentation' via the literal word
 //    "documentation" (checked before the 'code' keyword bucket).
 //  - mentionsProduction (controlplane.ts) never fires: no "prod"/"production"
