@@ -47,9 +47,11 @@ CRITICAL: do NOT insert these users into public.owners. Verify:
 ## 3. Verification SQL (deny/permit matrix)
 
 Run each block impersonating the identity (dashboard SQL editor "run as" is
-not available - instead sign in as the identity via the token mint procedure
-in PHASE_4B1 packet section C/D pattern, or verify post-cutover from the host
-via db-health + one drill job). Minimum owner-verifiable checks now:
+not available - instead sign in as the identity and use its token per the
+PHASE_4B1 packet sections 6-7 pattern (env file + db-health --bootstrap),
+or verify post-cutover from the host via db-health + one drill job).
+(Citation corrected 2026-07-21: the 4B1 packet has numbered sections, not
+lettered steps.) Minimum owner-verifiable checks now:
 
     -- role function resolves:
     select public.runtime_role();           -- as owner: null (owner has no runtime role)
@@ -67,9 +69,18 @@ Post-cutover behavioral checks (the real proof):
 
 ## 4. Cutover (host, per service)
 
-1. Mint refresh tokens for the two new identities (PHASE_4B1 packet steps C-E,
-   substituting the new emails) into NEW token stores:
-   /var/lib/preston/worker/token-lp.json, /var/lib/preston/hermes/token-lp.json.
+1. Mint refresh tokens for the two new identities (citation corrected
+   2026-07-21 - the procedure is PHASE_4B1 packet sections 6-7,
+   substituting the new emails): obtain each identity's refresh token by
+   signing in as that identity once (owner-run; e.g. Supabase auth
+   password sign-in from a private browser session or the supabase CLI;
+   store the value in the password manager only, never in chat/repo),
+   place it as SUPABASE_RUNTIME_REFRESH_TOKEN in that identity's env
+   file, point SUPABASE_RUNTIME_TOKEN_STORE at the NEW store path
+   (/var/lib/preston/worker/token-lp.json,
+   /var/lib/preston/hermes/token-lp.json), then run
+   db-health --bootstrap as the service user and DELETE the env refresh
+   token line (4B1 section 7).
 2. Edit /etc/preston/worker.env + hermes.env: point
    SUPABASE_RUNTIME_TOKEN_STORE at the new store files. Re-bootstrap each
    (`db-health --bootstrap` as the service user), then remove the env refresh

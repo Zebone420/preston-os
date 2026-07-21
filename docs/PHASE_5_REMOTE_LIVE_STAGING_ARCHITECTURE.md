@@ -133,12 +133,21 @@ Five routes under `apps/dashboard/src/app/api/os/`, each calling
 
 ## 5. Multi-agent orchestration (Phase 5J — in progress, staged in worktree, NOT deployed)
 
-The Phase 5J orchestration work exists only as **uncommitted working-tree
-changes** inside the isolated worktree `/srv/worktrees/wt-5j-orchestration`
-(git branch `phase-5j-orchestration`). It is not committed on that branch,
-not merged to `master`, and not present anywhere on the deployed staging
-host. It is described here for transparency about work in flight, not as a
-deployed capability.
+CORRECTION (2026-07-21, documentation audit): the paragraph below was
+stale when first committed. The Phase 5J orchestration work WAS committed
+to `master` (a2777a1 "feat(5j): add controlled multi-agent staging
+orchestration") before this document's own commit, and the deployed
+staging host is synchronized to a commit containing it. What remains true:
+the orchestration envelope is INERT - migration 0008 is not applied, no
+envelope-bearing job has ever been enqueued, and no agent invocation path
+is enabled (remote_runner_enabled=false). Described for transparency, not
+as an active capability.
+
+Historical text (superseded): The Phase 5J orchestration work exists only
+as uncommitted working-tree changes inside the isolated worktree
+`/srv/worktrees/wt-5j-orchestration` (git branch `phase-5j-orchestration`).
+It is not committed on that branch, not merged to `master`, and not
+present anywhere on the deployed staging host.
 
 Observed there (`git status` in that worktree shows these as modified/untracked):
 

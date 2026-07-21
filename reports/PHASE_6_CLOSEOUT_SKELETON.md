@@ -48,5 +48,7 @@ Safe staging-live operational readiness. NOT unrestricted production autonomy.
 ## Remaining to reach 100%
 
 1. Owner: 1B Stage 2 setup + attestation -> Stage 3 RED wiring -> Stage 4 staging validation.
-2. Owner: Phase 5 remote drill -> all D1-D9 PASS -> attestation + evidence binder.
+2. Owner: Phase 5 drills -> system_controls-surface D1-D12 (5F packet) +
+   5I laptop-closed job drill PASS -> attestation + evidence binder.
+   (Pass bar updated 2026-07-21; env-flag runbook D1-D9 superseded.)
 3. Claude: draft Phase 1B/Phase 5 reports from attestations; finalize this closeout.

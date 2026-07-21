@@ -25,7 +25,10 @@ Top-line: % COMPLETE UNTIL LIVE ~92% | % COMPLETE UNTIL REMOTE LIVE ~74%.
 
 - Item 3: Stage 2 owner setup COMPLETE (attested). Next: Stage 3 RED build (live
   read path behind fail-closed flag), then Stage 4 owner staging activation.
-- Item 7: owner runs the Phase 5 remote drill on staging; all D1-D9 PASS.
+- Item 7: owner runs the Phase 5 drills on staging. (Pass bar updated
+  2026-07-21: the authoritative drill set is the system_controls-surface
+  D1-D12 in PHASE_5_CONTROL_RECOVERY_DRILL_PACKET.md plus the 5I
+  laptop-closed job drill - NOT the superseded env-flag runbook D1-D9.)
 - Item 10: Phase 5 attestation still pending for the evidence binder.
 
 ## What is NOT claimable yet

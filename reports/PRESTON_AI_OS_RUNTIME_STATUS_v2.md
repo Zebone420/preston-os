@@ -72,8 +72,12 @@ Worktree recovery:
   pushes; no force ops.
 
 Dead-letter handling:
-- Jobs exhausting max_attempts move to dead_letters (append-only) with reason +
-  correlation_id. Owner reviews dead_letters; requeue is a fresh command.
+- DESIGNED, NOT WIRED (correction 2026-07-21, operations audit OPS-13):
+  store.insertDeadLetter exists and is tested, but no production code path
+  calls it. A job exhausting attempts today parks as a perpetually-rejected
+  queued row (visible in /os jobs list, never dead_lettered). Wiring the
+  dead-letter move (and an /os surface for it) is a backlog item; until
+  then owner triage = look for queued jobs with high attempt counts.
 
 Global kill switch (always available, no deploy):
     update system_controls set owner_stop=true, execution_enabled=false,

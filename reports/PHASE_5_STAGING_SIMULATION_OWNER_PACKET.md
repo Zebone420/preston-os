@@ -91,7 +91,11 @@ checkpointed jobs, so worker-first timing cannot lose them.
     -- both false, unchanged (nothing executed; nothing may have flipped them)
 
 Also: `sudo tail -5 /var/log/preston/worker.log` shows the firing with
-outcomes:['simulated'] and executed=false.
+a log line whose outcomes array contains "outcome":"simulated" and which
+carries executed=false. (Exact JSON shape, correction 2026-07-21: the
+worker log emits "outcomes":[{"job":"<id>","outcome":"simulated"}] -
+grep for '"outcome":"simulated"' and '"executed":false', not for the
+pseudo-literal outcomes:['simulated'].)
 
 One correlation id now links command -> job -> lease -> attempt -> checkpoint
 -> decision -> event. That is the Phase 5E evidence chain.

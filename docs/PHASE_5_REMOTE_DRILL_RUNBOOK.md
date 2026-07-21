@@ -1,9 +1,24 @@
 # Phase 5 - Remote-Live Drill Runbook (READINESS; owner-run, staging only)
 
-Status: RUNBOOK. This document does not run anything and does not authorize
-activation. Running the drill is a RED, owner-gated activity on the STAGING
-host only. Its purpose is to PROVE each control from the Phase 4 surface so a
-later report may - only if every item passes - record remote-live readiness.
+Status: RUNBOOK - LARGELY SUPERSEDED (2026-07-21, Phase 5 documentation
+audit). The control surface this runbook drills (env flags such as
+DISABLE_ALL_AI_WRITES / OWNER_STOP / REMOTE_RUNNER_ENABLED read by
+remote-control.ts) is NOT the surface the deployed staging runtime uses.
+The deployed systemd worker/Hermes loops read the system_controls DB row
+only. The authoritative, owner-run drill set for the deployed runtime is
+reports/PHASE_5_CONTROL_RECOVERY_DRILL_PACKET.md (D1-D12) plus
+reports/PHASE_5_REMOTE_LIVE_JOB_DRILL_PACKET.md (laptop-closed 5I).
+Runbook items D1-D4/D7 (env-flag surface) are superseded by those
+packets. Items with NO successor evidence yet - D5 max-runtime kill,
+D6 heartbeat-stall auto-halt, D8 apply+revert rollback, D9 results
+review checkpoint - remain OPEN and are tracked in the Phase 5 closeout
+defect/backlog register.
+
+Original status text (historical): this document does not run anything
+and does not authorize activation. Running the drill is a RED, owner-gated
+activity on the STAGING host only. Its purpose was to PROVE each control
+from the Phase 4 surface so a later report may - only if every item
+passes - record remote-live readiness.
 
 Baseline: control surface implemented + unit-tested at ad9ff9f
 (apps/dashboard/src/lib/remote-control.ts). Companion docs:

@@ -48,7 +48,10 @@ owner on preston-agent-staging.
 - Initial: D4 rolled back; queue empty.
 - Action: `sudo systemctl start preston-worker.service` twice, ~1 min apart.
 - Expected: two SUCCESS oneshot runs; iterations=0 (empty queue is a clean no-op).
-- DB evidence: no new rows. Stop: a second concurrent run (RuntimeMaxSec breach).
+- DB evidence: no new rows. Stop: a second concurrent run. (Bound note,
+  correction 2026-07-21: on Type=oneshot the enforced ExecStart bound is
+  TimeoutStartSec=120, not RuntimeMaxSec=300 - see the reboot packet
+  section 8.)
 
 ## D6 - Hermes restart
 - Same as D5 with preston-hermes-observe.service; expect stoppedReason
@@ -132,3 +135,38 @@ owner on preston-agent-staging.
 
 ## D13 - Laptop-closed job simulation
 - This is the Phase 5I drill: reports/PHASE_5_REMOTE_LIVE_JOB_DRILL_PACKET.md.
+
+## Failure triage (added 2026-07-21, operations audit OPS-3/OPS-12)
+
+How to read each abnormal signal, and what to do:
+
+- Unit shows "failed" with status=75/TEMPFAIL: EXPECTED whenever the
+  runtime is paused or owner-stopped (the units deliberately do not
+  declare SuccessExitStatus=75, so a pause is VISIBLE in
+  `systemctl --failed`; recorded decision, not an oversight). Confirm
+  with the last log line (stoppedReason=halted). Action: none if a
+  pause/stop is in effect; otherwise check system_controls.
+- Exit 78 (config): missing/invalid env or an empty/unreadable token
+  store, or db-health staging-allowlist refusal. Action: run
+  `sudo bash deploy/preflight-health.sh` (worker) or with
+  PRESTON_ENV_FILE=/etc/preston/hermes.env
+  PRESTON_SERVICE_USER=preston-hermes (hermes); if the store is empty
+  or its refresh token was consumed, re-provision a fresh refresh token
+  and re-run db-health --bootstrap per 4B1 section 7.
+- Exit 70 (error): auth or read failure against Supabase. Action: check
+  Supabase status, then preflight; if token reuse was detected
+  (revoked family), recovery is the same re-bootstrap as exit 78.
+- Timer inactive / no NEXT entry: `systemctl list-timers 'preston-*'`;
+  re-enable with `sudo systemctl enable --now <timer>`. After a manual
+  `systemctl stop <timer>` (D4 kill), this is expected until rollback.
+- Job stuck in leased: the next worker firing sweeps expired leases
+  back to queued (recovered counter in the log). If it persists past
+  lease TTL + one cadence, check the worker unit is firing at all.
+- attempts climbing on one job: resolveResume is rejecting its
+  checkpoint (corrupt/foreign). The job never dead-letters today
+  (dead_letters is designed, NOT wired - RUNTIME_STATUS_v2 correction).
+  Action: owner sets cancel_requested via /api/os/jobs/cancel or SQL,
+  then investigates the checkpoint row.
+- Nothing new processing while controls show false/false: check paused
+  did not stick (D2 resume clears paused+owner_stop in one update);
+  then check timers; then journalctl for 78/70 lines.

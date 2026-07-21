@@ -32,7 +32,9 @@ hermes_mode='observe_only', execution_enabled=false, remote_runner_enabled=false
        journalctl -u preston-hermes-observe.service --since "<disconnect time>" --no-pager
        sudo tail -40 /var/log/preston/worker.log /var/log/preston/hermes.log
    Expect: bounded SUCCESS firings the whole window; one firing with
-   outcomes:['simulated']; a 75-exit around the pause; recovery after resume.
+   one firing whose log line contains "outcome":"simulated" (JSON shape:
+   "outcomes":[{"job":"<id>","outcome":"simulated"}]); a 75-exit around
+   the pause; recovery after resume.
 8. EVIDENCE CHAIN (SQL): run the 5E packet step-5 query block for
    drill5i-001. Every table (command packet, job, lease, attempt, checkpoint,
    decision, event) must return its row, all linked by correlation_id

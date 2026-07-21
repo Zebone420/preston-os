@@ -198,6 +198,31 @@ dashboard process that reads the env var.
 
 ## 9. Validation steps (OWNER-RUN, curl, placeholder token/host)
 
+KNOWN LIMITATIONS (2026-07-21 audit findings ARCH-1/SEC-9/DOCS-1; the
+happy-path steps below CANNOT succeed until these are resolved at the
+connector ACTIVATION gate - defer this section until then):
+
+1. Gate coupling: bridges/chatgpt.ts intakeChatGpt returns 'stopped'
+   whenever isHalted() is true, and isHalted includes
+   execution_enabled !== true. Under the standing staging posture
+   (execution_enabled=false) every well-formed request gets 503
+   'stopped', so a live proposal trace is IMPOSSIBLE without either
+   (a) regating intake on owner_stop/paused only (recommended;
+   proposals are non-executing and default-deny - matches the owner
+   /api/os/command path), or (b) enabling execution (NOT acceptable
+   for a proposal-only validation). This is a circular precondition
+   with the promotion criterion "connector traced before activation";
+   the criterion is deferred accordingly.
+2. DB client wiring: the route builds its DB access from the
+   cookie-session server client (getServerSupabase). A server-to-server
+   bearer request carries no owner session cookie, so RLS yields no
+   controls row and the intake fails closed to 'stopped' regardless of
+   (1). Activation requires a dedicated runtime identity client for
+   this route (owner-gated design decision).
+
+Steps 1-5 below that only exercise the fail-closed guards (disabled /
+unconfigured / 401s / 413 / malformed JSON) remain valid today.
+
 All of the following are OWNER-RUN against STAGING only.
 
     # 1. Confirm disabled-by-default posture (before setting any env var):

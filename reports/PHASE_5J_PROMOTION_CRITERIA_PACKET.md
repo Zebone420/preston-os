@@ -51,6 +51,14 @@ sufficient if the underlying evidence row was never actually filled in.
       and demonstrably never leases, executes, or bypasses the owner
       allowlist. Evidence: one real ChatGPT-sourced proposal traced end-to-end
       to a queued (not executed) job.
+      DEFERRED (2026-07-21 ruling, audit findings DOCS-1/ARCH-1/SEC-9):
+      as wired, this trace is IMPOSSIBLE under the standing posture -
+      intakeChatGpt couples proposal acceptance to execution_enabled=true
+      and the route's cookie-session DB client carries no session on a
+      bearer request. Both fixes are connector-ACTIVATION-gate work (see
+      PHASE_5J_CHATGPT_CONNECTOR_PACKET.md section 9 KNOWN LIMITATIONS).
+      This criterion moves from the Phase 5 closeout bar to the connector
+      activation gate; Phase 5 records the fail-closed guard tests only.
 - [ ] Hermes observe-only verified over N unattended cycles, where N is
       owner-set (suggested floor: at least 50 consecutive observe-only
       firings spanning at least 48 continuous hours of enabled-timer

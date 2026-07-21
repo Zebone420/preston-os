@@ -38,7 +38,11 @@ Also capture token-store ownership/permissions ONLY (never the file contents
 or any printed value):
 
     stat -c '%U:%G %a %n' /var/lib/preston/worker /var/lib/preston/hermes
-    stat -c '%U:%G %a %n' /var/lib/preston/worker/token.json /var/lib/preston/hermes/token.json
+    # Token-store FILE paths are env-configured, not literal token.json
+    # (defect #3 correction). Resolve each identity's configured path first:
+    sudo grep -h '^SUPABASE_RUNTIME_TOKEN_STORE=' /etc/preston/worker.env
+    sudo grep -h '^SUPABASE_RUNTIME_TOKEN_STORE=' /etc/preston/hermes.env
+    stat -c '%U:%G %a %n' <resolved worker store> <resolved hermes store>
 
 Record: current HEAD sha, repo clean/dirty state, whether both timers show
 `enabled`, and the ownership/perm string for each path above (expect service
@@ -99,9 +103,12 @@ table in section 4.
    Expect the SAME HEAD sha as section 1, and the SAME clean/dirty state (a
    reboot never touches the working tree; any difference is a stop condition
    to investigate, not something this drill causes).
-9. Token stores intact - ownership/perms only, values never printed:
+9. Token stores intact - ownership/perms only, values never printed.
+   Use the CONFIGURED store paths resolved in the section-1 baseline
+   (SUPABASE_RUNTIME_TOKEN_STORE in each env file - literal token.json
+   is an example, not a contract; defect #3 correction):
        stat -c '%U:%G %a %n' /var/lib/preston/worker /var/lib/preston/hermes
-       stat -c '%U:%G %a %n' /var/lib/preston/worker/token.json /var/lib/preston/hermes/token.json
+       stat -c '%U:%G %a %n' <resolved worker store> <resolved hermes store>
    Expect an EXACT match to the section-1 baseline (service user:group, `700`
    dirs, `600` files). The successful db-health run in step 7 and the worker
    cycle in step 5 each perform an atomic rotate-and-rewrite of their token
