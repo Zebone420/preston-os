@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AuditSink } from '../src/lib/audit';
 import { normalizeCommand } from '../src/lib/ai-os/commands';
-import { createCommandProposal } from '../src/lib/ai-os/controlplane';
+import { createCommandProposal, submitCommandProposal } from '../src/lib/ai-os/controlplane';
 import { processChatGptIntake } from '../src/app/api/os/chatgpt/route';
 import {
   insertCommandPacket,
@@ -148,6 +148,30 @@ describe('controlplane.createCommandProposal - duplicate surfaces the authoritat
     expect(r.ok).toBe(true);
     expect(r.code).toBe('duplicate');
     expect(r.id).toBe(STORED_ID);
+  });
+});
+
+describe('controlplane.submitCommandProposal - owner-route duplicate surface (audit F5)', () => {
+  it('a replayed owner submission surfaces the stored row id, not the fresh route id', async () => {
+    const { client } = dupClient({
+      idempotency_key: { data: [{ id: STORED_ID }], error: null },
+    });
+    const r = await submitCommandProposal(
+      {
+        client, audit: nullAudit,
+        env: { OWNER_EMAIL_ALLOWLIST: 'info@preston.nyc' }, now: NOW,
+      },
+      {
+        ownerEmail: 'info@preston.nyc', source: 'dashboard',
+        requested_action: 'read status', target_project: 'preston-os',
+        target_repository: 'preston-os', correlation_id: 'corr-abc12345',
+        idempotency_key: 'idem-abc12345', commandId: FRESH_ID,
+      },
+    );
+    expect(r.ok).toBe(true);
+    expect(r.code).toBe('duplicate');
+    expect(r.id).toBe(STORED_ID);
+    expect(r.id).not.toBe(FRESH_ID);
   });
 });
 
