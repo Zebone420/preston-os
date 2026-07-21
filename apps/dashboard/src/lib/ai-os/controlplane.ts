@@ -220,7 +220,18 @@ export async function enqueueStagingJob(
       { actor, action: 'job_enqueue_rejected:not_green', action_class: 'YELLOW', detail: { command_id: input.command_id, action_class: String(packet['action_class']) } },
       { supabase: deps.audit },
     );
-    return { ok: false, code: 'not_green', message: 'staging jobs require a GREEN command' };
+    // Owner guidance (defect #2 follow-up): classification is deliberately
+    // default-deny - a phrase with no explicit read-only verb lands YELLOW.
+    // Tell the owner what class this command got and how to rephrase, instead
+    // of a bare refusal. Never weakens the gate itself.
+    return {
+      ok: false,
+      code: 'not_green',
+      message: 'staging jobs require a GREEN command; this command is classified '
+        + String(packet['action_class'])
+        + '. Classification is default-deny: rephrase requested_action as an explicitly '
+        + 'read-only step (e.g. "read repository status") or use the approval path.',
+    };
   }
   if (mentionsProduction(
     String(packet['requested_action'] ?? ''),
