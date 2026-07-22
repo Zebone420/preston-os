@@ -9,9 +9,13 @@ wait for a future owner-approved gate.
 - Airtable corrections (after rulings): 25/25/50 payment policy fix;
   1.08876 tax multiplier fix; CC-fee formula after V3 ruling; markup
   placeholder after V4 ruling.
-- CLAUDE.md: update the outdated line saying the master plan is
-  local/untracked (it is committed at 1878120).
+- (DONE 2026-07-05 era; stale entry retired 2026-07-21) CLAUDE.md
+  master-plan line already reads "committed ... at commit 1878120".
 - V5-V7 verification session; V9 re-verify at Phase 4 entry.
+  V5 (NJ 6.625%) gained urgency 2026-07-21: the Phase 6 quote
+  engine uses 6.625% as prompt-canonical with a mandatory
+  owner-confirmation flag on every NJ draft; a dated register
+  ruling retires the flag.
 - GitHub Actions CI: lint + guard tests on every push.
 - Supabase RLS tightening: replace staging-permissive policies with
   owner-only auth policies once the owner user exists (0B session).
@@ -29,6 +33,22 @@ wait for a future owner-approved gate.
   owner-only login (Supabase auth) or the alias protected (Vercel Pro
   "All Deployments" or Password Protection). Never enable live reads
   while the alias is publicly readable.
+- Phase 6 follow-on gates (recorded 2026-07-21, Business Command
+  Center V1 closeout):
+  - Owner-run: push e408f21..7c0fbf9, apply migration 0009,
+    staging deployment + A-H verification (packets in reports/).
+  - Business data intake gate: provenance-tracked import of real
+    Airtable TEST records into the business tables (read-only
+    source; owner-approved mapping).
+  - Real-quote gate: proposal/PDF from an approved draft; needs
+    V3 (CC fee) + V4 (markup) rulings and a migration lifting the
+    simulation CHECK pins (RED gate).
+  - Outbound communication gate: any send path stays RED and
+    needs template review + approval/audit design per the master
+    plan.
+  - Deferred data model items: measurements on quote items,
+    client decision + win/loss reason, document/photo records
+    (see docs/PRESTON_BUSINESS_DATA_DICTIONARY_v1.md deferrals).
 - Owner-login gate (Phase 1B, closed 2026-07-08): app-level owner-only
   login is now enforced by apps/dashboard/src/proxy.ts with decisions
   in src/lib/owner-auth.ts (unit-tested). Fail-closed on all axes:
