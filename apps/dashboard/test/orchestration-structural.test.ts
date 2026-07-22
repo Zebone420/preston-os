@@ -18,6 +18,9 @@ const ORCH_FILES = [
   'src/lib/ai-os/orchestration/goal-intake.ts',
   'src/lib/ai-os/orchestration/orchestrator-sim.ts',
   'src/lib/ai-os/orchestration/crypto-binding.ts',
+  'src/lib/ai-os/orchestration/store.ts',
+  'src/lib/ai-os/orchestration/transitions.ts',
+  'src/lib/ai-os/orchestration/worktree-lock.ts',
 ];
 
 const SPAWN = [
