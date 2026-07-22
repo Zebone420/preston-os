@@ -155,18 +155,26 @@ create table if not exists orchestration_approvals (
   rollback_plan text not null,
   action_hash text not null,
   owner_identity text not null,
-  nonce text not null,
+  -- The DECISION nonce (one-time replay guard). NULL while pending (no
+  -- decision yet); set non-null exactly once when the owner decides. A
+  -- PARTIAL unique index (below) enforces one-time semantics on real nonces
+  -- while allowing many pending rows. (A plain unique(nonce) + NOT NULL would
+  -- make it impossible to insert a pending approval.)
+  nonce text,
   status text not null default 'pending'
     check (status in ('pending','approved','rejected','expired','more_info')),
   created_at timestamptz not null default now(),
   expires_at timestamptz not null,
   decided_at timestamptz,
   -- envelope integrity: expiry must be after creation.
-  check (expires_at > created_at),
-  unique (nonce)
+  check (expires_at > created_at)
 );
 create index if not exists idx_orchestration_approvals_status
   on orchestration_approvals (status, expires_at);
+-- Durable replay guard: a decision nonce is unique across all approvals.
+-- Partial (WHERE nonce is not null) so pending rows (null nonce) never clash.
+create unique index if not exists uq_orchestration_approvals_nonce
+  on orchestration_approvals (nonce) where nonce is not null;
 
 -- ============================================================
 -- RLS: owner-only via public.is_owner(); anon fully revoked; no

@@ -80,11 +80,15 @@ describe('migration 0010 - orchestration', () => {
     expect(sql).toMatch(/grant update \(status, decided_at, nonce\) on orchestration_approvals/);
   });
 
-  it('requires a non-null unique nonce and expiry-after-creation', () => {
-    const block = sql.slice(sql.indexOf('create table if not exists orchestration_approvals'));
-    const body = block.slice(0, block.indexOf(');'));
-    expect(body).toMatch(/nonce text not null/);
-    expect(body).toMatch(/check \(expires_at > created_at\)/);
-    expect(body).toMatch(/unique \(nonce\)/);
+  it('uses a nullable decision nonce with a PARTIAL unique index', () => {
+    // nonce is NULL while pending (a plain NOT NULL would block pending
+    // inserts); uniqueness is enforced only on real decision nonces via a
+    // partial unique index. Asserted against the full SQL for robustness.
+    expect(sql).toMatch(/\n\s*nonce text,\n/);
+    expect(sql).not.toMatch(/nonce text not null/);
+    expect(sql).toMatch(/check \(expires_at > created_at\)/);
+    // no table-level unique(nonce) constraint (a partial index instead)
+    expect(sql).not.toMatch(/\n\s*unique \(nonce\)\n/);
+    expect(sql).toMatch(/create unique index if not exists uq_orchestration_approvals_nonce\s+on orchestration_approvals \(nonce\) where nonce is not null/);
   });
 });
