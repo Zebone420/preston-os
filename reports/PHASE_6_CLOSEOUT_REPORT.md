@@ -10,8 +10,9 @@ Author: Claude Code (implementation engineer)
   documented, committed. Owner-run steps (push, migration,
   deployment) intentionally remain open.
 - Commits: e408f21, 03af1b2, 2cd8eba, b878e52, 3d4b80b, 7c0fbf9
-  (starting commit 04c3c75; ending commit 7c0fbf9; local,
-  UNPUSHED - owner pushes).
+  (code end), fe8f204 (closeout docs), plus this correction
+  commit. Starting commit 04c3c75. All local, UNPUSHED - owner
+  pushes the full range 04c3c75..master head.
 - Files changed: 35 (+~9.1k lines). New: migration 0009, optional
   staging fixtures, 8 business library modules, 8 business UI
   surfaces + shared components, 6 test files (+87 tests), 4 docs,
@@ -68,7 +69,8 @@ resubmission UX. Full register: reports/PHASE_6_DEFECT_REGISTER.md.
 ## Owner actions (exact sequence)
 
 1. Review this closeout + reports/PHASE_6_TEST_AND_AUDIT_REPORT.md.
-2. Push e408f21..7c0fbf9 to origin/master (owner terminal).
+2. Push the full local range (04c3c75..master head) to
+   origin/master (owner terminal).
 3. Apply migration 0009 in Supabase STAGING per
    reports/PHASE_6_MIGRATION_0009_OWNER_PACKET.md; run its
    verification SQL; paste outputs into
