@@ -46,24 +46,24 @@ reports/OWNER_EVIDENCE_COLLECTION_PACKET_V2.md
 | Dimension | Status |
 |---|---|
 | Local references | DONE (zero) |
-| Retention/expiry risk | PENDING-P1a (TIME-SENSITIVE) |
-| Data size/content | PENDING-P1b/c |
+| Retention/expiry risk | DONE 2026-07-21: resume deadline 28 Sep 2026; download stated available after; decide unpause+export by early Sep |
+| Data size/content | PENDING (not shown while paused; needs unpause gate) |
 | Workflow references to it | PENDING-P3b |
-| Backup + restore proof | PENDING-P1c + template |
-| Unique value (only processed copy?) | PENDING-P1c vs P2 vault |
-| Cost | PENDING-P6 (likely $0 paused) |
+| Backup + restore proof | PENDING - export requires unpause (owner gate) |
+| Unique value (only processed copy?) | PENDING - export vs P2 vault comparison |
+| Cost | DONE (Free Plan; $0) |
 
 ## Supabase preston-ai-pathc-dev
 
 | Dimension | Status |
 |---|---|
 | Local references | DONE (zero anywhere) |
-| Purpose/origin | PENDING owner statement (P1 notes) |
-| Retention risk | PENDING-P1a |
-| Data size | PENDING-P1b |
-| Backup | PENDING-P1c |
+| Purpose/origin | PARTIAL - owner: "no confirmed purpose, likely legacy dev/experiment" (unverified; stays INVESTIGATE) |
+| Retention risk | DONE 2026-07-21: resume deadline 23 Sep 2026 |
+| Data size | PENDING (not shown while paused) |
+| Backup | PENDING - export requires unpause (owner gate) |
 | External references | PENDING-P3b (none expected) |
-| Cost | PENDING-P6 |
+| Cost | DONE (Free Plan; $0) |
 
 ## Hetzner preston-agent-staging
 

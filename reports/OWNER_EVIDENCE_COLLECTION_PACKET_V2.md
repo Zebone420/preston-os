@@ -22,7 +22,20 @@ Global rules for every item:
 Ordered by system to minimize context switching. Items D and the
 D-flag are the only TIME-SENSITIVE parts - do them first.
 
-## 1 (item D) - Supabase paused projects (~10 min, dashboard only)
+## 1 (item D) - Supabase paused projects - STATUS: PARTIAL
+## (metadata DONE 2026-07-21; exports blocked: require unpause)
+
+Owner evidence received and reconciled (registers updated).
+Remaining for item 1: nothing the owner can do read-only. The
+exports now depend on a separate UNPAUSE-AND-EXPORT owner gate
+(both projects: "requires unpause"), which must be scheduled
+before the resume deadlines - preston-ai-pathc-dev 23 Sep 2026,
+preston-ai-andersen 28 Sep 2026. That gate will be issued as its
+own packet after items 2-3 return (workflow/repo evidence may
+change what needs exporting). Original instructions retained
+below for reference.
+
+## 1-ORIGINAL (item D) - Supabase paused projects (~10 min, dashboard only)
 
 Purpose: establish whether unique data exists, its size, and any
 retention countdown BEFORE any other decision; capture staging

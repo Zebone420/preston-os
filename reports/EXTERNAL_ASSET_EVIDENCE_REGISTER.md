@@ -57,18 +57,45 @@ Template per asset:
   Disposition (current): INVESTIGATE -> DELETE CANDIDATE.
 
 ## Supabase: preston-ai-andersen (paused, us-west-2)
-  State (owner-verified): paused.
-  Disposition (current): RETAIN PAUSED -> export -> MIGRATE (P-1)
-  -> then delete candidate.
+  State (owner-verified 2026-07-21): paused; Organization Free
+  Plan; paused-since not shown; DB/storage sizes not shown while
+  paused.
+  Evidence files: C:\dev\legacy-audit\supabase\paused-projects.txt
+  RETENTION (owner-quoted dashboard banner): resumable within 69
+  days, until 28 Sep 2026; "After that, this project will not be
+  resumable, but data will still be available for download."
+  Dashboard states all data incl. backups and storage objects
+  remains safe; Free Plan has no scheduled backups.
+  Backup: export REQUIRES UNPAUSE (owner gate; not performed).
+  Deadline interpretation: resume-capability expires 28 Sep 2026;
+  per the banner, download remains available after - but the
+  UNPAUSE-AND-EXPORT decision should be made comfortably before
+  the deadline (recommended: decide by early Sep 2026).
+  Disposition (current): RETAIN PAUSED -> owner unpause+export
+  gate (before 2026-09-28) -> MIGRATE (P-1) -> then delete
+  candidate.
 
 ## Supabase: preston-ai-pathc-dev (paused, us-west-2)
-  State (owner-verified): paused.
-  Disposition (current): INVESTIGATE -> DELETE CANDIDATE
-  (evidence-gated).
+  State (owner-verified 2026-07-21): paused; Organization Free
+  Plan; paused-since not shown; sizes not shown while paused.
+  Evidence files: C:\dev\legacy-audit\supabase\paused-projects.txt
+  RETENTION (owner-quoted): resumable within 64 days, until
+  23 Sep 2026; data downloadable after per banner.
+  Purpose (owner statement): "No confirmed purpose. Likely legacy
+  development or experiment" - unverified; remains INVESTIGATE.
+  Backup: export REQUIRES UNPAUSE (owner gate; not performed).
+  Disposition (current): INVESTIGATE -> owner unpause+export gate
+  (before 2026-09-23) -> DELETE CANDIDATE (evidence-gated).
 
 ## Supabase: preston-os-staging (active nano, us-east-1)
-  State (verified): active; authoritative staging.
-  Disposition (current): RETAIN (checklist runs as control).
+  State (verified + owner-verified 2026-07-21): active;
+  Organization Free Plan, NANO compute; database usage 27.83 MB
+  of 500 MB.
+  FINDING (new, LA-10): "Last Backup: No backups." - the
+  authoritative staging database has NO backups (Free Plan has no
+  scheduled backups). See defect register LA-10.
+  Disposition (current): RETAIN (checklist runs as control);
+  backup remediation options go to the owner with packet results.
 
 ## Hetzner: preston-agent-staging (168.119.153.173)
   State (owner-verified): active; Phase 5 proven.

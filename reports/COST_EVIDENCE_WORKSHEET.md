@@ -11,9 +11,9 @@ numbers.
 | 2 | Hetzner | gmail-dev-n8n CPX22 | - | - | - | - | |
 | 3 | Hetzner | ubuntu-4gb-fsn1-2 CPX22 | - | - | - | - | |
 | 4 | Hetzner | snapshots/backups/IPs | - | - | - | - | surcharge lines |
-| 5 | Supabase | preston-os-staging | - | - | - | - | |
-| 6 | Supabase | preston-ai-andersen (paused) | - | - | - | - | expect 0 |
-| 7 | Supabase | preston-ai-pathc-dev (paused) | - | - | - | - | expect 0 |
+| 5 | Supabase | preston-os-staging | Org Free Plan, nano | $0 | $0 | 2026-07-21 | no backups incl. (LA-10) |
+| 6 | Supabase | preston-ai-andersen (paused) | Org Free Plan | $0 | $0 | 2026-07-21 | resume deadline 28 Sep 2026 |
+| 7 | Supabase | preston-ai-pathc-dev (paused) | Org Free Plan | $0 | $0 | 2026-07-21 | resume deadline 23 Sep 2026 |
 | 8 | Vercel | staging project | - | - | - | - | expect Hobby 0 |
 | 9 | Registrar | prestonwd.com renewal | - | - | - | - | |
 | 10 | Registrar | preston.nyc renewal | - | - | - | - | .nyc premium? |
