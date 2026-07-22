@@ -23,6 +23,7 @@ const ORCH_FILES = [
   'src/lib/ai-os/orchestration/worktree-lock.ts',
   'src/lib/ai-os/orchestration/worktree-lock-store.ts',
   'src/lib/ai-os/orchestration/driver.ts',
+  'src/lib/ai-os/orchestration/read-model.ts',
 ];
 
 const SPAWN = [

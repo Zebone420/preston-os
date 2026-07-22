@@ -31,6 +31,28 @@ validation. Claude performs none of these steps.
   halt, concurrent worktree race, stale takeover + fencing, dirty/
   branch-collision rejection.
 
+## Architecture (ChatGPT review, 2026-07-22) - SINGLE source of truth
+
+Reuse the proven Phase 5 runtime; do NOT create a second lease/
+checkpoint/dispatcher subsystem. Canonical records:
+- runtime job + LEASE: os_jobs (goal_jobs.runtime_job_id links a
+  Phase-7 job to its os_jobs row; the worker leases the os_jobs
+  row via the EXISTING leases.ts + store lease adapters, fenced).
+- restart CHECKPOINT: job_checkpoints (existing checkpoint.ts).
+- worktree allocation + fence: repository_worktrees (the Phase 7
+  worktree-lock-store; NOT the generic locks table).
+- orchestration goal/job state: the Phase 7 goal tables (0010).
+- approval state: orchestration_approvals.
+The generic locks table is only for short-lived cross-cutting
+mutexes without an authoritative resource row.
+
+The durable worker therefore, per ready goal_job: enqueue/lease
+an os_jobs row (reuse), acquire the repository_worktrees worktree
+lock (built), simulate + checkpoint (reuse job_checkpoints),
+CAS the goal_job (built), release lock + lease. Restart re-reads
+os_jobs + goal_jobs status (loadGoalState) and resumes. This adds
+NO new lease/checkpoint/dispatcher code - only the mapping.
+
 ## Owner-run deployment (G-D3)
 
 1. On the host, build the dispatcher (existing
