@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
+import { signOutOwner } from '@/app/business/actions';
 
 // Shared Business Command Center presentation pieces (server-safe,
 // no client JS). Follows the established dark-slate idiom. These
@@ -46,6 +47,11 @@ export function BusinessShell({
           <Link href="/" className="text-sm text-slate-500 underline">
             Home
           </Link>
+          <form action={signOutOwner}>
+            <button className="text-sm text-slate-500 underline">
+              Sign out
+            </button>
+          </form>
         </nav>
       </header>
       {children}

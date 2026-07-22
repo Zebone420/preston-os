@@ -57,7 +57,8 @@ UI (apps/dashboard/src/app/business/ + components/business/ui.tsx):
                        typed input), createBusinessClient,
                        createSalesLead, moveLeadStage,
                        recordPaymentEvent, refreshRecommendations,
-                       decideRecommendation
+                       decideRecommendation, signOutOwner (ends the
+                       Supabase session, lands on /login)
 - quotes/quote-form.tsx client component for the agent form
                        (pending-disabled submit; no input loss)
 - /approvals (extended) renders approval_links context and

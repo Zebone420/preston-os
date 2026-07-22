@@ -19,6 +19,7 @@ const BUSINESS_FILES = [
   'src/lib/business/page-data.ts',
   'src/app/business/actions.ts',
   'src/app/business/quotes/quote-form.tsx',
+  'src/lib/sign-out.ts',
 ];
 
 // Process-spawning surface ('child' + '_process' split so this file

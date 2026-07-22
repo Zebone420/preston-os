@@ -29,6 +29,10 @@ simulation-only, and reversible.
    "SETUP MODE").
    STOP IF: SETUP MODE shows while signed in - env vars are
    missing on the deployment; do not proceed.
+3. Click "Sign out" in the /business header nav.
+   EXPECT: you land on /login; opening /business now redirects
+   back to /login (session ended). Sign in again to continue.
+   EVIDENCE V1b: yes/no.
 
 ## Step 2 - Empty-state sweep (2 min; skip if fixtures applied)
 

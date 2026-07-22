@@ -7,6 +7,11 @@ import { logAudit } from '@/lib/audit';
 import { resolveOwner } from '@/lib/ai-os/owner-context';
 import type { OwnerContext } from '@/lib/ai-os/owner-context';
 import {
+  performSignOut,
+  type AuthSignOutClient,
+} from '@/lib/sign-out';
+import { getServerSupabase } from '@/lib/supabase/server';
+import {
   BUSINESS_TABLES,
   insertActivityEvent,
   insertBusinessRecord,
@@ -523,6 +528,24 @@ export async function recordPaymentEvent(formData: FormData) {
           : 'Payment could not be saved - ' + (res.error ?? 'error'),
       ),
   );
+}
+
+// ---------------------------------------------------------------
+// Session
+// ---------------------------------------------------------------
+
+// Owner sign-out: ends the Supabase session (SSR client clears its
+// auth cookies) and lands on /login. Needs no owner pre-check -
+// ending your own session is always safe, and a signed-out user
+// hitting this is a no-op redirect. If signOut itself fails the
+// session survives, which is visible: /login bounces a still-
+// authenticated owner back home.
+export async function signOutOwner() {
+  const supabase = await getServerSupabase();
+  await performSignOut(
+    supabase as unknown as AuthSignOutClient | null,
+  );
+  redirect('/login');
 }
 
 // ---------------------------------------------------------------
