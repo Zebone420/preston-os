@@ -46,10 +46,15 @@ wait for a future owner-approved gate.
   - OPEN: platform consolidation evidence - Sessions A-D per
     reports/OWNER_EVIDENCE_SESSIONS_A_D_PACKET.md (Item 1 done;
     supersedes the per-item packets).
-  - OPEN owner decisions (briefs issued 2026-07-21): paused
+  - OPEN owner decision (brief issued 2026-07-21): paused
     Supabase unpause+export session (decide by 08-01, execute by
-    08-15; hard deadlines 23/28 Sep 2026) and staging backup
-    option LA-10 (first manual export THIS WEEK recommended).
+    08-15; hard deadlines 23/28 Sep 2026).
+  - (APPROVED IN PRINCIPLE 2026-07-22) Staging backup Option 4
+    (LA-10). OPEN owner-run: first backup per
+    reports/STAGING_FIRST_BACKUP_OWNER_PACKET.md (Path B
+    pg_dump recommended); then the backup-role/pg_dump-runbook
+    engineering gate and the scratch-restore test (within 2
+    weeks of the first backup).
   - Retirement approvals: ZERO issued (Round 1 audit) - all
     deletion candidates evidence-blocked; see
     reports/FINAL_DISPOSITION_REGISTER.md.

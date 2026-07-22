@@ -1,4 +1,17 @@
 # STAGING BACKUP (LA-10) - OWNER DECISION BRIEF
+#
+# STATUS 2026-07-22: OWNER APPROVED Option 4 IN PRINCIPLE
+# (planning/packet scope only): immediate manual backup stored
+# outside the repo; later daily pg_dump via an owner-created
+# least-privilege backup role; off-host copy; scratch-project
+# restore test within two weeks; provider-managed backups
+# reconsidered at the production-pilot gate.
+# First-backup packet issued:
+# reports/STAGING_FIRST_BACKUP_OWNER_PACKET.md (recommended
+# path: B, owner-run pg_dump - the Free Plan dashboard offers no
+# full export for an active project). The pg_dump runbook +
+# backup-role SQL packet and the restore-test packet follow as
+# separate documents after the first backup's evidence returns.
 
 Date: 2026-07-21. Finding: preston-os-staging - the authoritative
 staging database (business records, quotes, approvals, audit

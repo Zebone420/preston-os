@@ -22,7 +22,7 @@ Row format:
 | ubuntu-4gb-fsn1-2 (full) | whole server (unknown content) | Hetzner snapshot BEFORE quarantine | - | - | - | rebuild from snapshot | - | quarantine +30d |
 | andersen-graph repo | full history | owner clone (packet 2b) | - | - | - | git push to new remote | - | permanent |
 | andersen-vault repo | full history + docs | owner clone | - | - | - | git push to new remote | - | permanent (licensing-restricted) |
-| preston-os-staging (control row) | operational DB (27.83 MB) | NONE - "No backups" (Free Plan; finding LA-10) | - | - | - | none exists; remediation options with owner | - | pending owner decision |
+| preston-os-staging (control row) | operational DB (27.83 MB): 42 public tables, functions, RLS, grants; auth if readable; NO storage objects | owner-run pg_dump -Fc per reports/STAGING_FIRST_BACKUP_OWNER_PACKET.md (Option 4 approved in principle 2026-07-22; Path B recommended) | - | C:\dev\legacy-audit\supabase\preston-os-staging-first-export\ + off-host copy (location TBD) | - (record bytes+SHA256) | scratch-project restore ONLY (packet to follow; never into staging) | due within 2 weeks of first backup | until superseded by scheduled dumps |
 
 Rules: a backup nobody can restore is not a backup - the restore
 procedure column must point at written steps; at least one
