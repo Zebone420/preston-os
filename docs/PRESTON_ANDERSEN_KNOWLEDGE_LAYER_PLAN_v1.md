@@ -1,10 +1,13 @@
-# PRESTON ANDERSEN KNOWLEDGE LAYER - EXECUTION PLAN v1
+# PRESTON ANDERSEN KNOWLEDGE LAYER - EXECUTION PLAN v2
 # (documentation only - nothing here is implemented yet)
 
-Date: 2026-07-21. Status: DESIGNED (not coded, not tested, not
-deployed). Implements integration proposal P-1. Prerequisites:
-owner evidence packet V2 items 1-3 (Supabase export, repo clones,
-WF-1/WF-3 exports) and an owner-approved ADR at the build gate.
+Date: 2026-07-21 (v2 - implementation-ready for gates G2-G3 once
+Sessions A/B evidence and the paused-project export return).
+Status: DESIGNED (not coded, not tested, not deployed).
+Implements integration proposal P-1. v2 adds: source authority
+hierarchy, the draft ADR text for G2, data classification,
+access/tenant boundaries, backup-before-migration requirement,
+and legacy shutdown dependencies.
 
 ## 1. Purpose
 
@@ -24,6 +27,15 @@ inference (agent-contract criterion 18 remains binding).
 | WF-1 export | ingestion pipeline design (chunking, embedding model, destinations) | design reference |
 | WF-3 export | retrieval + answering design (query shape, prompt, model) | design reference |
 | Owner knowledge | which product lines matter now | scoping authority |
+
+Source AUTHORITY HIERARCHY (conflicts resolve downward):
+1. Owner rulings (scope, product lines, corrections).
+2. Vault raw vendor documents (ground truth for content).
+3. Graph repo ontology (structure - adapted, not copied blind).
+4. Legacy Supabase processed rows (verification corpus only;
+   never authoritative over raw documents).
+5. WF-1/WF-3 exports (design reference only - their parameters
+   inform, never dictate, the new pipeline).
 
 ## 3. Document provenance model
 
@@ -139,6 +151,58 @@ drop the knowledge schema/generation (operational schemas are
 untouched by design); legacy exports and the paused project (if
 not yet retired) remain intact. Nothing in this plan can affect
 quotes, approvals, execution flags, or any external system.
+
+## 15. Draft ADR for gate G2 (ready for owner approval)
+
+DECISION: where does the knowledge store live?
+- Option A (RECOMMENDED): a dedicated `knowledge` schema inside
+  the preston-os-staging Supabase project. Pros: one project to
+  operate/back up (LA-10 remediation covers it), the owner RLS
+  machinery (is_owner) is already there, zero new billing, staging
+  isolation preserved by schema separation + migration-gated DDL.
+  Cons: shares the 500 MB free-tier budget (current usage 27.83
+  MB; embeddings for a few hundred documents fit comfortably -
+  re-check at G4 with real document counts).
+- Option B: a dedicated Supabase knowledge project. Pros: hard
+  blast-radius separation, independent lifecycle. Cons: second
+  project to secure/back up/pay for, duplicated auth setup, the
+  exact orphaned-project pattern this consolidation program is
+  retiring.
+ADR RECOMMENDATION: Option A, revisited only if G4 shows the
+corpus exceeding ~250 MB projected. Approval line for the owner:
+"OWNER APPROVES knowledge schema in preston-os-staging (Option A)
+- date ____".
+
+## 16. Data classification and boundaries
+
+Classes: vendor_confidential (Andersen documents/chunks - never
+client-facing, never redistributed, never in the repo),
+owner_internal (ontology, provenance, eval sets - repo-safe),
+operational (nothing - the knowledge layer never stores client or
+quote data; the boundary is one-way: quote surfaces may READ
+knowledge answers later via an owner-gated feature, knowledge
+never reads business tables). Access: owner-only end to end
+(is_owner RLS + page gating); single-tenant by design - any
+future staff access is a new gate with new roles, not a widening
+of this layer.
+
+## 17. Backup-before-migration requirement (hard gate input)
+
+G3 cannot start until: (a) the paused-project export exists
+(decision brief; execute by 2026-08-15), (b) both repo clones
+exist (Session A), (c) the staging first manual export exists
+(LA-10 brief step 2 - because Option A lands the schema inside
+staging, staging must have a restore point BEFORE the knowledge
+migration is applied). These are exactly the backup-register rows
+marked for this plan.
+
+## 18. Legacy shutdown dependencies (what this plan unblocks)
+
+Completion of G6 parity is the SOLE unlock for retiring Supabase
+preston-ai-andersen (retirement packet R4). Archiving WF-1/WF-3
+in n8n follows owner confirmation that the in-repo ingestion +
+retrieval supersede them (roadmap W3->W4). Nothing else may be
+retired on this plan's account.
 
 ## 14. Explicit non-goals for v1
 
