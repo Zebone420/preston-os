@@ -41,6 +41,7 @@ export default async function OsControlCenter() {
         <h1 className="text-2xl font-semibold">Preston AI OS - Control Center</h1>
         <nav className="flex items-center gap-3">
           <Link href="/" className="text-sm text-slate-300 underline">Dashboard</Link>
+          <Link href="/os/orchestration" className="text-sm text-slate-300 underline">Orchestration</Link>
           <Link href="/approvals" className="text-sm text-slate-300 underline">Approvals</Link>
         </nav>
       </header>
