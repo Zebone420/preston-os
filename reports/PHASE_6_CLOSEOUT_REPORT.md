@@ -13,11 +13,12 @@ Author: Claude Code (implementation engineer)
   (code end), fe8f204 (closeout docs), plus this correction
   commit. Starting commit 04c3c75. All local, UNPUSHED - owner
   pushes the full range 04c3c75..master head.
-- Files changed: 35 (+~9.1k lines). New: migration 0009, optional
-  staging fixtures, 8 business library modules, 8 business UI
-  surfaces + shared components, 6 test files (+87 tests), 4 docs,
-  6 reports. Modified: approvals page (links context), home nav,
-  3 pre-existing test files untouched except migration-0009 pins.
+- Files changed: 40 (+~9.5k lines) across the full range
+  04c3c75..7ec5b40 (35 files/9,121 insertions through the code-end
+  commit 7c0fbf9). New: migration 0009, optional staging fixtures,
+  8 business library modules, 8 business UI surfaces + shared
+  components, 6 test files (+87 tests), 4 docs, 7 reports.
+  Modified: approvals page (links context), home nav, NEXT_GATES.
 - Commands run: npm test, npm run lint, npm run build,
   npm run build:os-runtime, node dist/os-runtime/bin.js health,
   git add/commit (pre-commit scanners on every commit).
@@ -88,9 +89,9 @@ resubmission UX. Full register: reports/PHASE_6_DEFECT_REGISTER.md.
 
 ## Rollback
 
-Vercel: promote previous deployment. Git: revert the six commits
-(additive range). DB: 0009 tables are inert if unused; removal is
-a separate owner-composed step (packet section 6).
+Vercel: promote previous deployment. Git: revert the eight-commit
+Phase 6 range (additive). DB: 0009 tables are inert if unused;
+removal is a separate owner-composed step (packet section 6).
 
 ## Recommended next master goal
 

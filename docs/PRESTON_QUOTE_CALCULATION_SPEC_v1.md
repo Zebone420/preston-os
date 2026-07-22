@@ -68,8 +68,11 @@ total    = subtotal + tax
 margin   = markup  (V1 projected margin = explicit markup only;
            realized margin requires the V4 ruling + cost data)
 
-A computed total above the money bound aborts with an error
-(failed_error), never a wrong number.
+Oversized quotes fail closed twice: validation rejects any
+pre-tax base over the money bound with the named error
+totals_exceed_supported_bounds (failed_validation), and the
+residual percent-markup/tax overflow path still aborts with an
+internal error (failed_error). Never a wrong number.
 
 ## 5. Payment schedules (owner-ruled V1)
 

@@ -51,8 +51,15 @@ UI (apps/dashboard/src/app/business/ + components/business/ui.tsx):
 - /business/payments   payments, outstanding, margins
 - /business/activity   append-only ledger + communications
 - /business/agents     agent operations + safety posture
-- actions.ts           server actions: createQuoteDraft,
-                       decideRecommendation (owner re-checked)
+- actions.ts           server actions (all owner re-checked):
+                       submitQuoteDraft (useActionState - failures
+                       return owner-readable errors and keep the
+                       typed input), createBusinessClient,
+                       createSalesLead, moveLeadStage,
+                       recordPaymentEvent, refreshRecommendations,
+                       decideRecommendation
+- quotes/quote-form.tsx client component for the agent form
+                       (pending-disabled submit; no input loss)
 - /approvals (extended) renders approval_links context and
                        deep-links quote drafts.
 
@@ -70,13 +77,19 @@ dataset behind a visible SETUP MODE badge; fixture rows carry
 provenance fixture:true.
 
 Write paths (all owner-gated, all audited):
-1. createQuoteDraft action -> runQuoteDraftAgent (see agent
+1. submitQuoteDraft action -> runQuoteDraftAgent (see agent
    contract doc). Writes: quotes, quote_versions, quote_items,
    payment_schedules, approvals(+links), quote_draft_runs,
    business_activity_events, audit_log.
-2. decideRecommendation action -> CAS status update on
+2. Owner data entry: createBusinessClient, createSalesLead,
+   moveLeadStage (CAS), recordPaymentEvent - staging business
+   records with provenance, an activity-ledger entry, and an
+   audit_log row each. Nothing external.
+3. refreshRecommendations -> rule engine output persisted
+   idempotently + audit_log.
+4. decideRecommendation action -> CAS status update on
    agent_recommendations + audit_log.
-3. Approval decisions stay on the existing /approvals action.
+5. Approval decisions stay on the existing /approvals action.
 
 ## 4. Invariants
 

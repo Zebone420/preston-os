@@ -19,11 +19,19 @@ import {
   Table,
   formatTimestamp,
 } from '@/components/business/ui';
+import { recordPaymentEvent } from '../actions';
 
-// Payment and Margin Visibility (Phase 6D). Read-only.
+// Payment and Margin Visibility (Phase 6D) plus owner entry of
+// payment FACTS (append-only records - no payment is ever
+// collected, requested, or sent by this system).
 export const dynamic = 'force-dynamic';
 
-export default async function PaymentsPage() {
+export default async function PaymentsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ msg?: string }>;
+}) {
+  const { msg } = await searchParams;
   const { needsLogin, ctx } = await resolveBusinessPageContext();
   if (needsLogin) return <LoginRequired title="Payments and Margin" />;
   const data = await loadBusinessData(ctx?.client ?? null);
@@ -41,9 +49,88 @@ export default async function PaymentsPage() {
 
   return (
     <BusinessShell title="Payments and Margin" mode={data.mode}>
+      {msg && (
+        <p className="mb-4 rounded bg-slate-800 p-2 text-xs">{msg}</p>
+      )}
       {data.errors.map((e) => (
         <ErrorNote key={e} error={e} />
       ))}
+
+      {data.mode === 'connected' && (
+        <div className="mb-4">
+          <Card title="Record a payment fact (owner data entry)">
+            <form
+              action={recordPaymentEvent}
+              className="grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-6"
+            >
+              <label className="block lg:col-span-2">
+                <span className="text-xs text-slate-400">Project</span>
+                <select
+                  name="project_id"
+                  className="mt-0.5 w-full rounded bg-slate-800 p-1.5"
+                >
+                  <option value="">select project</option>
+                  {data.projects.map((p) => (
+                    <option
+                      key={asString(p.id)}
+                      value={asString(p.id)}
+                    >
+                      {asString(p.title)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-xs text-slate-400">Kind</span>
+                <select
+                  name="kind"
+                  className="mt-0.5 w-full rounded bg-slate-800 p-1.5"
+                >
+                  <option value="deposit_recorded">deposit</option>
+                  <option value="payment_recorded">payment</option>
+                  <option value="adjustment_recorded">
+                    adjustment
+                  </option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-xs text-slate-400">
+                  Amount ($) *
+                </span>
+                <input
+                  name="amount"
+                  inputMode="decimal"
+                  className="mt-0.5 w-full rounded bg-slate-800 p-1.5"
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs text-slate-400">Method</span>
+                <input
+                  name="method"
+                  placeholder="check, wire..."
+                  className="mt-0.5 w-full rounded bg-slate-800 p-1.5"
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs text-slate-400">Note</span>
+                <input
+                  name="note"
+                  className="mt-0.5 w-full rounded bg-slate-800 p-1.5"
+                />
+              </label>
+              <div className="self-end lg:col-span-6">
+                <button className="rounded bg-slate-700 px-3 py-1.5 text-sm">
+                  Record payment fact
+                </button>
+                <span className="ml-2 text-xs text-slate-500">
+                  append-only record of money already received -
+                  nothing is collected or requested by this system
+                </span>
+              </div>
+            </form>
+          </Card>
+        </div>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card title={`Project payments (${summaries.length})`}>

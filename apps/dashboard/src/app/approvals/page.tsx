@@ -266,6 +266,7 @@ export default async function ApprovalsPage({
 
   let live: { rows: ApprovalRow[]; error?: string } | null = null;
   const linksByApproval = new Map<string, LinkRow[]>();
+  let linksError: string | undefined;
   if (supabase) {
     live = await listApprovalRows(supabase);
     const linkRows = await listBusinessRows(
@@ -273,6 +274,9 @@ export default async function ApprovalsPage({
       BUSINESS_TABLES.approvalLinks,
       { limit: 200 },
     );
+    if (!linkRows.ok && linkRows.error) {
+      linksError = linkRows.error;
+    }
     for (const raw of linkRows.rows) {
       const approvalId = String(raw.approval_id ?? '');
       if (!approvalId) continue;
@@ -314,6 +318,12 @@ export default async function ApprovalsPage({
       {banner && (
         <p className="mb-4 rounded bg-slate-800 p-3 text-xs text-amber-300">
           {banner}
+        </p>
+      )}
+      {linksError && (
+        <p className="mb-4 rounded bg-red-950 p-2 text-xs text-red-300">
+          Linked-entity context unavailable (approval_links read
+          failed: {linksError}). Decisions still work.
         </p>
       )}
 

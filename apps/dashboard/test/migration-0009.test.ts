@@ -3,9 +3,9 @@ import { describe, expect, it } from 'vitest';
 
 // Static pins for the Phase 6B business-foundation migration. The file is
 // owner-applied only; these tests keep it additive, owner-scoped, collision
-// free against the 22 pre-existing tables, and simulation-pinned at the DB
-// level (quote drafts cannot be marked executable or non-simulation without
-// a later owner-gated migration).
+// free against the 24 pre-existing/authored tables, and simulation-pinned
+// at the DB level (quote drafts cannot be marked executable or
+// non-simulation without a later owner-gated migration).
 
 const sql = readFileSync(
   new URL(

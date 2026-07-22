@@ -72,10 +72,18 @@ export default async function BusinessOverview({
     milestones: data.milestones,
   });
   const staleness = assessStaleness(
-    [...data.activity, ...data.leads, ...data.quotes],
+    [
+      ...data.activity,
+      ...data.leads,
+      ...data.quotes,
+      ...data.projects,
+      ...data.paymentEvents,
+      ...data.communications,
+    ],
     nowIso,
     24 * 7,
   );
+  const hasAnyRecord = staleness.latest_iso !== '';
   const openRecs = data.recommendations.filter(
     (r) => asString(r.status) === 'open',
   );
@@ -253,9 +261,12 @@ export default async function BusinessOverview({
       </div>
 
       <FooterNote>
-        Data refresh: page render {formatTimestamp(nowIso)}; newest
-        record {formatTimestamp(staleness.latest_iso) || 'none'}
-        {staleness.stale ? ' (STALE - over 7 days old)' : ''}. Mode:{' '}
+        Data refresh: page render {formatTimestamp(nowIso)};{' '}
+        {hasAnyRecord
+          ? `newest record ${formatTimestamp(staleness.latest_iso)}` +
+            (staleness.stale ? ' (STALE - over 7 days old)' : '')
+          : 'no business records yet (nothing to be stale)'}
+        . Mode:{' '}
         {data.mode === 'setup'
           ? 'setup (labeled fixture data, nothing live)'
           : 'connected to Supabase staging (owner-only RLS)'}

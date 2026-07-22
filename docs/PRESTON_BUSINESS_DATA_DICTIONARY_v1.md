@@ -31,8 +31,10 @@ sales_leads - pipeline records.
   lead_source, owner_next_action.
 
 quotes - quote master; numbers live in versions.
-  client_id FK, property_id FK?, lead_id FK?, project_id (bare
-  uuid; projects created later - no circular FK), title, status
+  client_id FK, property_id FK?, lead_id FK?, project_id (FK to
+  projects, added by a guarded constraint at the end of the
+  migration because projects is created later in the file), title,
+  status
   (draft|pending_approval|approved|rejected|superseded|archived),
   current_version int, approval_id FK -> approvals.
 

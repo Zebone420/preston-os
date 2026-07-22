@@ -12,11 +12,13 @@ const BUSINESS_FILES = [
   'src/lib/business/quote-engine.ts',
   'src/lib/business/quote-agent.ts',
   'src/lib/business/business-store.ts',
+  'src/lib/business/business-forms.ts',
   'src/lib/business/read-models.ts',
   'src/lib/business/recommendations.ts',
   'src/lib/business/fixtures.ts',
   'src/lib/business/page-data.ts',
   'src/app/business/actions.ts',
+  'src/app/business/quotes/quote-form.tsx',
 ];
 
 // Process-spawning surface ('child' + '_process' split so this file

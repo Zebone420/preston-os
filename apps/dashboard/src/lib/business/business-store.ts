@@ -356,6 +356,44 @@ export async function listApprovalLinksFor(
   );
 }
 
+// --- leads -----------------------------------------------------------------
+
+// Compare-and-set stage move: only succeeds if the lead is still in
+// the stage the owner saw. Zero matched rows = concurrent change.
+export async function updateLeadStageCAS(
+  client: RuntimeClient,
+  leadId: string,
+  fromStage: string,
+  toStage: string,
+  nowIso: string,
+): Promise<WriteOutcome> {
+  if (!UUID_RE.test(leadId)) {
+    return { ok: false, error: 'invalid lead id' };
+  }
+  try {
+    const res = await client
+      .from(BUSINESS_TABLES.leads)
+      .update({
+        stage: toStage,
+        stage_changed_at: nowIso,
+        updated_at: nowIso,
+      })
+      .eq('id', leadId)
+      .eq('stage', fromStage)
+      .select('id');
+    if (res.error) return { ok: false, error: res.error.message };
+    if (!res.data || res.data.length === 0) {
+      return { ok: false, error: 'stage_changed_elsewhere' };
+    }
+    return { ok: true, id: leadId };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : 'lead stage move failed',
+    };
+  }
+}
+
 // --- recommendations -------------------------------------------------------
 
 export async function updateRecommendationStatusCAS(

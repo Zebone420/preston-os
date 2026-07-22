@@ -22,9 +22,12 @@ optional lead_id/property_id, or quote_id to draft the next
 version of an existing quote.
 Engine fields: scope_type, jurisdiction, items[], quote_fees,
 markup_mode/value, st124_tracking, exclusions.
-Control: idempotency_key (required, >= 8 chars; the UI generates
-a uuid per form render), optional correlation_id (defaults to
-qd:<idempotency_key>), created_by.
+Control: idempotency_key (required, >= 8 chars). The owner form's
+server action generates a fresh uuid per submission (double-submit
+is prevented by the pending-disabled submit button; a resubmit
+after a failure is a new attempt with a new key). Programmatic
+callers supply their own stable key to get replay dedup. Optional
+correlation_id (defaults to qd:<idempotency_key>), created_by.
 
 ## 3. Outcomes
 
@@ -41,9 +44,13 @@ failed_error      - a persistence step failed (or target quote
                     not found / version CAS conflict); the run
                     row records the reason.
 
-Every outcome (except duplicate) writes exactly one
+Every outcome (except duplicate) attempts exactly one
 quote_draft_runs row with simulation_only=true and
-execution_eligible=false.
+execution_eligible=false. Two narrow completed-path exceptions
+are surfaced as named warnings instead of a row: a concurrent
+duplicate-race (the stored run is authoritative; audited as
+quote_draft_race_detected) and a run-record write failure
+(run_record_failed).
 
 ## 4. Persistence effects of a completed run (in order)
 

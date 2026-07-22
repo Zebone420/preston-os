@@ -80,6 +80,94 @@ function fixtureData(): BusinessData {
   };
 }
 
+// Targeted quote-detail reads (audit M3): fetch this quote's
+// versions, items, and approval directly instead of filtering the
+// globally-truncated table reads, so old quotes render completely
+// no matter how large staging grows.
+export interface QuoteDetailData {
+  quote: Row | null;
+  versions: Row[];
+  itemsByVersion: Map<string, Row[]>;
+  approval: Row | null;
+  errors: string[];
+}
+
+export async function loadQuoteDetail(
+  client: RuntimeClient,
+  quoteId: string,
+): Promise<QuoteDetailData> {
+  const errors: string[] = [];
+  const quoteRes = await listBusinessRows(
+    client,
+    BUSINESS_TABLES.quotes,
+    { eq: { col: 'id', val: quoteId }, limit: 1 },
+  );
+  if (!quoteRes.ok && quoteRes.error) {
+    errors.push(`quotes: ${quoteRes.error}`);
+  }
+  const quote = quoteRes.rows[0] ?? null;
+  if (!quote) {
+    return {
+      quote: null,
+      versions: [],
+      itemsByVersion: new Map(),
+      approval: null,
+      errors,
+    };
+  }
+  const versionsRes = await listBusinessRows(
+    client,
+    BUSINESS_TABLES.quoteVersions,
+    {
+      eq: { col: 'quote_id', val: quoteId },
+      orderBy: 'version',
+      ascending: false,
+      limit: 50,
+    },
+  );
+  if (!versionsRes.ok && versionsRes.error) {
+    errors.push(`quote_versions: ${versionsRes.error}`);
+  }
+  const itemsByVersion = new Map<string, Row[]>();
+  for (const v of versionsRes.rows) {
+    const vid = String(v.id ?? '');
+    const itemsRes = await listBusinessRows(
+      client,
+      BUSINESS_TABLES.quoteItems,
+      {
+        eq: { col: 'quote_version_id', val: vid },
+        orderBy: 'position',
+        ascending: true,
+        limit: 300,
+      },
+    );
+    if (!itemsRes.ok && itemsRes.error) {
+      errors.push(`quote_items: ${itemsRes.error}`);
+    }
+    itemsByVersion.set(vid, itemsRes.rows);
+  }
+  let approval: Row | null = null;
+  const approvalId = String(quote.approval_id ?? '');
+  if (approvalId) {
+    const appRes = await listBusinessRows(
+      client,
+      BUSINESS_TABLES.approvals,
+      { eq: { col: 'id', val: approvalId }, limit: 1 },
+    );
+    if (!appRes.ok && appRes.error) {
+      errors.push(`approvals: ${appRes.error}`);
+    }
+    approval = appRes.rows[0] ?? null;
+  }
+  return {
+    quote,
+    versions: versionsRes.rows,
+    itemsByVersion,
+    approval,
+    errors,
+  };
+}
+
 export async function loadBusinessData(
   client: RuntimeClient | null,
 ): Promise<BusinessData> {

@@ -34,9 +34,13 @@ wait for a future owner-approved gate.
   "All Deployments" or Password Protection). Never enable live reads
   while the alias is publicly readable.
 - Phase 6 follow-on gates (recorded 2026-07-21, Business Command
-  Center V1 closeout):
-  - Owner-run: push e408f21..7c0fbf9, apply migration 0009,
-    staging deployment + A-H verification (packets in reports/).
+  Center V1 closeout; status updated same day):
+  - (DONE 2026-07-21) Owner pushed through 7ec5b40; owner applied
+    migration 0009 to staging with verification passed.
+  - OPEN owner-run: staging validation per
+    reports/PHASE_6_STAGING_VALIDATION_OWNER_GATE.md (single
+    consolidated gate; supersedes the deployment packet's A-H
+    list).
   - Business data intake gate: provenance-tracked import of real
     Airtable TEST records into the business tables (read-only
     source; owner-approved mapping).

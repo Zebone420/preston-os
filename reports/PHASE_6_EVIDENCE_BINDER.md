@@ -76,14 +76,22 @@ critical/high. Fixes landed in 7c0fbf9.
   nothing in Phase 6 reads or writes those flags except the
   read-only safety-posture card.
 
-## E6. Owner-run steps (pending; back-fill attestations here)
+## E6. Owner-run steps and attestations
 
-- [OWNER] Push commits e408f21..7c0fbf9 to origin/master.
-- [OWNER] Apply migration 0009 per
-  reports/PHASE_6_MIGRATION_0009_OWNER_PACKET.md; paste
-  verification SQL outputs.
-- [OWNER] Optional: staging fixtures
+- [OWNER - DONE 2026-07-21] Pushed the full local range through
+  7ec5b40 to origin/master (verified: origin/master == 7ec5b40).
+- [OWNER - DONE 2026-07-21, owner-reported] Applied migration 0009
+  to Supabase STAGING. Reported verification results: 18 tables
+  found; RLS enabled on all 18; anon privileges 0; authenticated
+  DELETE privileges 0; quote_versions UPDATE restricted to
+  approval_id; approvals privileges INSERT+SELECT+UPDATE;
+  quote_draft_runs simulation-only constraint present. Raw SQL
+  outputs to be pasted below when archived:
+  [OWNER PASTE AREA - verification SQL outputs]
+- [OWNER - OPEN] Optional: staging fixtures
   (supabase/fixtures/business_staging_fixtures.sql).
-- [OWNER] Deploy + verification checklist per
-  reports/PHASE_6_STAGING_DEPLOYMENT_OWNER_PACKET.md; record
-  A-H checklist outcomes.
+- [OWNER - OPEN] Staging validation per the consolidated gate
+  packet reports/PHASE_6_STAGING_VALIDATION_OWNER_GATE.md
+  (supersedes the A-H checklist in the deployment packet);
+  record outcomes below:
+  [OWNER PASTE AREA - validation outcomes]

@@ -125,6 +125,43 @@ select column_name from information_schema.column_privileges
    and grantee = 'authenticated' and privilege_type = 'UPDATE';
 -- Expect exactly: approval_id.
 
+-- FULL-COVERAGE FOLLOW-UP (added post-audit: the checks above
+-- sample some tables; these cover all 18):
+
+-- RLS enabled on every one of the 18 (expect 18):
+select count(*) from pg_tables
+ where schemaname = 'public' and rowsecurity = true
+   and tablename in
+ ('business_clients','business_contacts','business_properties',
+  'sales_leads','quotes','quote_versions','quote_items','projects',
+  'project_milestones','vendor_orders','installation_events',
+  'payment_schedules','payment_events','communication_records',
+  'business_activity_events','agent_recommendations',
+  'quote_draft_runs','approval_links');
+
+-- anon holds zero privileges on all 18 (expect 0):
+select count(*) from information_schema.role_table_grants
+ where grantee = 'anon' and table_name in
+ ('business_clients','business_contacts','business_properties',
+  'sales_leads','quotes','quote_versions','quote_items','projects',
+  'project_milestones','vendor_orders','installation_events',
+  'payment_schedules','payment_events','communication_records',
+  'business_activity_events','agent_recommendations',
+  'quote_draft_runs','approval_links');
+
+-- All four simulation pins present (expect 4):
+select count(*) from pg_constraint
+ where (conrelid = 'quote_draft_runs'::regclass
+        and (pg_get_constraintdef(oid) like '%simulation_only = true%'
+          or pg_get_constraintdef(oid)
+             like '%execution_eligible = false%'))
+    or (conrelid = 'quote_versions'::regclass
+        and pg_get_constraintdef(oid)
+            like '%simulation_state = ''simulation''%')
+    or (conrelid = 'business_activity_events'::regclass
+        and pg_get_constraintdef(oid)
+            like '%simulation_state = ''simulation''%');
+
 ## 6. Rollback considerations
 
 The migration is additive. Rollback = owner-run removal of the 18

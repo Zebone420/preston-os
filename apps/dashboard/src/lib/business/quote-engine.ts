@@ -4,8 +4,9 @@
 // Identical input always produces identical output. All money is
 // integer cents; all rates are integer milli-percent over the fixed
 // RATE_DENOMINATOR (100000). Rounding is round-half-up at exactly
-// two points: markup and tax. Payment stages assign the remainder
-// to the final stage so stage amounts always sum to the total.
+// three points: percent markup, tax, and non-final payment stages.
+// Payment stages assign the remainder to the final stage so stage
+// amounts always sum to the total.
 //
 // Business-rule ground truth used here:
 // - V1 (owner-ruled): installation schedule 50/25/25; product-only

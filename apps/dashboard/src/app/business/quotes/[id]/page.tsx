@@ -1,13 +1,19 @@
 import Link from 'next/link';
 import {
   loadBusinessData,
+  loadQuoteDetail,
   resolveBusinessPageContext,
 } from '@/lib/business/page-data';
+import {
+  BUSINESS_TABLES,
+  listBusinessRows,
+} from '@/lib/business/business-store';
 import {
   asNumber,
   asString,
   formatCents,
   formatMilliPct,
+  type Row,
 } from '@/lib/business/read-models';
 import {
   BusinessShell,
@@ -24,6 +30,8 @@ import {
 
 // Quote detail (Phase 6D): versions, line items, payment schedule,
 // assumptions/exclusions, approval state, provenance. Read-only.
+// Connected mode fetches THIS quote's rows directly (by id) so old
+// quotes render completely regardless of table sizes (audit M3).
 export const dynamic = 'force-dynamic';
 
 export default async function QuoteDetailPage({
@@ -37,12 +45,68 @@ export default async function QuoteDetailPage({
   const { msg } = await searchParams;
   const { needsLogin, ctx } = await resolveBusinessPageContext();
   if (needsLogin) return <LoginRequired title="Quote Detail" />;
-  const data = await loadBusinessData(ctx?.client ?? null);
 
-  const quote = data.quotes.find((q) => asString(q.id) === id);
+  let mode: 'setup' | 'connected';
+  let quote: Row | null;
+  let versions: Row[];
+  let itemsByVersion: Map<string, Row[]>;
+  let approval: Row | null;
+  let clientName = '';
+  let errors: string[] = [];
+
+  if (ctx) {
+    mode = 'connected';
+    const detail = await loadQuoteDetail(ctx.client, id);
+    quote = detail.quote;
+    versions = detail.versions;
+    itemsByVersion = detail.itemsByVersion;
+    approval = detail.approval;
+    errors = detail.errors;
+    const clientId = quote ? asString(quote.client_id) : '';
+    if (clientId) {
+      const clientRes = await listBusinessRows(
+        ctx.client,
+        BUSINESS_TABLES.clients,
+        { eq: { col: 'id', val: clientId }, limit: 1 },
+      );
+      clientName = asString(clientRes.rows[0]?.display_name);
+    }
+  } else {
+    // Setup mode: labeled fixture dataset.
+    mode = 'setup';
+    const data = await loadBusinessData(null);
+    quote = data.quotes.find((q) => asString(q.id) === id) ?? null;
+    versions = data.quoteVersions
+      .filter((v) => asString(v.quote_id) === id)
+      .sort((a, b) => asNumber(b.version) - asNumber(a.version));
+    itemsByVersion = new Map();
+    for (const v of versions) {
+      itemsByVersion.set(
+        asString(v.id),
+        data.quoteItems
+          .filter(
+            (it) => asString(it.quote_version_id) === asString(v.id),
+          )
+          .sort((a, b) => asNumber(a.position) - asNumber(b.position)),
+      );
+    }
+    approval =
+      data.approvals.find(
+        (a) => asString(a.id) === asString(quote?.approval_id),
+      ) ?? null;
+    clientName = asString(
+      data.clients.find(
+        (c) => asString(c.id) === asString(quote?.client_id),
+      )?.display_name,
+    );
+  }
+
   if (!quote) {
     return (
-      <BusinessShell title="Quote Detail" mode={data.mode}>
+      <BusinessShell title="Quote Detail" mode={mode}>
+        {errors.map((e) => (
+          <ErrorNote key={e} error={e} />
+        ))}
         <p className="rounded bg-amber-900 p-3 text-sm">
           Quote not found.{' '}
           <Link href="/business/quotes" className="underline">
@@ -54,21 +118,8 @@ export default async function QuoteDetailPage({
     );
   }
 
-  const versions = data.quoteVersions
-    .filter((v) => asString(v.quote_id) === id)
-    .sort((a, b) => asNumber(b.version) - asNumber(a.version));
-  const client = data.clients.find(
-    (c) => asString(c.id) === asString(quote.client_id),
-  );
-  const approval = data.approvals.find(
-    (a) => asString(a.id) === asString(quote.approval_id),
-  );
-
   return (
-    <BusinessShell
-      title={`Quote: ${asString(quote.title)}`}
-      mode={data.mode}
-    >
+    <BusinessShell title={`Quote: ${asString(quote.title)}`} mode={mode}>
       {msg && (
         <p className="mb-4 rounded bg-slate-800 p-2 text-xs">
           agent result: {msg}
@@ -78,7 +129,7 @@ export default async function QuoteDetailPage({
               'quote, reload the quotes page and submit again.'}
         </p>
       )}
-      {data.errors.map((e) => (
+      {errors.map((e) => (
         <ErrorNote key={e} error={e} />
       ))}
 
@@ -86,7 +137,7 @@ export default async function QuoteDetailPage({
         <StatusBadge status={asString(quote.status)} />
         <SimulationBadge />
         <span className="text-slate-400">
-          client: {client ? asString(client.display_name) : 'unknown'}
+          client: {clientName || 'unknown'}
         </span>
         <span className="text-slate-400">
           source: {asString(quote.source)}
@@ -99,10 +150,7 @@ export default async function QuoteDetailPage({
             approval: {asString(approval.decision)}
           </span>
         )}
-        <Link
-          href="/approvals"
-          className="text-xs underline"
-        >
+        <Link href="/approvals" className="text-xs underline">
           Approval Center
         </Link>
       </div>
@@ -113,18 +161,17 @@ export default async function QuoteDetailPage({
       />
 
       {versions.map((v) => {
-        const items = data.quoteItems
-          .filter(
-            (it) => asString(it.quote_version_id) === asString(v.id),
-          )
-          .sort((a, b) => asNumber(a.position) - asNumber(b.position));
+        const items = itemsByVersion.get(asString(v.id)) ?? [];
         const schedule = v.payment_schedule as {
           schedule_type?: string;
-          stages?: Array<{
-            label?: string;
-            amount_cents?: number;
-          }>;
+          stages?: unknown;
         } | null;
+        const stages = Array.isArray(schedule?.stages)
+          ? (schedule.stages as Array<{
+              label?: string;
+              amount_cents?: number;
+            }>)
+          : null;
         const assumptions = Array.isArray(v.assumptions)
           ? (v.assumptions as unknown[])
           : [];
@@ -196,17 +243,16 @@ export default async function QuoteDetailPage({
               <div className="font-semibold">
                 total: {formatCents(v.total_cents)}
               </div>
-              <div>
-                projected margin: {formatCents(v.margin_cents)}
-              </div>
+              <div>projected margin: {formatCents(v.margin_cents)}</div>
             </div>
 
-            {schedule?.stages && (
+            {stages && (
               <div className="mt-3 text-sm">
                 <span className="text-slate-400">
-                  payment schedule ({asString(schedule.schedule_type)}):
+                  payment schedule ({asString(schedule?.schedule_type)}
+                  ):
                 </span>{' '}
-                {schedule.stages.map((s, i) => (
+                {stages.map((s, i) => (
                   <span key={i} className="mr-3">
                     {String(s.label)}: {formatCents(s.amount_cents)}
                   </span>
@@ -226,8 +272,7 @@ export default async function QuoteDetailPage({
             )}
             {exclusions.length > 0 && (
               <div className="mt-2 text-xs text-slate-400">
-                exclusions:{' '}
-                {exclusions.map((e) => String(e)).join('; ')}
+                exclusions: {exclusions.map((e) => String(e)).join('; ')}
               </div>
             )}
             <p className="mt-2 text-xs text-slate-500">
@@ -243,9 +288,9 @@ export default async function QuoteDetailPage({
 
       <FooterNote>
         This is a simulation draft, not a price commitment. Approving
-        it in the Approval Center records a decision only; sending a
-        quote to a client remains a manual owner action outside this
-        system in V1.
+        it in the Approval Center records a decision only - nothing is
+        executed or sent. Sending a quote to a client remains a manual
+        owner action outside this system in V1.
       </FooterNote>
     </BusinessShell>
   );

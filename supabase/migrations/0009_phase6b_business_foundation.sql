@@ -10,7 +10,9 @@
 --
 -- NAMING NOTE: every table here uses a business/sales/quote/project/vendor/
 -- installation/payment/communication/agent/approval prefix chosen to avoid
--- the 22 existing tables (see the 0004 command_packets collision incident).
+-- the 24 existing/authored tables (23 applied via 0001-0006 incl. owners,
+-- plus runtime_roles authored in 0007; see the 0004 command_packets
+-- collision incident).
 --
 -- SIMULATION PINS: quote_versions.simulation_state is CHECK-pinned to
 -- 'simulation' and quote_draft_runs pins simulation_only=true and
