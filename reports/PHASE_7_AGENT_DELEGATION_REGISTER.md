@@ -29,7 +29,10 @@ merge-order planning, Claude conflict-check + integration review.
 - Task ID: P7-CX-01
 - Assigned agent: Codex (local, C:\dev\preston-os)
 - Status: APPROVED / DELEGATED (awaiting Codex return)
-- Pinned base commit: df018fc
+- Pinned base commit: 1778a11 (newest clean HEAD; was df018fc at
+  approval - Claude's durable-driver group df018fc..1778a11 does
+  NOT touch P7-CX-01's allowed file, so either pin is conflict-
+  free; use the newest so tests run against the latest code)
 - Allowed files (Codex may create/edit ONLY):
   - apps/dashboard/test/orchestration-security-regressions.test.ts
 - Prohibited scope (Codex must NOT touch):
@@ -78,7 +81,8 @@ P7-CX-01's single allowed file. No coordination conflict.
 
 ## Merge-order plan
 
-1. Claude durable-driver group (orchestration/** + reports/**).
+1. Claude durable-driver group (orchestration/** + reports/**) -
+   COMMITTED df018fc..1778a11.
 2. P7-CX-01 (single new test file) - integrate on return via an
    integration packet; re-run full orchestration suite + scanners.
 Future packages appended here with the same fields.
