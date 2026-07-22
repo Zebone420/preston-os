@@ -1,4 +1,9 @@
 # OWNER EVIDENCE COLLECTION PACKET V2 (ordered, read-only)
+#
+# STATUS 2026-07-21: Item 1 PARTIAL-COMPLETE (reconciled). Items
+# 2-7 are REGROUPED into four owner sessions in
+# reports/OWNER_EVIDENCE_SESSIONS_A_D_PACKET.md - use that file;
+# this one is retained for the per-item detail it contains.
 
 Date: 2026-07-21. Supersedes V1 (item A is complete - sign-out
 evidence archived in the Phase 6 binder S7). Everything below is

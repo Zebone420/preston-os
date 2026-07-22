@@ -43,10 +43,16 @@ wait for a future owner-approved gate.
   - (DONE 2026-07-21) V1b sign-out deployment evidence
     owner-verified and archived (binder S7). Phase 6 evidence is
     COMPLETE.
-  - OPEN: platform consolidation / legacy asset audit gates - see
-    reports/OWNER_EVIDENCE_COLLECTION_PACKET_V2.md (ordered
-    read-only evidence collection; supersedes V1) and, after
-    evidence returns, reports/ASSET_RETIREMENT_OWNER_PACKET.md.
+  - OPEN: platform consolidation evidence - Sessions A-D per
+    reports/OWNER_EVIDENCE_SESSIONS_A_D_PACKET.md (Item 1 done;
+    supersedes the per-item packets).
+  - OPEN owner decisions (briefs issued 2026-07-21): paused
+    Supabase unpause+export session (decide by 08-01, execute by
+    08-15; hard deadlines 23/28 Sep 2026) and staging backup
+    option LA-10 (first manual export THIS WEEK recommended).
+  - Retirement approvals: ZERO issued (Round 1 audit) - all
+    deletion candidates evidence-blocked; see
+    reports/FINAL_DISPOSITION_REGISTER.md.
   - Business data intake gate: provenance-tracked import of real
     Airtable TEST records into the business tables (read-only
     source; owner-approved mapping).
