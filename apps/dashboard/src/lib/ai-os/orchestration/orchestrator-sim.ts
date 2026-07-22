@@ -12,6 +12,10 @@ import {
   type AdapterResult,
 } from './adapters';
 import { observeAndReconcile, type CoordinatorMode } from './coordinator';
+import {
+  makeApprovalRequest,
+  validateApprovalDecision,
+} from './approvals';
 import type { AgentRole, GoalJob, GoalState } from './model';
 
 export interface SimTranscriptEntry {
@@ -76,6 +80,9 @@ export function runGoalSimulation(
 
   const transcript: SimTranscriptEntry[] = [];
   const byId = () => new Map(state.jobs.map((j) => [j.id, j]));
+  const owner = state.goal.requested_by;
+  const seenNonces = new Set<string>(); // durable-style replay guard for the run
+  let nonceSeq = 0;
 
   const snapshot = () => state.jobs.map((j) => `${j.id}:${j.status}:${j.approval_id ?? ''}`).join('|');
 
@@ -95,14 +102,49 @@ export function runGoalSimulation(
           break;
         case 'request_approval':
           if (job && !job.approval_id) {
-            job.approval_id = mintId(`apr:${job.id}`);
+            // Build the AUTHORITATIVE approval request (same contract as
+            // production). The oracle only expresses owner INTENT; it can
+            // never clear requires_approval directly - the decision must pass
+            // validateApprovalDecision (owner-bound, hash-bound, one-time,
+            // expiring). This closes the audit "oracle bypass" finding.
+            const approvalId = mintId(`apr-${job.id}`);
+            const made = makeApprovalRequest({
+              approval_id: approvalId,
+              action: `${job.kind}: ${job.objective || job.title}`,
+              affected_resource: `goal_job:${job.id}`,
+              reason: 'orchestration gated job',
+              risk_class: job.risk_class,
+              evidence_refs: job.evidence_refs,
+              expected_effect: 'job proceeds to bounded simulation run',
+              rollback_plan: 'cancel job; no external effect exists',
+              owner_identity: owner,
+              now: new Date(nowMs).toISOString(),
+            });
+            job.approval_id = approvalId;
             job.status = 'awaiting_approval';
             job.updated_at = new Date(nowMs).toISOString();
-            // Apply the injected owner decision.
-            const decision = oracle(job);
-            if (decision === 'approve') { job.requires_approval = false; job.status = 'ready'; }
-            else if (decision === 'reject') { job.status = 'cancelled'; job.failure_reason = 'owner_rejected'; }
-            // 'hold' leaves it awaiting_approval (engine will report blocked)
+            if (!made.ok) { job.status = 'failed'; job.failure_reason = 'approval_request_invalid'; break; }
+
+            const intent = oracle(job);
+            if (intent === 'hold') break; // stays awaiting_approval
+            const nonce = `n-${++nonceSeq}`;
+            const res = validateApprovalDecision(made.request, {
+              approval_id: approvalId,
+              outcome: intent === 'approve' ? 'approve' : 'reject',
+              decided_by: owner, // must equal request.owner_identity
+              decided_at: new Date(nowMs + 1).toISOString(),
+              nonce,
+              presented_hash: made.request.action_hash,
+            }, seenNonces, /* requestingAgent */ job.assigned_role ?? undefined);
+            seenNonces.add(nonce);
+            if (res.ok && res.status === 'approved') {
+              job.requires_approval = false; job.status = 'ready';
+            } else if (res.ok && res.status === 'rejected') {
+              job.status = 'cancelled'; job.failure_reason = 'owner_rejected';
+            } else {
+              // validator refused (should not happen for owner) -> stay held
+              job.status = 'awaiting_approval';
+            }
           }
           break;
         case 'run': {

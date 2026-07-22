@@ -6,6 +6,7 @@
 // layer enforces structure, freshness, replay-safety, and default-deny.
 
 import { RUNTIME_ID_RE, hasSecretText } from '../commands';
+import { CLOCK_SKEW_MS } from './approvals';
 import {
   DEFAULT_BUDGET,
   validateMasterGoal,
@@ -63,16 +64,40 @@ export function intakeCommand(input: {
   const e = input.envelope;
   const errors: string[] = [];
 
+  // Type-confusion guard (audit F5): string fields must be strings.
+  const s = (v: unknown) => typeof v === 'string';
+  if (!s(e.owner_identity) || !s(e.correlation_id) || !s(e.nonce) ||
+      !s(e.issued_at) || !s(e.expires_at) || !s(input.now)) {
+    return { ok: false, errors: ['field_type_invalid'] };
+  }
+  if (e.title !== undefined && !s(e.title)) errors.push('title_type_invalid');
+  if (e.objective !== undefined && !s(e.objective)) errors.push('objective_type_invalid');
+
   if (!e.owner_identity || !input.ownerAllowlist.has(e.owner_identity)) {
     errors.push('owner_not_allowlisted');
   }
   if (!COMMAND_TYPES.includes(e.command_type)) errors.push('command_type_invalid');
   if (!RUNTIME_ID_RE.test(e.correlation_id)) errors.push('correlation_id_invalid');
   if (!e.nonce || input.seenNonces.has(e.nonce)) errors.push('nonce_replay');
+
+  // Fail-closed timestamp validation with ONE clock-skew policy (#6):
+  // invalid now/issued/expires, expires<=issued, already-expired, or an
+  // envelope issued too far in the future all reject.
   const now = Date.parse(input.now);
-  if (!Number.isFinite(Date.parse(e.issued_at))) errors.push('issued_at_invalid');
-  if (!Number.isFinite(Date.parse(e.expires_at))) errors.push('expires_at_invalid');
-  else if (Date.parse(e.expires_at) < now) errors.push('envelope_expired');
+  const issued = Date.parse(e.issued_at);
+  const expires = Date.parse(e.expires_at);
+  if (!Number.isFinite(now)) errors.push('now_invalid');
+  if (!Number.isFinite(issued)) errors.push('issued_at_invalid');
+  if (!Number.isFinite(expires)) errors.push('expires_at_invalid');
+  if (Number.isFinite(issued) && Number.isFinite(expires) && expires <= issued) {
+    errors.push('expires_before_issued');
+  }
+  if (Number.isFinite(now) && Number.isFinite(expires) && expires < now) {
+    errors.push('envelope_expired');
+  }
+  if (Number.isFinite(now) && Number.isFinite(issued) && issued > now + CLOCK_SKEW_MS) {
+    errors.push('issued_in_future');
+  }
   if (hasSecretText(e.title ?? '', e.objective ?? '')) errors.push('secret_in_goal');
 
   if (errors.length) return { ok: false, errors };

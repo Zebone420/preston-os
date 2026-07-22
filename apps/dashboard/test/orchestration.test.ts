@@ -40,6 +40,7 @@ import {
 } from '../src/lib/ai-os/orchestration/coordinator';
 
 const NOW = '2026-07-22T12:00:00.000Z';
+const OWNER = 'owner@preston.nyc';
 
 function goal(overrides: Partial<MasterGoal> = {}): MasterGoal {
   return {
@@ -231,6 +232,65 @@ describe('approval router - one-time, scoped, replay-protected', () => {
     expect(msg).toContain('approve / reject / more_info');
     expect(msg).not.toMatch(/password|api_key|secret/i);
   });
+
+  // --- audit-repair regressions ------------------------------------------
+  it('rejects unparseable/reversed/pre-creation decision timestamps (fail closed)', () => {
+    const request = req();
+    // unparseable decided_at no longer slips through (was NaN > x === false)
+    expect(validateApprovalDecision(request, {
+      approval_id: 'apr-00000001', outcome: 'approve', decided_by: OWNER,
+      decided_at: 'not-a-date', nonce: 'z1', presented_hash: request.action_hash,
+    }, new Set()).reason).toBe('timestamp_invalid');
+    // decision before the request was created
+    expect(validateApprovalDecision(request, {
+      approval_id: 'apr-00000001', outcome: 'approve', decided_by: OWNER,
+      decided_at: '2026-07-22T11:59:00.000Z', nonce: 'z2', presented_hash: request.action_hash,
+    }, new Set()).reason).toBe('decided_before_created');
+    // exactly at expiry is expired (>= boundary)
+    expect(validateApprovalDecision(request, {
+      approval_id: 'apr-00000001', outcome: 'approve', decided_by: OWNER,
+      decided_at: request.expires_at, nonce: 'z3', presented_hash: request.action_hash,
+    }, new Set()).status).toBe('expired');
+  });
+
+  it('makeApprovalRequest fails closed on non-string/invalid now (no throw)', () => {
+    const bad = makeApprovalRequest({ ...base, now: 'garbage' });
+    expect(bad.ok).toBe(false);
+    const badType = makeApprovalRequest({ ...base, action: 123 as never });
+    expect(badType.ok).toBe(false);
+  });
+});
+
+describe('crypto action binding (activation-grade)', () => {
+  const env = {
+    approval_id: 'apr-1', action: 'apply migration', affected_resource: 'staging-db',
+    environment: 'staging' as const, owner_identity: OWNER, risk_class: 'RED',
+    created_at: NOW, expires_at: '2026-07-22T12:15:00.000Z',
+  };
+  it('produces a 256-bit hex digest and verifies round-trip', async () => {
+    const { canonicalActionHash, verifyActionHash } = await import(
+      '../src/lib/ai-os/orchestration/crypto-binding'
+    );
+    const h = canonicalActionHash(env);
+    expect(h).toMatch(/^[0-9a-f]{64}$/);
+    expect(verifyActionHash(env, h)).toBe(true);
+    expect(verifyActionHash({ ...env, action: 'apply OTHER migration' }, h)).toBe(false);
+    expect(verifyActionHash(env, 'deadbeef')).toBe(false);
+  });
+  it('is field-order independent (canonical)', async () => {
+    const { canonicalActionHash } = await import('../src/lib/ai-os/orchestration/crypto-binding');
+    expect(canonicalActionHash(env)).toBe(canonicalActionHash({ ...env }));
+  });
+});
+
+describe('model - source and wall-clock validation', () => {
+  it('rejects an invalid goal source', () => {
+    expect(validateMasterGoal(goal({ source: 'evil' as never }))).toContain('source_invalid');
+  });
+  it('rejects an over-large wall-clock budget', () => {
+    const g = goal({ budget: { ...DEFAULT_BUDGET, max_wall_ms: 48 * 60 * 60 * 1000 } });
+    expect(validateMasterGoal(g)).toContain('max_wall_ms_too_large');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -358,6 +418,17 @@ describe('completion engine - bounded, fail-closed, deterministic', () => {
     const s = step(state, Date.parse(NOW) + DEFAULT_BUDGET.max_wall_ms + 1);
     expect(s.done).toBe(true);
     expect(s.reason).toBe('deadline_exceeded');
+  });
+
+  it('treats an in-flight job as running, never dead-letters it (audit F2)', () => {
+    const state = runFullGoal((jobs) => {
+      jobs[0].status = 'completed';
+      jobs[1].status = 'in_progress'; // adapter owns it this iteration
+    });
+    const s = step(state, Date.parse(NOW));
+    expect(s.done).toBe(false);
+    expect(s.status).toBe('running');
+    expect(s.reason).toBe('jobs_in_flight');
   });
 });
 

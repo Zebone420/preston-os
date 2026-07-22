@@ -17,6 +17,7 @@ const ORCH_FILES = [
   'src/lib/ai-os/orchestration/coordinator.ts',
   'src/lib/ai-os/orchestration/goal-intake.ts',
   'src/lib/ai-os/orchestration/orchestrator-sim.ts',
+  'src/lib/ai-os/orchestration/crypto-binding.ts',
 ];
 
 const SPAWN = [

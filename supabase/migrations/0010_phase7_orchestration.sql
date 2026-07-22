@@ -2,9 +2,20 @@
 -- File: supabase/migrations/0010_phase7_orchestration.sql
 -- FILES ONLY. Applied to STAGING by the OWNER in the Supabase SQL editor.
 -- Never applied to production by the AI. Additive: new tables + owner-only
--- RLS. Depends on 0001 (approvals) and 0002 (public.is_owner()). Does NOT
--- depend on 0007/0008. Rollback SQL lives in the owner packet (markdown), not
--- here. Nothing here enables execution, sending, or any live path.
+-- RLS. Depends on 0001 (approvals - business Approval Center), 0002
+-- (public.is_owner()), and 0004 (os_jobs, referenced by goal_jobs.
+-- runtime_job_id). Does NOT depend on 0007/0008. Rollback SQL lives in the
+-- owner packet (markdown). Nothing here enables execution/sending/live path.
+--
+-- APPROVAL LIFECYCLE (authoritative decision, audit reconciliation): the
+-- Phase 7 orchestration approval lifecycle is orchestration_approvals
+-- (text approval_id, hash-bound, one-time, expiring). The legacy 0001
+-- approvals table is the BUSINESS Approval Center and is a DIFFERENT model.
+-- goal_jobs.approval_id is a SOFT text reference to
+-- orchestration_approvals.approval_id (no inline FK, matching the
+-- os_jobs.approval_id bare-reference precedent) to avoid a circular FK with
+-- orchestration_approvals.job_id. A deferred FK is added at the end of this
+-- file after both tables exist.
 --
 -- Naming: master_goals / goal_jobs / job_dependencies / agent_contracts /
 -- orchestration_approvals - all new, distinct from the 24 existing tables.
@@ -59,7 +70,10 @@ create table if not exists goal_jobs (
       'cancelled','dead_lettered')),
   attempts integer not null default 0,
   requires_approval boolean not null default false,
-  approval_id uuid references approvals (id),
+  -- SOFT text reference to orchestration_approvals.approval_id (Phase 7
+  -- lifecycle), not the legacy 0001 approvals(uuid). Deferred FK added at
+  -- end of file (circular with orchestration_approvals.job_id).
+  approval_id text,
   runtime_job_id uuid references os_jobs (id),
   correlation_id text not null,
   evidence_refs jsonb not null default '[]',
@@ -67,7 +81,9 @@ create table if not exists goal_jobs (
   executed boolean not null default false
     check (executed = false),
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  -- Composite key so job_dependencies can enforce SAME-GOAL edges via FK.
+  unique (id, goal_id)
 );
 create index if not exists idx_goal_jobs_goal
   on goal_jobs (goal_id, status);
@@ -75,14 +91,19 @@ create index if not exists idx_goal_jobs_goal
 -- ============================================================
 -- 3. job_dependencies - explicit dependency edges (append-only)
 -- ============================================================
+-- Cross-goal integrity (audit finding 8): both endpoints must belong to the
+-- SAME goal. Enforced structurally by composite FKs into goal_jobs(id,goal_id)
+-- - a dependency edge can NEVER reference a job from another goal.
 create table if not exists job_dependencies (
   id uuid primary key default gen_random_uuid(),
   goal_id uuid not null references master_goals (id),
-  job_id uuid not null references goal_jobs (id),
-  depends_on_job_id uuid not null references goal_jobs (id),
+  job_id uuid not null,
+  depends_on_job_id uuid not null,
   created_at timestamptz not null default now(),
   unique (job_id, depends_on_job_id),
-  check (job_id <> depends_on_job_id)
+  check (job_id <> depends_on_job_id),
+  foreign key (job_id, goal_id) references goal_jobs (id, goal_id),
+  foreign key (depends_on_job_id, goal_id) references goal_jobs (id, goal_id)
 );
 create index if not exists idx_job_dependencies_job
   on job_dependencies (job_id);
@@ -134,12 +155,14 @@ create table if not exists orchestration_approvals (
   rollback_plan text not null,
   action_hash text not null,
   owner_identity text not null,
-  nonce text,
+  nonce text not null,
   status text not null default 'pending'
     check (status in ('pending','approved','rejected','expired','more_info')),
   created_at timestamptz not null default now(),
   expires_at timestamptz not null,
   decided_at timestamptz,
+  -- envelope integrity: expiry must be after creation.
+  check (expires_at > created_at),
   unique (nonce)
 );
 create index if not exists idx_orchestration_approvals_status
@@ -195,7 +218,15 @@ drop policy if exists orch_approvals_owner_upd on orchestration_approvals;
 create policy orch_approvals_owner_upd on orchestration_approvals
   for update to authenticated
   using (public.is_owner()) with check (public.is_owner());
-grant select, insert, update on orchestration_approvals to authenticated;
+-- Immutability (audit finding 7): only the decision fields may change after
+-- creation. Column-level grant makes action/hash/owner/environment/scope/
+-- created_at privilege-immutable - even the owner cannot rewrite the bound
+-- action of a raised approval. Only status/decided_at/nonce are updatable
+-- (pending -> terminal, one-time).
+grant select, insert on orchestration_approvals to authenticated;
+revoke update on orchestration_approvals from authenticated;
+grant update (status, decided_at, nonce) on orchestration_approvals
+  to authenticated;
 
 -- ============================================================
 -- Strip Supabase default privileges: anon gets nothing; mutable
@@ -212,3 +243,19 @@ revoke delete on master_goals from authenticated;
 revoke delete on goal_jobs from authenticated;
 revoke delete on agent_contracts from authenticated;
 revoke delete on orchestration_approvals from authenticated;
+
+-- ============================================================
+-- Deferred FK: goal_jobs.approval_id -> orchestration_approvals(approval_id).
+-- Added after both tables exist (circular with orchestration_approvals.
+-- job_id). Guarded for idempotent re-runs.
+-- ============================================================
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'goal_jobs_approval_fk'
+  ) then
+    alter table goal_jobs
+      add constraint goal_jobs_approval_fk
+      foreign key (approval_id) references orchestration_approvals (approval_id);
+  end if;
+end $$;

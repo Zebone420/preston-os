@@ -133,15 +133,21 @@ export function validateBudget(b: ExecutionBudget): string[] {
   pos(b.max_jobs, 'max_jobs');
   if (b.max_iterations > 10000) errs.push('max_iterations_too_large');
   if (b.max_jobs > 1000) errs.push('max_jobs_too_large');
+  if (b.max_wall_ms > 24 * 60 * 60 * 1000) errs.push('max_wall_ms_too_large');
   return errs;
 }
+
+export const GOAL_SOURCES: readonly MasterGoal['source'][] = [
+  'chatgpt', 'telegram', 'dashboard', 'owner_cli',
+];
 
 export function validateMasterGoal(g: MasterGoal): string[] {
   const errs: string[] = [];
   if (!ok(g.id)) errs.push('id_invalid');
   if (!ok(g.correlation_id)) errs.push('correlation_id_invalid');
-  if (!g.title?.trim()) errs.push('title_required');
-  if (!g.objective?.trim()) errs.push('objective_required');
+  if (typeof g.title !== 'string' || !g.title.trim()) errs.push('title_required');
+  if (typeof g.objective !== 'string' || !g.objective.trim()) errs.push('objective_required');
+  if (!GOAL_SOURCES.includes(g.source)) errs.push('source_invalid');
   if (g.environment !== 'staging') errs.push('environment_must_be_staging');
   if (g.simulation_only !== true) errs.push('simulation_only_must_be_true');
   errs.push(...validateBudget(g.budget));

@@ -63,6 +63,14 @@ wait for a future owner-approved gate.
   - Retirement approvals: ZERO issued (Round 1 audit) - all
     deletion candidates evidence-blocked; see
     reports/FINAL_DISPOSITION_REGISTER.md.
+- Phase 7 orchestration (2026-07-22): coded + tested + simulation-
+  proven, NOT deployed/activated. Owner gates, in order:
+  (a) apply migration 0010 (reports/PHASE_7_MIGRATION_0010_OWNER_
+  PACKET.md); (b) activation ladder Level 1 = real Claude adapter
+  in an isolated worktree (reports/PHASE_7_ACTIVATION_LADDER.md);
+  Telegram/ChatGPT real send paths remain simulation-only until
+  their own gates. Backup gate (LA-10, no paid org) still blocks
+  any controlled external execution.
   - Business data intake gate: provenance-tracked import of real
     Airtable TEST records into the business tables (read-only
     source; owner-approved mapping).

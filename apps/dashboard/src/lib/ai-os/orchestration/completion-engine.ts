@@ -75,6 +75,7 @@ export function step(state: GoalState, nowMs: number): EngineStep {
 
   const actions: EngineAction[] = [];
   let blocked = false;
+  let inFlight = false;
 
   for (const job of state.jobs) {
     if (terminal(job.status)) continue;
@@ -123,16 +124,23 @@ export function step(state: GoalState, nowMs: number): EngineStep {
         actions.push({ type: 'audit', job_id: job.id });
         break;
       case 'in_progress':
-        // Adapter owns it this iteration; nothing to schedule.
+        // A real async adapter owns this job this iteration - a legitimate
+        // in-flight wait, NOT a stuck graph (audit F2). Mark inFlight so an
+        // all-in-flight graph reports running, never dead_lettered.
+        inFlight = true;
         break;
     }
   }
 
   if (actions.length === 0) {
-    // Nothing schedulable and not all terminal: either blocked on approvals
-    // or a stuck graph. Blocked is a legitimate wait; a stuck graph escalates.
+    // Nothing schedulable and not all terminal. Blocked (awaiting owner) and
+    // inFlight (adapter running) are legitimate waits; only a truly stuck
+    // graph (neither) escalates.
     if (blocked) {
       return { actions: [{ type: 'noop' }], status: 'blocked', done: false, reason: 'awaiting_owner_approval' };
+    }
+    if (inFlight) {
+      return { actions: [{ type: 'noop' }], status: 'running', done: false, reason: 'jobs_in_flight' };
     }
     return {
       actions: [{ type: 'escalate', reason: 'no_progress_possible' }],

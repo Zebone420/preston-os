@@ -59,4 +59,32 @@ describe('migration 0010 - orchestration', () => {
     expect(sql).not.toMatch(new RegExp('\\b' + 'trun' + 'cate\\b', 'i'));
     expect(sql).not.toMatch(new RegExp('\\b' + 'del' + 'ete\\s+from\\b', 'i'));
   });
+
+  // --- audit reconciliation pins -----------------------------------------
+  it('approval_id references the Phase 7 lifecycle, not legacy approvals uuid', () => {
+    // goal_jobs.approval_id is text (soft) + a deferred FK to
+    // orchestration_approvals(approval_id) - NOT approvals(id).
+    expect(sql).toMatch(/approval_id text,/);
+    expect(sql).not.toMatch(/approval_id uuid references approvals/);
+    expect(sql).toMatch(/goal_jobs_approval_fk[\s\S]*references orchestration_approvals \(approval_id\)/);
+  });
+
+  it('enforces same-goal dependency edges via composite FKs', () => {
+    expect(sql).toMatch(/unique \(id, goal_id\)/); // goal_jobs composite key
+    expect(sql).toMatch(/foreign key \(job_id, goal_id\) references goal_jobs \(id, goal_id\)/);
+    expect(sql).toMatch(/foreign key \(depends_on_job_id, goal_id\) references goal_jobs \(id, goal_id\)/);
+  });
+
+  it('makes approval fields immutable except the decision fields', () => {
+    expect(sql).toMatch(/revoke update on orchestration_approvals from authenticated;/);
+    expect(sql).toMatch(/grant update \(status, decided_at, nonce\) on orchestration_approvals/);
+  });
+
+  it('requires a non-null unique nonce and expiry-after-creation', () => {
+    const block = sql.slice(sql.indexOf('create table if not exists orchestration_approvals'));
+    const body = block.slice(0, block.indexOf(');'));
+    expect(body).toMatch(/nonce text not null/);
+    expect(body).toMatch(/check \(expires_at > created_at\)/);
+    expect(body).toMatch(/unique \(nonce\)/);
+  });
 });
