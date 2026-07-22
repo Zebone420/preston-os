@@ -1,4 +1,39 @@
 # SUPABASE TRANSFER - OWNER EVIDENCE PACKET (Gate 0)
+#
+# STATUS: COLLECTED 2026-07-22 (read-only, in-dashboard). RESULT:
+# BLOCKED - no paid organization exists. Answers recorded inline
+# below. Nothing was transferred, changed, or confirmed.
+#
+# Answers (sanitized):
+# 1. Paid organization name: NONE - only "info@preston.nyc's Org"
+#    (Free Plan) exists.
+# 2. Its plan: Free Plan (no paid org present).
+# 3. Role in paid org: N/A (none exists).
+# 4. Role in current Free org: Owner (sole member).
+# 5. Transfer control visible: YES (Project Settings -> General).
+# 6. Dialog text quoted: "You do not have any organizations you
+#    can transfer your project to." Advisory items: "Possible
+#    downtime - There might be a short downtime when transferring
+#    projects from a paid to a free organization."; "Permissions
+#    - Depending on your role in the target organization, your
+#    level of permissions may change after transfer."; "Features
+#    - Moving your project to an organization with a smaller
+#    subscription plan may result in the loss of certain features
+#    (i.e. image transformations)." Transfer button DISABLED.
+# 7. Estimated monthly cost: none shown (no target org).
+# 8. Supabase GitHub integration active: NO ("Connect GitHub").
+# 9. Vercel integration installed: NO ("Install Vercel
+#    integration") - env vars are manual, as documented.
+# 10. Log drains configured: NO (Pro+ feature; Free shows
+#     upgrade prompt).
+# 11. Storage buckets: 0 (no buckets; File storage 0 GB / 1 GB).
+# 12. Target org projects/headroom: N/A (no target org). Source
+#     Free org holds 3 projects; usage: DB 29 MB / 500 MB,
+#     egress 14 MB / 5 GB, MAU 4 / 50,000.
+# Security note: account MFA shows Disabled on the team page
+#   (recorded in the credential hygiene register).
+#
+# Original blank packet retained below for reference.
 
 Date: 2026-07-22. Read-only dashboard observation, ~5 minutes.
 Share sanitized facts only - NO keys, passwords, connection

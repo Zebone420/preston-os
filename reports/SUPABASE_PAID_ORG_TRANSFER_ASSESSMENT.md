@@ -83,14 +83,22 @@ host.
 
 ## 5. Decision (see decision brief for the full argument)
 
-RECOMMEND TRANSFER - CONDITIONAL. Conditions (all Gate 0 owner
-evidence): target org exists and is Pro or better; owner is
-source-org Owner and target-org member+; the transfer UI shows
-no blocker (GitHub integration / project-scoped roles / log
-drains) and its cost preview is acceptable; Vercel-link check
-comes back clean. Independent-backup requirement PRESERVED:
-one pre-transfer pg_dump (Gate 1) is REQUIRED regardless, and
-periodic logical dumps remain the off-platform copy afterward
-because provider physical backups are not downloadable [DOC].
-If any condition fails: fall back to OPTION B (hybrid pg_dump
-plan already approved in principle).
+GATE 0 COLLECTED 2026-07-22 -> RESULT BLOCKED for Option A: NO
+paid organization exists. Only "info@preston.nyc's Org" (Free)
+is present; the Transfer dialog reports no eligible target org
+and disables the Transfer button. [OWNER-VERIFIED in dashboard]
+
+OPERATIVE DECISION NOW: RECOMMEND HYBRID PG_DUMP (Option B) - it
+requires no paid org and closes LA-10 at $0. Option A stays the
+preferred end-state, gated on the owner first creating/obtaining
+a Pro (or better) organization (a billing decision). All the
+clean Gate 0 checks were also captured (no GitHub integration,
+no Vercel integration, no log drains, 0 storage buckets, owner
+of the Free org) - so IF a paid org is created later, transfer
+eligibility is otherwise clear and only the cost preview + role
+in the new org need confirming.
+
+Independent-backup requirement PRESERVED in every branch: one
+pg_dump (first-backup packet) is REQUIRED, and periodic logical
+dumps remain the off-platform copy because provider physical
+backups are not downloadable [DOC].

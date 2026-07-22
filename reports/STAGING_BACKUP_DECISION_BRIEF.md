@@ -13,15 +13,14 @@
 # backup-role SQL packet and the restore-test packet follow as
 # separate documents after the first backup's evidence returns.
 #
-# UPDATE 2026-07-22: a paid Supabase organization may already
-# exist. A transfer assessment now RECOMMENDS (conditionally)
-# transferring preston-os-staging into that org, which would
-# replace Option 4's daily-pg_dump component with provider daily
-# backups while KEEPING the first pg_dump and periodic logical
-# dumps as the off-platform copy. See
-# reports/SUPABASE_TRANSFER_DECISION_BRIEF.md (decision) and the
-# Gate 0-7 packets. The first backup below is REQUIRED in every
-# branch and is unchanged.
+# UPDATE 2026-07-22 (Gate 0 collected): NO paid Supabase
+# organization exists on the account (Transfer dialog: "You do
+# not have any organizations you can transfer your project to").
+# The transfer path is BLOCKED, so OPTION 4 / HYBRID PG_DUMP is
+# the OPERATIVE plan now. The transfer remains the preferred
+# end-state only if the owner later creates a Pro org (then
+# re-run Gate 0). The first pg_dump backup below is REQUIRED
+# and unchanged in every branch.
 
 Date: 2026-07-21. Finding: preston-os-staging - the authoritative
 staging database (business records, quotes, approvals, audit

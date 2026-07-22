@@ -3,7 +3,25 @@
 Date: 2026-07-22. Decision required from you; nothing executes
 until you run the gates yourself.
 
-## DECISION OUTPUT
+## DECISION OUTPUT (UPDATED after Gate 0 evidence, 2026-07-22)
+
+GATE 0 RESULT: BLOCKED. The transfer path (Option A) is NOT
+AVAILABLE: no paid organization exists on this account. The
+account holds a single organization ("info@preston.nyc's Org",
+Free Plan, 3 projects), and the project's Transfer dialog states
+verbatim: "You do not have any organizations you can transfer
+your project to." (Transfer button disabled.)
+
+REVISED RECOMMENDATION: RECOMMEND HYBRID PG_DUMP (Option B) as
+the operative plan NOW, because it needs no paid org and closes
+LA-10 at $0. Option A remains the preferred END-STATE but is
+gated on a NEW owner prerequisite: create/obtain a paid Supabase
+organization (an owner billing decision, out of scope here). If
+the owner creates a Pro org later, re-run Gate 0 and the original
+conditional recommendation below applies unchanged.
+
+--- ORIGINAL CONDITIONAL RECOMMENDATION (retained; applies only
+--- AFTER a paid org exists) ---
 
 RECOMMEND TRANSFER - CONDITIONAL (Option A: transfer the
 existing preston-os-staging project into your paid Supabase

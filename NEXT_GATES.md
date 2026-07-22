@@ -54,13 +54,12 @@ wait for a future owner-approved gate.
     reports/STAGING_FIRST_BACKUP_OWNER_PACKET.md (Path B
     pg_dump; ALSO serves as transfer Gate 1); scratch-restore
     test within 2 weeks of the first backup.
-  - OPEN owner decision (2026-07-22): Supabase paid-org TRANSFER
-    of preston-os-staging - RECOMMENDED CONDITIONAL, conditions
-    C1-C5 in reports/SUPABASE_TRANSFER_DECISION_BRIEF.md; Gate 0
-    evidence packet reports/SUPABASE_TRANSFER_OWNER_EVIDENCE_
-    PACKET.md (5 min). If approved and clean: Gates 1-7 replace
-    the daily-pg_dump build; if any condition fails: Option B
-    hybrid stands.
+  - Supabase paid-org TRANSFER: Gate 0 COLLECTED 2026-07-22 ->
+    BLOCKED (no paid org exists; Transfer dialog offers no target
+    and disables the button). Operative plan is now Option B
+    hybrid pg_dump (LA-10, $0). Transfer stays the preferred
+    end-state ONLY if the owner creates a Pro org, then re-run
+    Gate 0. Details: reports/SUPABASE_TRANSFER_DECISION_BRIEF.md.
   - Retirement approvals: ZERO issued (Round 1 audit) - all
     deletion candidates evidence-blocked; see
     reports/FINAL_DISPOSITION_REGISTER.md.

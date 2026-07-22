@@ -34,3 +34,10 @@ Special flags to fill from evidence: any credential found OUTSIDE
 1Password (loose .env on old hosts/machines) is tagged
 ORPHAN-CANDIDATE and gets its own review line; any n8n credential
 with write/send scope is tagged BROAD pending workflow review.
+
+SECURITY OBSERVATION (Gate 0, 2026-07-22): the Supabase account
+info@preston.nyc shows MFA = Disabled on the org Team page. This
+account owns the authoritative staging database and all three
+Supabase projects. Recommendation (owner-run, not urgent-but-
+important): enable MFA on the Supabase login. Not a Preston OS
+code issue; a console-account hygiene item.
