@@ -25,6 +25,24 @@ import {
   verifyAuthoritativeApproval,
 } from './store';
 import { actionHash } from './approvals';
+import {
+  acquireWorktreeLock,
+  releaseWorktreeLock,
+} from './worktree-lock-store';
+
+// Optional worktree-lock context: when provided, the driver acquires an
+// isolated worktree lock BEFORE running an implementation-kind job and
+// releases it after - proving the one-worktree-per-job isolation contract
+// end to end (even in simulation). base_commit is the pinned base; a token
+// minter yields a per-job ownership token. Omitted => runs without the lock
+// (pure orchestration simulation).
+export interface DriverLockContext {
+  base_commit: string; // pinned base (7-40 hex)
+  allowed_paths: string[];
+  token: (jobId: string) => string;
+}
+
+const EDIT_KINDS = new Set(['code', 'test', 'migration', 'repair', 'documentation']);
 import type {
   AgentRole,
   ExecutionBudget,
@@ -114,6 +132,7 @@ export async function driverStep(
   goalId: string,
   nowMs: number,
   depends: (jobId: string) => string[] = () => [],
+  lockCtx?: DriverLockContext,
 ): Promise<DriverStepResult> {
   const controls = await readSystemControlsChecked(client);
   // The durable worker advances SIMULATION jobs even while execution is
@@ -154,10 +173,31 @@ export async function driverStep(
     const jobId = (act as { job_id?: string }).job_id;
     const job = jobId ? byId.get(jobId) : undefined;
     if (act.type === 'run' && job) {
+      // Isolation gate: an implementation job acquires its own worktree lock
+      // BEFORE running. A lost acquisition (another holder) skips the run this
+      // cycle - concurrent-safe. Released after the simulated run.
+      const needsLock = lockCtx && EDIT_KINDS.has(job.kind);
+      const worktreeId = `wt-${job.id}`;
+      const token = needsLock ? lockCtx!.token(job.id) : '';
+      let fence = 0;
+      if (needsLock) {
+        const acq = await acquireWorktreeLock(client, {
+          worktree_id: worktreeId, repo: 'preston-os', job_id: job.id,
+          owner: job.assigned_role ?? 'claude', token,
+          base_commit: lockCtx!.base_commit, branch: `wt/${job.id}`,
+          allowed_paths: lockCtx!.allowed_paths, now: nowIso,
+          tree_dirty: false, branch_exists: false,
+        });
+        if (!acq.ok) continue; // held by another / unsafe => skip this cycle
+        fence = acq.lock.fence;
+      }
       // Two-phase: mark in_progress (a real running state, restart-visible),
       // then let the SIMULATION adapter complete/fail it. Both are CAS.
       const mark = await transitionJob(client, job.id, job.status, 'in_progress', {}, nowIso);
-      if (!mark.ok) continue; // another worker took it (concurrent-safe)
+      if (!mark.ok) {
+        if (needsLock) await releaseWorktreeLock(client, worktreeId, token, fence, nowIso);
+        continue; // another worker took it (concurrent-safe)
+      }
       const res = makeSimulationAdapter(job.assigned_role ?? 'claude').runJob(job, nowIso);
       const to = res.outcome === 'completed' ? 'completed' : 'failed';
       const t = await transitionJob(client, job.id, 'in_progress', to, {
@@ -165,6 +205,7 @@ export async function driverStep(
         failure_reason: res.failure_reason,
       }, nowIso);
       if (t.ok) persisted++;
+      if (needsLock) await releaseWorktreeLock(client, worktreeId, token, fence, nowIso);
     } else if (act.type === 'assign' && job) {
       const t = await transitionJob(client, job.id, job.status, 'assigned', { assigned_role: act.role }, nowIso);
       if (t.ok) persisted++;
@@ -195,11 +236,12 @@ export async function driveGoal(
   now: () => number,
   maxCycles = 500,
   depends: (jobId: string) => string[] = () => [],
+  lockCtx?: DriverLockContext,
 ): Promise<{ cycles: number; halted: boolean; reason: string }> {
   let cycles = 0;
   let lastReason = 'noop';
   while (cycles++ < Math.min(maxCycles, 5000)) {
-    const r = await driverStep(client, goalId, now(), depends);
+    const r = await driverStep(client, goalId, now(), depends, lockCtx);
     lastReason = r.reason;
     if (r.halted) return { cycles, halted: true, reason: r.reason };
     // Reload to check terminality (restart-safe: state is authoritative in DB).

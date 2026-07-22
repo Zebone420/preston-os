@@ -138,6 +138,44 @@ describe('durable driver - persists transitions, restart-safe, fail-closed', () 
   });
 });
 
+describe('driver + worktree lock integration', () => {
+  const lockCtx = {
+    base_commit: 'abc1234',
+    allowed_paths: ['apps/dashboard/src/'],
+    token: (jobId: string) => `tok-${jobId}`,
+  };
+
+  it('acquires and releases a worktree lock around each implementation run', async () => {
+    const db = makeFakeDb();
+    const depends = await seedGoal(db);
+    let t = Date.parse(NOW);
+    const r = await driveGoal(db.client, 'goal-00000001', () => (t += 1000), 100, depends, lockCtx);
+    expect(r.reason).toBe('completed');
+    // a worktree_workflows row exists per implementation job, released after use
+    const wts = db.rowsOf('repository_worktrees');
+    expect(wts.length).toBeGreaterThan(0);
+    // all released (unassigned) at completion - no dangling live lock
+    expect(wts.every((w) => w.status === 'unassigned')).toBe(true);
+  });
+
+  it('skips a run when the worktree is already held by another (concurrent)', async () => {
+    const db = makeFakeDb();
+    const depends = await seedGoal(db);
+    // pre-hold job a's worktree with a live foreign lock
+    db.rowsOf('repository_worktrees').push({
+      id: 'wt-job-0000-a', repo: 'preston-os', job_id: 'job-0000-a', agent: 'codex',
+      base_commit: 'abc1234', target_branch: 'wt/job-0000-a',
+      lock_id: 'foreign#1', status: 'assigned',
+      lease_expires_at: '2026-07-22T13:00:00.000Z', updated_at: NOW,
+    });
+    let t = Date.parse(NOW);
+    // one step: job a cannot run (worktree held) -> stays pending
+    await driverStep(db.client, 'goal-00000001', (t += 1000), depends, lockCtx);
+    const aStatus = db.rowsOf('goal_jobs').find((j) => j.id === 'job-0000-a')!.status;
+    expect(aStatus).toBe('pending'); // run was skipped, not forced
+  });
+});
+
 describe('store-backed worktree lock - atomic, fenced, concurrent-safe', () => {
   const baseInput = {
     worktree_id: 'wt-job-0001', repo: 'preston-os', job_id: 'job-0001',
