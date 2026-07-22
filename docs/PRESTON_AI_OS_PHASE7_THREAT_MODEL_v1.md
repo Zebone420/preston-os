@@ -37,6 +37,22 @@ that fails if the mitigation is removed.
   executable allowlist. Recorded as Level-1 prerequisites in the
   activation ladder.
 
+## Audit-reconciliation update (2026-07-22, commit c50221e)
+
+Two independent adversarial audits (Claude + Codex) were
+reconciled in reports/PHASE_7_AUDIT_RECONCILIATION.md. Fixes
+landed for: approval FK/type mismatch, oracle-bypass of the
+approval validator (now every decision routes through
+validateApprovalDecision), timestamp NaN/skew/reversed gaps (one
+CLOCK_SKEW_MS policy), approval field immutability (column-level
+grant), cross-goal dependency integrity (composite FKs), and the
+crypto action binding. The 32-bit FNV actionHash is explicitly
+NON-authoritative and BANNED as activation evidence; the
+activation-grade hash is crypto-binding.ts SHA-256
+(canonicalActionHash), tested. Durable-runtime items (persistent
+worker, atomic worktree lock, real adapters/transports) remain
+GATED and are honestly NOT claimed complete.
+
 ## High-risk findings requiring a structural test - status
 
 All T1-T18 mitigations that are code-enforceable in this phase

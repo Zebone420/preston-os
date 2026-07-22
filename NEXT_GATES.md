@@ -63,14 +63,20 @@ wait for a future owner-approved gate.
   - Retirement approvals: ZERO issued (Round 1 audit) - all
     deletion candidates evidence-blocked; see
     reports/FINAL_DISPOSITION_REGISTER.md.
-- Phase 7 orchestration (2026-07-22): coded + tested + simulation-
-  proven, NOT deployed/activated. Owner gates, in order:
-  (a) apply migration 0010 (reports/PHASE_7_MIGRATION_0010_OWNER_
-  PACKET.md); (b) activation ladder Level 1 = real Claude adapter
-  in an isolated worktree (reports/PHASE_7_ACTIVATION_LADDER.md);
-  Telegram/ChatGPT real send paths remain simulation-only until
-  their own gates. Backup gate (LA-10, no paid org) still blocks
-  any controlled external execution.
+- Phase 7 orchestration (2026-07-22): PURE SIMULATION, coded +
+  tested + 2-audit-reconciled (commit c50221e), NOT durable, NOT
+  deployed, NOT activated. HONEST status: no durable worker, no
+  persistence applied, adapters+worktree+transports simulated.
+  See reports/PHASE_7_AUDIT_RECONCILIATION.md (~34% of the full
+  owner-supervised objective). Durable-runtime gates, in order:
+  G-D1 owner applies migration 0010 (packet);
+  G-D2 Claude builds store adapters + durable driver reusing
+  existing leases/checkpoint/queue (makes "continuous" true);
+  G-D3 owner Level-1 real Claude adapter in an ATOMIC worktree
+  lock (new lock design) behind runner.ts allowlist.
+  Real Telegram/ChatGPT send paths + real Codex remain gated.
+  Backup gate (LA-10, no paid org) still blocks controlled
+  external execution.
   - Business data intake gate: provenance-tracked import of real
     Airtable TEST records into the business tables (read-only
     source; owner-approved mapping).

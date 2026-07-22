@@ -26,14 +26,22 @@ only; changes no existing table.
 
 - master_goals - environment CHECK='staging', simulation_only
   CHECK=true.
-- goal_jobs - executed CHECK=false; FKs to master_goals,
-  approvals, os_jobs.
+- goal_jobs - executed CHECK=false; runtime_job_id FK to os_jobs;
+  approval_id is a SOFT text ref to orchestration_approvals (Phase
+  7 lifecycle), NOT the legacy 0001 approvals(uuid); a deferred FK
+  goal_jobs_approval_fk is added at the end of the file. composite
+  unique(id, goal_id) so dependencies can enforce same-goal.
 - job_dependencies - append-only edges; unique(job,dep); self-dep
-  CHECK forbidden.
+  CHECK forbidden; composite FKs (job_id,goal_id)+(depends_on_job_
+  id,goal_id) -> goal_jobs(id,goal_id) so an edge can NEVER cross
+  goals (audit finding 8).
 - agent_contracts - can_approve CHECK=false, network_scope
   CHECK='none', environment_scope CHECK='staging'.
-- orchestration_approvals - hash + expiry + unique nonce;
-  environment CHECK='staging'.
+- orchestration_approvals - hash + expiry + unique NOT NULL nonce;
+  environment CHECK='staging'; CHECK expires_at>created_at.
+  IMMUTABILITY (audit finding 7): update is revoked and re-granted
+  ONLY on (status, decided_at, nonce) - action/hash/owner/resource/
+  created_at are privilege-immutable after insert.
 
 ## 4. Application steps
 
@@ -68,6 +76,22 @@ select count(*) from pg_constraint where
  or (conrelid='goal_jobs'::regclass and pg_get_constraintdef(oid) like '%executed = false%')
  or (conrelid='agent_contracts'::regclass and pg_get_constraintdef(oid) like '%can_approve = false%')
  or (conrelid='master_goals'::regclass and pg_get_constraintdef(oid) like '%environment = ''staging''%');
+
+## 5b. Audit-reconciliation verification (added SQL)
+
+-- goal_jobs.approval_id is text with a FK to orchestration_approvals:
+select data_type from information_schema.columns
+ where table_name='goal_jobs' and column_name='approval_id'; -- expect text
+select 1 from pg_constraint where conname='goal_jobs_approval_fk'; -- expect 1
+
+-- approval fields immutable (only decision cols updatable):
+select column_name from information_schema.column_privileges
+ where table_name='orchestration_approvals' and grantee='authenticated'
+   and privilege_type='UPDATE'; -- expect exactly: status, decided_at, nonce
+
+-- same-goal dependency FKs exist (expect 2 composite FKs on job_dependencies):
+select count(*) from information_schema.table_constraints
+ where table_name='job_dependencies' and constraint_type='FOREIGN KEY';
 
 ## 6. Rollback
 
