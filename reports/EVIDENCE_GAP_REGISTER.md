@@ -15,7 +15,9 @@ which session closes it. Updated at each intake.
 | Credential inventory (names/locations) | rotation/retirement plans; orphan detection | Session D (D3) |
 | Paused-project table lists, sizes, pgvector, exports | andersen migration scope; pathc-dev deletion; parity baseline | Owner unpause+export gate (brief; execute by 2026-08-15) |
 | pathc-dev origin statement | its deletion approval | Same gate (owner recollection at export time) |
-| Staging first restore point + tested restore | LA-10 closure | Backup brief steps 2 + restore test |
+| Staging first restore point + tested restore | LA-10 closure | First-backup packet (= transfer Gate 1) + scratch restore test |
+| Paid-org facts: name, plan, roles, transfer-dialog blockers/cost, Vercel-integration status, bucket count | Supabase transfer decision (conditions C1-C5) | Transfer Gate 0 packet (SUPABASE_TRANSFER_OWNER_EVIDENCE_PACKET.md) |
+| First provider backup timestamp (post-transfer) | LA-10 closure under Option A | Transfer Gate 5 |
 | V8 domain ruling; V5-V7 rulings | domain consolidation; NJ flag retirement | Owner verification session (separate) |
 
 No other evidence gaps are known. When every row above is closed,

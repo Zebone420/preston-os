@@ -4,6 +4,10 @@
 
 Date: 2026-07-22. Owner-run only. Claude runs NO step in this
 packet and never sees the connection string or password.
+NOTE 2026-07-22: this packet is ALSO Gate 1 of the Supabase
+paid-org transfer plan (reports/SUPABASE_PRE_TRANSFER_BACKUP_
+AND_ROLLBACK_PLAN.md) - identical procedure; run once, counts
+for both.
 Scope: ONE full logical backup of the staging database, stored
 outside the repository. NO restore into preston-os-staging ever
 occurs under this packet. No Supabase setting, plan, or billing

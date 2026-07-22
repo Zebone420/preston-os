@@ -52,9 +52,15 @@ wait for a future owner-approved gate.
   - (APPROVED IN PRINCIPLE 2026-07-22) Staging backup Option 4
     (LA-10). OPEN owner-run: first backup per
     reports/STAGING_FIRST_BACKUP_OWNER_PACKET.md (Path B
-    pg_dump recommended); then the backup-role/pg_dump-runbook
-    engineering gate and the scratch-restore test (within 2
-    weeks of the first backup).
+    pg_dump; ALSO serves as transfer Gate 1); scratch-restore
+    test within 2 weeks of the first backup.
+  - OPEN owner decision (2026-07-22): Supabase paid-org TRANSFER
+    of preston-os-staging - RECOMMENDED CONDITIONAL, conditions
+    C1-C5 in reports/SUPABASE_TRANSFER_DECISION_BRIEF.md; Gate 0
+    evidence packet reports/SUPABASE_TRANSFER_OWNER_EVIDENCE_
+    PACKET.md (5 min). If approved and clean: Gates 1-7 replace
+    the daily-pg_dump build; if any condition fails: Option B
+    hybrid stands.
   - Retirement approvals: ZERO issued (Round 1 audit) - all
     deletion candidates evidence-blocked; see
     reports/FINAL_DISPOSITION_REGISTER.md.

@@ -11,7 +11,8 @@ numbers.
 | 2 | Hetzner | gmail-dev-n8n CPX22 | - | - | - | - | |
 | 3 | Hetzner | ubuntu-4gb-fsn1-2 CPX22 | - | - | - | - | |
 | 4 | Hetzner | snapshots/backups/IPs | - | - | - | - | surcharge lines |
-| 5 | Supabase | preston-os-staging | Org Free Plan, nano | $0 | $0 | 2026-07-21 | no backups incl. (LA-10) |
+| 5 | Supabase | preston-os-staging | Org Free Plan, nano | $0 | $0 | 2026-07-21 | no backups incl. (LA-10); pending paid-org transfer decision - post-transfer cost from Gate 0 dialog (EST USD 0-10/mo) |
+| 5b | Supabase | paid organization (name TBD) | TBD (Pro?) | TBD | TBD | - | Gate 0 evidence; existing owner cost regardless of transfer |
 | 6 | Supabase | preston-ai-andersen (paused) | Org Free Plan | $0 | $0 | 2026-07-21 | resume deadline 28 Sep 2026 |
 | 7 | Supabase | preston-ai-pathc-dev (paused) | Org Free Plan | $0 | $0 | 2026-07-21 | resume deadline 23 Sep 2026 |
 | 8 | Vercel | staging project | - | - | - | - | expect Hobby 0 |

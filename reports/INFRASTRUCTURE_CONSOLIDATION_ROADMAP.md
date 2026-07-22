@@ -55,7 +55,13 @@ after W3 integration parity vs (c) migrate n8n onto the staging
 host - (c) is NOT recommended (staging isolation boundary).
 D-2 prestonwd.com: keep for brand/email vs consolidate to
 preston.nyc after the V8 ruling and MX evidence.
-D-3 staging backup option (brief issued; default hybrid 4).
+D-3 staging backup option (brief issued; default hybrid 4) -
+UPDATED 2026-07-22: preferred resolution is now the paid-org
+TRANSFER (conditional; reports/SUPABASE_TRANSFER_DECISION_BRIEF
+.md) with the pg_dump kept as off-platform copy; Option B stands
+as the fallback if any Gate 0 condition fails.
+D-4 (new) paid-org transfer Gate 0-7 execution window - owner
+schedules; fits inside W0/W2.
 
 ## Savings trajectory (ESTIMATES until D2 billing evidence)
 

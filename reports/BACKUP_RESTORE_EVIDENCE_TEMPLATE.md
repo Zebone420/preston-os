@@ -29,3 +29,11 @@ procedure column must point at written steps; at least one
 restore per class (one Supabase export, one server snapshot) is
 test-restored or explicitly owner-waived before any deletion in
 that class.
+
+Transfer-plan addendum (2026-07-22): if the paid-org transfer
+executes (Gates 0-7), the staging row gains a second component -
+provider daily backups (Pro: 7-day retention; physical, NOT
+downloadable) with the Gate 5 first-backup timestamp recorded
+here. The logical pg_dump remains the off-platform copy in every
+branch; LA-10 closes only when BOTH evidence lines exist (or,
+under Option B, when the dump cadence + restore test exist).
