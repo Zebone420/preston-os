@@ -18,7 +18,7 @@ const GOAL_EDGES: Record<GoalStatus, readonly GoalStatus[]> = {
 };
 
 const JOB_EDGES: Record<GoalJobStatus, readonly GoalJobStatus[]> = {
-  pending: ['ready', 'assigned', 'awaiting_approval', 'cancelled'],
+  pending: ['ready', 'assigned', 'in_progress', 'awaiting_approval', 'cancelled'],
   ready: ['assigned', 'in_progress', 'awaiting_approval', 'cancelled'],
   assigned: ['in_progress', 'ready', 'cancelled'],
   in_progress: ['awaiting_review', 'completed', 'failed', 'cancelled'],
