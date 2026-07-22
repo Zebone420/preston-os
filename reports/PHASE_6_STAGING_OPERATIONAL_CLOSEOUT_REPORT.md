@@ -22,10 +22,9 @@ and no outbound or external business-write capability."
 
 Not production-live. Not production-active.
 
-One archival item remains open (does not suspend the declaration
-for the validated application): V1b sign-out deployment evidence
-at e0609d3 - requested once in the consolidated owner packet
-(reports/OWNER_EVIDENCE_COLLECTION_PACKET.md, item A).
+V1b sign-out deployment evidence: OWNER-VERIFIED and archived
+(binder S7, 2026-07-21). No Phase 6 archival item remains open.
+Phase 6 is FORMALLY CLOSED with complete evidence.
 
 Final authoritative test state (owner environment): 664 total,
 659 pass, 5 bash-ENOENT platform failures confined to

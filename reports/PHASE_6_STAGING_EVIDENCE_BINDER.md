@@ -92,15 +92,19 @@ verified remotely by the owner against the deployed staging app:
 - No Business Command Center, authentication, quote, migration,
   runtime, or RLS regression found.
 
-## S7. Sign-out remediation (commit e0609d3)
+## S7. Sign-out remediation (commit e0609d3) - OWNER-VERIFIED
 
-Coded, tested (10 tests), committed, PUSHED (origin/master ==
-e0609d3 verified). Deployment evidence (V1b: Vercel Ready at
-e0609d3; Sign out visible; ends session; /business protected
-after; owner can sign back in) is the single outstanding archival
-item - requested in the consolidated owner packet
-(reports/OWNER_EVIDENCE_COLLECTION_PACKET.md, item A).
-[OWNER PASTE AREA - V1b sign-out deployment evidence]
+Coded, tested (10 tests), committed, pushed, deployed, and
+remotely verified by the owner (evidence returned 2026-07-21,
+archived here; this closes the last open Phase 6 archival item):
+
+- Sign out control visible on /business: PASS.
+- Sign out ended the session and redirected to /login: PASS.
+- /business remained protected (redirected to /login) after
+  sign-out: PASS.
+- Owner signed back in successfully: PASS.
+
+V1b is COMPLETE. No Phase 6 evidence remains outstanding.
 
 ## S8. Formal declaration
 

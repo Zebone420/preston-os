@@ -1,3 +1,12 @@
+# OWNER EVIDENCE COLLECTION PACKET (V1 - SUPERSEDED)
+
+STATUS 2026-07-21: item A (sign-out evidence) is COMPLETE and
+archived in the Phase 6 binder S7. For everything else use
+reports/OWNER_EVIDENCE_COLLECTION_PACKET_V2.md, which reorders
+the remaining items by system, adds the credential-reference
+inventory (item G), and binds each item to the evidence-intake
+structure. This V1 file is retained for history only.
+
 # OWNER EVIDENCE COLLECTION PACKET (single consolidated gate)
 
 Date: 2026-07-21. Everything below is READ-ONLY evidence

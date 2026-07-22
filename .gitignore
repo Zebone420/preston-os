@@ -28,3 +28,30 @@ reports/tmp/
 *.log
 Thumbs.db
 .DS_Store
+
+# --- Legacy-audit evidence intake: NEVER commit raw evidence ---
+# Exports, inventories, screenshots, and clones can contain
+# tokens, cookies, headers, PII, or licensed vendor content.
+# Everything under evidence-intake/ stays untracked except its
+# README and the .gitkeep markers.
+evidence-intake/
+!evidence-intake/README.md
+legacy-audit/
+*.workflow.json
+n8n-export*
+*-workflows-export*
+server-inventory*
+billing*.png
+billing*.jpg
+billing*.pdf
+dns-export*
+zone-export*
+supabase-export*
+supabase-backup*
+*.dump
+*.sql.gz
+credential-inventory*
+cookies*.txt
+headers*.txt
+har-capture*
+*.har

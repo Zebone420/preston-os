@@ -39,12 +39,14 @@ wait for a future owner-approved gate.
     migration 0009 to staging with verification passed.
   - (DONE 2026-07-21) Staging validation gate V0-V7 PASS -
     Business Command Center V1 is formally staging-operational
-    (binder S5-S8). Open archival item: V1b sign-out deployment
-    evidence at e0609d3 (owner packet item A).
+    (binder S5-S8).
+  - (DONE 2026-07-21) V1b sign-out deployment evidence
+    owner-verified and archived (binder S7). Phase 6 evidence is
+    COMPLETE.
   - OPEN: platform consolidation / legacy asset audit gates - see
-    reports/OWNER_EVIDENCE_COLLECTION_PACKET.md (read-only
-    evidence collection) and, after evidence returns,
-    reports/ASSET_RETIREMENT_OWNER_PACKET.md.
+    reports/OWNER_EVIDENCE_COLLECTION_PACKET_V2.md (ordered
+    read-only evidence collection; supersedes V1) and, after
+    evidence returns, reports/ASSET_RETIREMENT_OWNER_PACKET.md.
   - Business data intake gate: provenance-tracked import of real
     Airtable TEST records into the business tables (read-only
     source; owner-approved mapping).
