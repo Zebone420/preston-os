@@ -8,6 +8,7 @@ import {
   persistDecomposedGoal,
   transitionGoal,
   transitionJob,
+  verifyAuthoritativeApproval,
 } from '../src/lib/ai-os/orchestration/store';
 import {
   canTransitionGoal,
@@ -184,6 +185,32 @@ describe('durable approval decision - one-time, durable nonce replay', () => {
     const db = makeFakeDb();
     db.rowsOf('orchestration_approvals').push({ approval_id: 'a', status: 'pending' });
     expect((await decideApproval(db.client, 'a', 'approved', '', NOW)).ok).toBe(false);
+  });
+});
+
+describe('authoritative approval verification - fail closed (P7-CX-01 defect A)', () => {
+  const job = { id: 'job-0000-a', goal_id: 'goal-00000001', approval_id: 'apr-00000001' };
+  const expected = { owner_identity: 'owner@preston.nyc', action_hash: 'abc12345' };
+  const goodRecord = {
+    approval_id: 'apr-00000001', status: 'approved', owner_identity: 'owner@preston.nyc',
+    action_hash: 'abc12345', job_id: 'job-0000-a', goal_id: 'goal-00000001',
+    environment: 'staging', nonce: 'n1', decided_at: NOW, expires_at: '2026-07-22T12:15:00.000Z',
+  };
+  it('accepts only a fully-bound, approved, non-expired record', () => {
+    expect(verifyAuthoritativeApproval(goodRecord, job, expected).ok).toBe(true);
+  });
+  it('rejects forged/absent/mismatched records (no bare-id unlock)', () => {
+    expect(verifyAuthoritativeApproval(undefined, job, expected).reason).toBe('no_approval_record');
+    expect(verifyAuthoritativeApproval(goodRecord, { ...job, approval_id: null }, expected).reason).toBe('job_has_no_approval_id');
+    expect(verifyAuthoritativeApproval({ ...goodRecord, status: 'pending' }, job, expected).reason).toBe('not_approved');
+    expect(verifyAuthoritativeApproval({ ...goodRecord, owner_identity: 'intruder' }, job, expected).reason).toBe('owner_mismatch');
+    expect(verifyAuthoritativeApproval({ ...goodRecord, action_hash: 'deadbeef' }, job, expected).reason).toBe('action_hash_mismatch');
+    expect(verifyAuthoritativeApproval({ ...goodRecord, job_id: 'other' }, job, expected).reason).toBe('job_scope_mismatch');
+    expect(verifyAuthoritativeApproval({ ...goodRecord, goal_id: 'other' }, job, expected).reason).toBe('goal_scope_mismatch');
+    expect(verifyAuthoritativeApproval({ ...goodRecord, environment: 'production' }, job, expected).reason).toBe('environment_mismatch');
+    expect(verifyAuthoritativeApproval({ ...goodRecord, nonce: null }, job, expected).reason).toBe('nonce_missing');
+    expect(verifyAuthoritativeApproval({ ...goodRecord, decided_at: 'bad' }, job, expected).reason).toBe('decision_timestamp_invalid');
+    expect(verifyAuthoritativeApproval({ ...goodRecord, decided_at: '2026-07-22T12:20:00.000Z' }, job, expected).reason).toBe('decision_expired');
   });
 });
 

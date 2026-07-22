@@ -92,9 +92,14 @@ export function step(state: GoalState, nowMs: number): EngineStep {
       }
       case 'pending': {
         if (depsMet(job, byId)) {
-          // becomes ready => needs assignment (or approval first)
-          if (job.requires_approval && !job.approval_id) {
-            actions.push({ type: 'request_approval', job_id: job.id });
+          // A job that requires approval NEVER runs while requires_approval is
+          // true - a non-null approval_id is NOT authorization (a forged id
+          // must not unlock execution). requires_approval is cleared to false
+          // ONLY by the authoritative approval boundary (the store/validator
+          // in the driver, or validateApprovalDecision in the sim) after a
+          // verified, owner-bound, hash-bound, approved, non-expired decision.
+          if (job.requires_approval) {
+            if (!job.approval_id) actions.push({ type: 'request_approval', job_id: job.id });
             blocked = true;
           } else if (!job.assigned_role) {
             actions.push({ type: 'assign', job_id: job.id, role: 'claude' });
@@ -105,9 +110,9 @@ export function step(state: GoalState, nowMs: number): EngineStep {
         break;
       }
       case 'ready': {
-        if (job.requires_approval && !job.approval_id) {
-          actions.push({ type: 'request_approval', job_id: job.id });
-          blocked = true;
+        if (job.requires_approval) {
+          if (!job.approval_id) actions.push({ type: 'request_approval', job_id: job.id });
+          blocked = true; // held until requires_approval is authoritatively cleared
         } else {
           actions.push({ type: 'run', job_id: job.id });
         }

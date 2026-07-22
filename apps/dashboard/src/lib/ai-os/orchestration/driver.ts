@@ -19,9 +19,12 @@ import { makeSimulationAdapter } from './adapters';
 import {
   listGoals,
   listJobsForGoal,
+  readApprovalRecord,
   transitionGoal,
   transitionJob,
+  verifyAuthoritativeApproval,
 } from './store';
+import { actionHash } from './approvals';
 import type {
   AgentRole,
   ExecutionBudget,
@@ -120,9 +123,30 @@ export async function driverStep(
   }
   const state = await loadGoalState(client, goalId, depends);
   if (!state) return { halted: true, reason: 'goal_not_found', actions: [], persisted: 0 };
+  const nowIso = new Date(nowMs).toISOString();
+
+  // AUTHORITATIVE approval gate: for every job awaiting approval, read its
+  // approval record and clear requires_approval ONLY if the record
+  // authoritatively approves THIS job (verifyAuthoritativeApproval). A forged
+  // or absent approval_id can never unlock execution - the record must be
+  // approved, owner-bound, hash-bound, scope-bound, non-expired. This mutates
+  // the in-memory state before the engine step and persists the clear.
+  for (const job of state.jobs) {
+    if (job.status !== 'awaiting_approval' || !job.requires_approval || !job.approval_id) continue;
+    const record = await readApprovalRecord(client, job.approval_id);
+    const expectedHash = actionHash(`${job.kind}: ${job.objective || job.title}`, `goal_job:${job.id}`, 'staging');
+    const check = verifyAuthoritativeApproval(record, job, {
+      owner_identity: state.goal.requested_by,
+      action_hash: expectedHash,
+    });
+    if (check.ok) {
+      const t = await transitionJob(client, job.id, 'awaiting_approval', 'ready', {}, nowIso);
+      if (t.ok) { job.requires_approval = false; job.status = 'ready'; }
+    }
+    // not authoritatively approved => stays awaiting_approval (fail-closed)
+  }
 
   const s = step(state, nowMs);
-  const nowIso = new Date(nowMs).toISOString();
   const byId = new Map(state.jobs.map((j) => [j.id, j]));
   let persisted = 0;
 

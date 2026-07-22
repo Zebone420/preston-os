@@ -58,6 +58,12 @@ function isExpired(lock: WorktreeLock, nowMs: number): boolean {
   const exp = Date.parse(lock.expires_at);
   return !Number.isFinite(exp) || exp <= nowMs;
 }
+function samePaths(a: string[], b: string[]): boolean {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  const sa = [...a].sort();
+  const sb = [...b].sort();
+  return sa.every((v, i) => v === sb[i]);
+}
 
 // Decide whether an allocation is permitted. Fail-closed on every invalid or
 // unsafe input. On a stale existing lock, allow takeover with a HIGHER fence.
@@ -88,7 +94,21 @@ export function decideAcquire(input: AcquireInput): AcquireResult {
       if (existing.owner !== input.owner || existing.token !== input.token) {
         return { ok: false, reason: 'held_by_another' };
       }
-      // Re-entrant refresh by the same holder: bump fence, extend.
+      // Re-entrant refresh by the same holder: ONLY a renewal of the IDENTICAL
+      // binding is allowed. Any change to the pinned scope (job/base/branch/
+      // paths/repo/worktree_id) is a rebinding attempt and is rejected -
+      // no scope widening under a live lock.
+      if (
+        existing.job_id !== input.job_id ||
+        existing.base_commit !== input.base_commit ||
+        existing.branch !== input.branch ||
+        existing.repo !== input.repo ||
+        existing.worktree_id !== input.worktree_id ||
+        !samePaths(existing.allowed_paths, input.allowed_paths)
+      ) {
+        return { ok: false, reason: 'lock_binding_mismatch' };
+      }
+      // Identical binding: bump fence, extend.
       fence = existing.fence + 1;
     } else {
       // Stale lock: takeover with a strictly higher fence (fencing).

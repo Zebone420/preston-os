@@ -28,7 +28,38 @@ merge-order planning, Claude conflict-check + integration review.
 ### P7-CX-01 - adversarial security regression tests
 - Task ID: P7-CX-01
 - Assigned agent: Codex (local, C:\dev\preston-os)
-- Status: APPROVED / DELEGATED (awaiting Codex return)
+- Status: REVIEWED, DEFECTS REPRODUCED + FIXED, INTEGRATED
+- Codex base commit: bd9a080 (matched observed HEAD)
+- Integration HEAD before merge: bd9a080; integration commit: see
+  the fix(7) commit below.
+- Conflict result: NONE - single new untracked file
+  (apps/dashboard/test/orchestration-security-regressions.test.ts),
+  no existing file modified by Codex (verified via git status +
+  ls-files --others). Allowed-file compliance: PASS.
+- Review verdict: SOUND - valid current contracts, correct SHA-256
+  binding coverage, correct timestamp/nonce boundaries, correct
+  migration integrity assertions, no duplicate unsafe assumptions.
+- Codex results: 23 tests (21 pass, 2 expected-fail defects).
+- Defects reproduced + fixed by Claude (repository-evidence
+  verified, not accepted on assertion alone):
+  A. Forged approval_id could unlock a gated job. FIX: the
+     completion engine NEVER runs a job while requires_approval is
+     true (a non-null approval_id is not authorization); the
+     durable driver clears requires_approval ONLY via
+     verifyAuthoritativeApproval (approval_id + approved status +
+     owner + action_hash + job/goal/environment scope + nonce +
+     non-expired). +11-case store test.
+  B. Re-entrant worktree holder could rebind scope. FIX:
+     decideAcquire now allows a same-owner/token refresh ONLY for
+     an IDENTICAL binding; any change to job/base/branch/paths/
+     repo/worktree_id => lock_binding_mismatch (no scope widening).
+  Both it.fails converted to passing it() with assertions
+  UNCHANGED.
+- Tests after integration: focused Codex 23/23; full orchestration
+  + migration + driver + durable + approvals suites 131/131;
+  lint clean; build/typecheck pass; secret scan 0; RED scan 0.
+- Merge decision: INTEGRATED (no auto-merge - repaired then
+  committed the file + fixes together).
 - Pinned base commit: 1778a11 (newest clean HEAD; was df018fc at
   approval - Claude's durable-driver group df018fc..1778a11 does
   NOT touch P7-CX-01's allowed file, so either pin is conflict-

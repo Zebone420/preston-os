@@ -229,6 +229,55 @@ export async function decideApproval(
   }
 }
 
+// --- authoritative approval verification -----------------------------------
+
+// Verify that a persisted orchestration_approvals record AUTHORITATIVELY
+// approves a specific gated job. Fail-closed: every bound field must match.
+// A non-null approval_id on the job is NEVER sufficient - only a record that
+// is approved, owner-bound, hash-bound, scope-bound, nonce-present, and
+// non-expired unlocks execution. Returns the reason on refusal.
+export interface AuthoritativeApprovalCheck {
+  ok: boolean;
+  reason: string;
+}
+
+export function verifyAuthoritativeApproval(
+  record: Record<string, unknown> | undefined,
+  job: { id: string; goal_id: string; approval_id: string | null },
+  expected: { owner_identity: string; action_hash: string },
+): AuthoritativeApprovalCheck {
+  if (!record) return { ok: false, reason: 'no_approval_record' };
+  if (!job.approval_id) return { ok: false, reason: 'job_has_no_approval_id' };
+  if (String(record.approval_id) !== job.approval_id) return { ok: false, reason: 'approval_id_mismatch' };
+  if (String(record.status) !== 'approved') return { ok: false, reason: 'not_approved' };
+  if (String(record.owner_identity) !== expected.owner_identity) return { ok: false, reason: 'owner_mismatch' };
+  if (String(record.action_hash) !== expected.action_hash) return { ok: false, reason: 'action_hash_mismatch' };
+  if (String(record.job_id) !== job.id) return { ok: false, reason: 'job_scope_mismatch' };
+  if (String(record.goal_id) !== job.goal_id) return { ok: false, reason: 'goal_scope_mismatch' };
+  if (String(record.environment) !== 'staging') return { ok: false, reason: 'environment_mismatch' };
+  if (!record.nonce) return { ok: false, reason: 'nonce_missing' };
+  const decided = Date.parse(String(record.decided_at ?? ''));
+  const expires = Date.parse(String(record.expires_at ?? ''));
+  if (!Number.isFinite(decided)) return { ok: false, reason: 'decision_timestamp_invalid' };
+  if (Number.isFinite(expires) && decided >= expires) return { ok: false, reason: 'decision_expired' };
+  return { ok: true, reason: 'authoritatively_approved' };
+}
+
+// Read the approval record for a job (by its approval_id) so the driver can
+// verify it before clearing requires_approval.
+export async function readApprovalRecord(
+  client: RuntimeClient,
+  approvalId: string,
+): Promise<Record<string, unknown> | undefined> {
+  try {
+    const res = await client.from(ORCH_TABLES.approvals).select('*').eq('approval_id', approvalId).limit(1);
+    if (res.error) return undefined;
+    return res.data?.[0];
+  } catch {
+    return undefined;
+  }
+}
+
 // --- reads (fail closed) ---------------------------------------------------
 
 export interface ListOutcome {
