@@ -15,6 +15,8 @@ const ORCH_FILES = [
   'src/lib/ai-os/orchestration/completion-engine.ts',
   'src/lib/ai-os/orchestration/adapters.ts',
   'src/lib/ai-os/orchestration/coordinator.ts',
+  'src/lib/ai-os/orchestration/goal-intake.ts',
+  'src/lib/ai-os/orchestration/orchestrator-sim.ts',
 ];
 
 const SPAWN = [
