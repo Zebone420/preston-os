@@ -61,6 +61,24 @@ build passes and dispatcher health exits 78 no-env; secret scan 0;
 RED-boundary scan 0; browser bundle (.next/static) contains no
 service_role reference and no server-secret env identifier.
 
+## Post-gate reconciliation notes (2026-07-21)
+
+- Owner V0-V7 gate: PASS on all items; archived in the staging
+  evidence binder S5. No new defects surfaced by remote
+  validation.
+- Final test totals reconciled: owner environment reports 664
+  total / 659 pass / 5 failures, all in worktree-prep.test.ts
+  Bash invocation checks (bash-ENOENT). Earlier sandbox runs
+  showed 2 timeout failures in the same file - same platform
+  limitation class, different manifestation (spawn timeout vs
+  ENOENT), zero product code involved. Compensation: direct Git
+  Bash syntax checks 3/3 PASS; direct secret + RED scans 0/0.
+  Classified PLATFORM-LIMITATION, unchanged since the 04c3c75
+  baseline.
+- Sign-out (this register's UX addendum): defect fixed at
+  e0609d3 with tests; deployment evidence pending archival
+  (owner packet item A). No open code defect.
+
 ## Open defects
 
 Critical: 0. High: 0. Medium: 0 open (all fixed this cycle).

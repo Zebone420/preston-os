@@ -50,20 +50,65 @@ corrections, full-coverage migration verification SQL, +22 tests.
 Post-remediation matrix: 654/652/2, lint/build/os-runtime/scans
 all clean (see closeout).
 
-## S5. Owner gate paste areas (V0-V7)
+## S5. Owner gate results (V0-V7) - PASS, owner-verified 2026-07-21
 
-From reports/PHASE_6_STAGING_VALIDATION_OWNER_GATE.md:
+From reports/PHASE_6_STAGING_VALIDATION_OWNER_GATE.md, all
+verified remotely by the owner against the deployed staging app:
 
-- V0 Vercel commit hash: [OWNER]
-- V1 signed-out redirects: [OWNER]
-- V2 empty-state sweep: [OWNER]
-- V3 client/lead entry + stage move: [OWNER]
-- V4a quote totals ($4,355.00 expected): [OWNER]
-- V4b input preserved on validation failure: [OWNER]
-- V4c agent ops + safety posture: [OWNER]
-- V5 approval banner + audit row: [OWNER]
-- V6 recommendations message: [OWNER]
-- V7 regression + /os controls: [OWNER]
+- V0 Vercel deployed the approved application commit: PASS
+  (validation ran against the pre-sign-out commit; see S7).
+- V1 signed-out /business routes redirect to /login: PASS.
+  Signed-in owner shows SUPABASE STAGING badge: PASS.
+- V2 empty-state sweep - all Business Command Center pages render
+  without errors: PASS.
+- V3 client creation, lead creation, lead stage movement: PASS.
+- V4a quote-draft simulation with deterministic totals: PASS -
+  material $3,000.00, labor $1,000.00, subtotal $4,000.00, NYC
+  tax $355.00, total $4,355.00; schedule $2,177.50 / $1,088.75 /
+  $1,088.75.
+- V4b validation failure preserved form inputs: PASS.
+- V4c Agent Operations showed completed and failed_validation
+  runs: PASS.
+- V4d activity ledger recorded quote_draft_created: PASS.
+- V5 approval displayed "Decision recorded. Nothing was
+  executed."; /audit recorded approval_decision:approved: PASS.
+- V6 recommendations advice-only, nothing executed: PASS.
+- V7 /, /brief, /approvals, /audit, /os rendered; execution off,
+  Remote Runner off, hermes observe_only, owner_stop off, paused
+  off: PASS.
 
-PASS on all of V0-V7 completes the staging-operational
-declaration in the closeout report.
+## S6. Final verified test state (owner environment, authoritative)
+
+- 664 total tests; 659 pass; 5 failures, all confined to Bash
+  invocation checks in worktree-prep.test.ts (Windows PowerShell
+  bash-ENOENT platform limitation - the same environment class
+  recorded since Phase 5; count varies 2-5 by machine/timeout
+  behavior, always in that one file, never in business/auth/
+  quote/migration/runtime/RLS suites).
+- Direct compensation evidence (owner-run in Git Bash):
+  syntax checks PASSED for worktree_prepare.sh, secret_scan.sh,
+  red_boundary_scan.sh; direct secret scan 0 findings; direct
+  RED-boundary scan 0 findings.
+- No Business Command Center, authentication, quote, migration,
+  runtime, or RLS regression found.
+
+## S7. Sign-out remediation (commit e0609d3)
+
+Coded, tested (10 tests), committed, PUSHED (origin/master ==
+e0609d3 verified). Deployment evidence (V1b: Vercel Ready at
+e0609d3; Sign out visible; ends session; /business protected
+after; owner can sign back in) is the single outstanding archival
+item - requested in the consolidated owner packet
+(reports/OWNER_EVIDENCE_COLLECTION_PACKET.md, item A).
+[OWNER PASTE AREA - V1b sign-out deployment evidence]
+
+## S8. Formal declaration
+
+With V0-V7 PASS archived above, the Phase 6 formal declaration is
+in effect:
+
+"Business Command Center V1 is staging-operational, remotely
+proven, simulation-only, owner-approved, with execution disabled
+and no outbound or external business-write capability."
+
+Not production-live. Not production-active.

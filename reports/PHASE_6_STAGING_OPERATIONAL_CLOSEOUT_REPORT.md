@@ -9,22 +9,29 @@ This cycle's commits: 9ca6120 (remediation) + the closeout-docs
 commit that follows this file. All local commits after 7ec5b40
 are UNPUSHED until the owner pushes.
 
-## Formal status
+## Formal status - DECLARED (owner gate PASSED 2026-07-21)
 
-All non-owner work is COMPLETE with zero open critical/high/medium
-findings. The staging-operational declaration is CONDITIONAL on
-exactly one owner gate:
-reports/PHASE_6_STAGING_VALIDATION_OWNER_GATE.md (V0-V7).
-Once that evidence returns PASS, the formal recommendation is:
+The V0-V7 owner validation gate returned PASS on every item
+(archived in reports/PHASE_6_STAGING_EVIDENCE_BINDER.md S5-S6).
+All commits through e0609d3 are pushed (origin/master verified).
+The formal declaration is therefore in effect:
 
-"Business Command Center V1 is staging-operational,
-simulation-only, owner-approved, remotely proven, with execution
-disabled and no outbound or external business-write capability."
+"Business Command Center V1 is staging-operational, remotely
+proven, simulation-only, owner-approved, with execution disabled
+and no outbound or external business-write capability."
 
-Until then the accurate state is: coded, tested, audited,
-documented, committed (partially pushed - remediation commits
-pending owner push), migration applied (owner-run), deployment
-and remote proof pending the single gate.
+Not production-live. Not production-active.
+
+One archival item remains open (does not suspend the declaration
+for the validated application): V1b sign-out deployment evidence
+at e0609d3 - requested once in the consolidated owner packet
+(reports/OWNER_EVIDENCE_COLLECTION_PACKET.md, item A).
+
+Final authoritative test state (owner environment): 664 total,
+659 pass, 5 bash-ENOENT platform failures confined to
+worktree-prep.test.ts, fully compensated by direct Git Bash
+syntax checks (3/3 PASS) and direct scanner runs (0 findings
+each). See binder S6.
 
 ## The 28 end-state criteria
 
