@@ -253,6 +253,23 @@ revoke delete on agent_contracts from authenticated;
 revoke delete on orchestration_approvals from authenticated;
 
 -- ============================================================
+-- Worktree lock (audit critical #1): the Phase 7 worktree lock persists on
+-- the EXISTING repository_worktrees table (0004) - the authoritative worktree
+-- record, per the architecture decision (no second lock table). That table
+-- already carries id/repo/path/agent/job_id/base_commit/target_branch/status/
+-- lock_id, but lacks the Phase 7 fencing facts. Add them ADDITIVELY. The
+-- ownership token reuses the existing lock_id column; status uses the existing
+-- CHECK values ('in_use' when held, 'unassigned' when released). Additive,
+-- staging-safe, RLS unchanged (repository_worktrees RLS from 0004 covers new
+-- columns). Rollback = owner drops these three columns.
+alter table repository_worktrees
+  add column if not exists fence integer not null default 0;
+alter table repository_worktrees
+  add column if not exists allowed_paths jsonb not null default '[]';
+alter table repository_worktrees
+  add column if not exists lease_expires_at timestamptz;
+
+-- ============================================================
 -- Deferred FK: goal_jobs.approval_id -> orchestration_approvals(approval_id).
 -- Added after both tables exist (circular with orchestration_approvals.
 -- job_id). Guarded for idempotent re-runs.
