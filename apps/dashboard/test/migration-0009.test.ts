@@ -117,7 +117,7 @@ describe('migration 0009 - business foundation', () => {
   });
 
   it('grants nothing to anon and never uses a broad grant-all', () => {
-    expect(sql).not.toMatch(/to anon\b/);
+    expect(sql).not.toMatch(/grant [^;]*to anon\b/);
     expect(sql).not.toMatch(/grant all\b/i);
   });
 
@@ -139,6 +139,55 @@ describe('migration 0009 - business foundation', () => {
     for (const g of grants) {
       expect(g[0]).not.toMatch(/\bdelete\b/);
     }
+  });
+
+  it('revokes all default privileges from anon on every table', () => {
+    for (const t of NEW_TABLES) {
+      expect(sql).toMatch(
+        new RegExp(`revoke all on ${t} from anon;`),
+      );
+    }
+  });
+
+  it('revokes the default delete privilege on every mutable table', () => {
+    const mutable = NEW_TABLES.filter(
+      (t) => !APPEND_ONLY.includes(t),
+    );
+    for (const t of mutable) {
+      const hasComboRevoke = new RegExp(
+        `revoke update, delete on ${t}\\s+from authenticated`,
+      ).test(sql);
+      const hasDeleteRevoke = new RegExp(
+        `revoke delete on ${t} from authenticated;`,
+      ).test(sql);
+      expect(
+        hasComboRevoke || hasDeleteRevoke,
+        `${t} must revoke the delete privilege for authenticated`,
+      ).toBe(true);
+    }
+  });
+
+  it('pins quote_versions numbers via a column-level update grant', () => {
+    expect(sql).toMatch(
+      /revoke update on quote_versions from authenticated;/,
+    );
+    expect(sql).toMatch(
+      /grant update \(approval_id\) on quote_versions to authenticated;/,
+    );
+    // No whole-row update grant may exist for quote_versions.
+    expect(sql).not.toMatch(
+      /grant select, insert, update on quote_versions/,
+    );
+  });
+
+  it('CHECK-pins the activity ledger simulation state', () => {
+    const block = sql.slice(
+      sql.indexOf(
+        'create table if not exists business_activity_events',
+      ),
+    );
+    const body = block.slice(0, block.indexOf(');'));
+    expect(body).toMatch(/check \(simulation_state = 'simulation'\)/);
   });
 
   it('adds only the insert privilege on approvals (no policy change)', () => {
@@ -171,7 +220,7 @@ describe('migration 0009 - business foundation', () => {
     }
   });
 
-  it('stores money as bigint cents and rates as basis points', () => {
+  it('stores money as bigint cents and rates as integer milli-percent', () => {
     expect(sql).toMatch(/material_cents bigint/);
     expect(sql).toMatch(/labor_cents bigint/);
     expect(sql).toMatch(/fees_cents bigint/);

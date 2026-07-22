@@ -115,8 +115,9 @@ create table if not exists quotes (
   client_id uuid not null references business_clients (id),
   property_id uuid references business_properties (id),
   lead_id uuid references sales_leads (id),
-  -- bare uuid on purpose: projects is created below (no circular FK),
-  -- following the established bare-uuid reference precedent.
+  -- Declared bare here because projects is created later in this
+  -- file; the FK is added after both tables exist (see the
+  -- constraint block near the end of the file).
   project_id uuid,
   title text not null,
   status text not null default 'draft'
@@ -379,7 +380,8 @@ create table if not exists business_activity_events (
   provenance jsonb not null default '{}',
   correlation_id text not null,
   approval_id uuid references approvals (id),
-  simulation_state text not null default 'simulation',
+  simulation_state text not null default 'simulation'
+    check (simulation_state = 'simulation'),
   idempotency_key text not null unique,
   created_at timestamptz not null default now()
 );
@@ -463,10 +465,15 @@ create index if not exists idx_approval_links_entity
 
 -- ============================================================
 -- RLS: owner-only everywhere via public.is_owner() (0002).
--- Mutable tables: for-all owner policy; grants without delete.
+-- Mutable tables: for-all owner policy; explicit grants, and the
+-- default-privilege delete is revoked (no hard-delete path; use
+-- archived flags).
 -- Append-only tables: insert+select policies; update/delete
 -- privileges revoked (same pattern as audit_log / os_events).
--- The anon role receives no privileges anywhere in this file.
+-- Supabase default privileges hand anon and authenticated broad
+-- DML on every new public table, so this file explicitly revokes
+-- everything from anon on every table (0001/0003/0004 idiom) -
+-- RLS is then the second blocking layer, not the only one.
 -- ============================================================
 
 -- Mutable business tables
@@ -575,9 +582,12 @@ drop policy if exists quote_versions_owner_upd on quote_versions;
 create policy quote_versions_owner_upd on quote_versions
   for update to authenticated
   using (public.is_owner()) with check (public.is_owner());
--- update allowed only to attach approval_id after decision;
--- numbers are immutable by convention and version bump.
-grant select, insert, update on quote_versions to authenticated;
+-- Column-level update grant: only approval_id may ever change
+-- after insert. The priced numbers are immutable at the
+-- privilege level, not merely by convention.
+grant select, insert on quote_versions to authenticated;
+revoke update on quote_versions from authenticated;
+grant update (approval_id) on quote_versions to authenticated;
 
 alter table quote_items enable row level security;
 drop policy if exists quote_items_owner_ins on quote_items;
@@ -657,3 +667,59 @@ create policy approval_links_owner_sel on approval_links
   for select to authenticated using (public.is_owner());
 grant select, insert on approval_links to authenticated;
 revoke update, delete on approval_links from authenticated;
+
+-- ============================================================
+-- Deferred FK: quotes.project_id -> projects(id). Added after
+-- both tables exist (quotes is created before projects in this
+-- file). Guarded for idempotent re-runs (0008 idiom).
+-- ============================================================
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+     where conname = 'quotes_project_id_fk'
+  ) then
+    alter table quotes
+      add constraint quotes_project_id_fk
+      foreign key (project_id) references projects (id);
+  end if;
+end $$;
+
+-- ============================================================
+-- Privilege hardening (audit F1): strip Supabase default
+-- privileges. anon gets nothing on any business table; the
+-- mutable tables lose the default delete privilege (records are
+-- archived, never hard-deleted). Append-only tables already had
+-- update/delete revoked above.
+-- ============================================================
+revoke all on business_clients from anon;
+revoke all on business_contacts from anon;
+revoke all on business_properties from anon;
+revoke all on sales_leads from anon;
+revoke all on quotes from anon;
+revoke all on quote_versions from anon;
+revoke all on quote_items from anon;
+revoke all on projects from anon;
+revoke all on project_milestones from anon;
+revoke all on vendor_orders from anon;
+revoke all on installation_events from anon;
+revoke all on payment_schedules from anon;
+revoke all on payment_events from anon;
+revoke all on communication_records from anon;
+revoke all on business_activity_events from anon;
+revoke all on agent_recommendations from anon;
+revoke all on quote_draft_runs from anon;
+revoke all on approval_links from anon;
+
+revoke delete on business_clients from authenticated;
+revoke delete on business_contacts from authenticated;
+revoke delete on business_properties from authenticated;
+revoke delete on sales_leads from authenticated;
+revoke delete on quotes from authenticated;
+revoke delete on quote_versions from authenticated;
+revoke delete on projects from authenticated;
+revoke delete on project_milestones from authenticated;
+revoke delete on vendor_orders from authenticated;
+revoke delete on installation_events from authenticated;
+revoke delete on communication_records from authenticated;
+revoke delete on agent_recommendations from authenticated;

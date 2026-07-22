@@ -31,7 +31,13 @@ export default async function ActivityPage() {
       ))}
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card title={`Activity ledger (${data.activity.length})`}>
+        <Card
+          title={
+            `Activity ledger (${data.activity.length}` +
+            (data.activity.length >= 100 ? ', newest 100 shown' : '') +
+            ')'
+          }
+        >
           <EmptyNote
             show={data.activity.length === 0}
             text="No activity events recorded."

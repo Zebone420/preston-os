@@ -27,6 +27,7 @@ import {
   isMarkupMode,
   isMoneyCents,
   isScopeType,
+  MAX_MONEY_CENTS,
   RATE_DENOMINATOR,
   TAX_RATE_MILLI_PCT,
   type Jurisdiction,
@@ -112,8 +113,10 @@ export const FLAG_MARGIN_EQUALS_MARKUP =
 export const FLAG_SIMULATION_DRAFT = 'simulation_draft_not_a_price';
 
 // Round-half-up integer division of (a * b) / d for non-negative
-// safe integers. Bounds are validated upstream so a * b stays well
-// inside Number.MAX_SAFE_INTEGER (max 5e10 * 1e5 = 5e15 < 9.007e15).
+// safe integers. Validation caps the aggregate quote total at
+// MAX_MONEY_CENTS (5e10), so every call site sees a * b at most
+// 5e10 * 1e5 = 5e15 < 9.007e15; the in-function guard is a second
+// fail-closed layer, not the primary bound.
 export function mulDivRoundHalfUp(
   a: number,
   b: number,
@@ -233,6 +236,37 @@ export function validateQuoteEngineInput(
     errors.push('markup_value_without_mode');
   }
 
+  // Aggregate bound: per-field checks alone would allow 200 items
+  // of 10000 x max-money each, overflowing safe-integer sums. The
+  // whole pre-tax base must fit the money bound, checked here so
+  // oversized quotes fail as validation (named error), not as an
+  // internal engine error.
+  if (errors.length === 0 && missing.length === 0) {
+    let aggregate = input.quote_fees_cents ?? 0;
+    for (const item of input.items ?? []) {
+      const qty = item.quantity ?? 0;
+      aggregate +=
+        qty *
+          ((item.unit_material_cents ?? 0) +
+            (item.unit_labor_cents ?? 0)) +
+        (item.line_fees_cents ?? 0);
+      if (
+        !Number.isSafeInteger(aggregate) ||
+        aggregate > MAX_MONEY_CENTS
+      ) {
+        errors.push('totals_exceed_supported_bounds');
+        break;
+      }
+    }
+    if (
+      input.markup_mode === 'fixed_cents' &&
+      Number.isSafeInteger(aggregate) &&
+      aggregate + (input.markup_value ?? 0) > MAX_MONEY_CENTS
+    ) {
+      errors.push('totals_exceed_supported_bounds');
+    }
+  }
+
   if (errors.length > 0 || missing.length > 0) {
     return { ok: false, errors, missing_fields: missing };
   }
@@ -319,9 +353,22 @@ export function calculateQuote(
     (sum, it) => sum + it.quantity * it.unit_labor_cents,
     0,
   );
-  const fees =
-    (input.quote_fees_cents ?? 0) +
-    items.reduce((sum, it) => sum + it.line_fees_cents, 0);
+  const itemFees = items.reduce(
+    (sum, it) => sum + it.line_fees_cents,
+    0,
+  );
+  const fees = (input.quote_fees_cents ?? 0) + itemFees;
+
+  // Internal invariant: per-line totals must reconcile with the
+  // aggregates they are shown next to. A mismatch means an engine
+  // bug and must never persist.
+  const lineTotalSum = items.reduce(
+    (sum, it) => sum + it.line_total_cents,
+    0,
+  );
+  if (lineTotalSum !== material + labor + itemFees) {
+    throw new Error('quote-engine: line totals do not reconcile');
+  }
 
   const base = material + labor + fees;
   const markupMode = (input.markup_mode ?? 'none') as MarkupMode;

@@ -122,11 +122,14 @@ export function buildExecutiveSummary(
       (l) =>
         ACTIVE_LEAD_STAGES.has(asString(l.stage)) && !asBool(l.archived),
     ).length,
-    open_quotes: inputs.quotes.filter((q) =>
-      OPEN_QUOTE_STATUSES.has(asString(q.status)),
+    open_quotes: inputs.quotes.filter(
+      (q) =>
+        OPEN_QUOTE_STATUSES.has(asString(q.status)) &&
+        !asBool(q.archived),
     ).length,
-    won_jobs: inputs.leads.filter((l) => asString(l.stage) === 'won')
-      .length,
+    won_jobs: inputs.leads.filter(
+      (l) => asString(l.stage) === 'won' && !asBool(l.archived),
+    ).length,
     active_projects: inputs.projects.filter((p) =>
       ACTIVE_PROJECT_STATUSES.has(asString(p.status)),
     ).length,
@@ -158,21 +161,51 @@ export interface ProjectPaymentSummary {
   overdue: boolean;
 }
 
-// Contract value comes from the payment schedule total (which is the
-// quote-version total for schedule rows created from a draft).
-// Collected = sum of recorded payment events for the project.
-// Overdue heuristic (V1): outstanding > 0 while the project is in
-// punch_list/final_inspection/closed - late-stage with money open.
+// Contract value resolution, newest-first: (1) a payment_schedules
+// row linked directly to the project (schedules are read newest
+// first, so the most recent project-linked schedule wins); else
+// (2) fall back through project.quote_id to the newest quote
+// version's total and embedded schedule - this is the path agent-
+// created drafts take, since the agent links schedules to the
+// version, not the project. Collected = sum of recorded payment
+// events for the project. Overdue heuristic (V1): outstanding > 0
+// while the project is in punch_list/final_inspection/closed -
+// late-stage with money open.
 export function buildProjectPaymentSummary(
   project: Row,
   schedules: Row[],
   payments: Row[],
+  quoteVersions: Row[] = [],
 ): ProjectPaymentSummary {
   const projectId = asString(project.id);
   const schedule = schedules.find(
     (s) => asString(s.project_id) === projectId,
   );
-  const scheduleTotal = schedule ? asNumber(schedule.total_cents) : 0;
+  let scheduleTotal = 0;
+  let scheduleType = '';
+  if (schedule) {
+    scheduleTotal = asNumber(schedule.total_cents);
+    scheduleType = asString(schedule.schedule_type);
+  } else {
+    const quoteId = asString(project.quote_id);
+    if (quoteId) {
+      let newest: Row | undefined;
+      for (const v of quoteVersions) {
+        if (asString(v.quote_id) !== quoteId) continue;
+        if (!newest || asNumber(v.version) > asNumber(newest.version)) {
+          newest = v;
+        }
+      }
+      if (newest) {
+        scheduleTotal = asNumber(newest.total_cents);
+        const plan = newest.payment_schedule as
+          | { schedule_type?: unknown }
+          | null
+          | undefined;
+        scheduleType = plan ? asString(plan.schedule_type) : '';
+      }
+    }
+  }
   const collected = payments
     .filter((p) => asString(p.project_id) === projectId)
     .reduce((sum, p) => sum + asNumber(p.amount_cents), 0);
@@ -185,7 +218,7 @@ export function buildProjectPaymentSummary(
     contract_value_cents: scheduleTotal,
     collected_cents: collected,
     outstanding_cents: outstanding,
-    schedule_type: schedule ? asString(schedule.schedule_type) : '',
+    schedule_type: scheduleType,
     overdue: lateStage && outstanding > 0,
   };
 }

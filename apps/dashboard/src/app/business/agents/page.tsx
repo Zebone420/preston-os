@@ -2,7 +2,7 @@ import {
   loadBusinessData,
   resolveBusinessPageContext,
 } from '@/lib/business/page-data';
-import { readSystemControls } from '@/lib/ai-os/store';
+import { readSystemControlsChecked } from '@/lib/ai-os/store';
 import { asString } from '@/lib/business/read-models';
 import {
   BusinessShell,
@@ -25,8 +25,8 @@ export default async function AgentsPage() {
   const { needsLogin, ctx } = await resolveBusinessPageContext();
   if (needsLogin) return <LoginRequired title="Agent Operations" />;
   const data = await loadBusinessData(ctx?.client ?? null);
-  const controls = ctx
-    ? await readSystemControls(ctx.client)
+  const controlsRead = ctx
+    ? await readSystemControlsChecked(ctx.client)
     : null;
 
   return (
@@ -66,7 +66,7 @@ export default async function AgentsPage() {
             <td className="py-1 pr-3">recommendation-rules</td>
             <td className="py-1 pr-3">
               <span className="rounded bg-purple-900 px-1.5 py-0.5 text-xs">
-                advice-only
+                advice-only, owner-triggered
               </span>
             </td>
             <td className="py-1 pr-3">GREEN (read-only rules)</td>
@@ -125,23 +125,32 @@ export default async function AgentsPage() {
         </Card>
 
         <Card title="Safety posture">
-          {controls ? (
+          {controlsRead ? (
             <ul className="space-y-1 text-sm">
+              {!controlsRead.readOk && (
+                <li className="rounded bg-amber-900 p-2 text-xs">
+                  controls UNREADABLE - fail-closed defaults shown
+                  below, not a live read
+                </li>
+              )}
               <li>
                 execution_enabled:{' '}
-                <b>{String(controls.execution_enabled)}</b> (business
-                agents can never flip this)
+                <b>{String(controlsRead.controls.execution_enabled)}</b>{' '}
+                (business agents can never flip this)
               </li>
               <li>
                 remote_runner_enabled:{' '}
-                <b>{String(controls.remote_runner_enabled)}</b>
+                <b>
+                  {String(controlsRead.controls.remote_runner_enabled)}
+                </b>
               </li>
               <li>
-                hermes_mode: <b>{controls.hermes_mode}</b>
+                hermes_mode: <b>{controlsRead.controls.hermes_mode}</b>
               </li>
               <li>
-                owner_stop: <b>{String(controls.owner_stop)}</b> |
-                paused: <b>{String(controls.paused)}</b>
+                owner_stop:{' '}
+                <b>{String(controlsRead.controls.owner_stop)}</b> |
+                paused: <b>{String(controlsRead.controls.paused)}</b>
               </li>
             </ul>
           ) : (

@@ -109,6 +109,32 @@ Write paths (all owner-gated, all audited):
   remains disabled globally.
 - production-ready: NO, and not claimed. Staging-only by design.
 
+## 5b. Known V1 limits (accepted, documented)
+
+- Read limits: pages load bounded row sets (default 200; items/
+  milestones 500; activity/approvals 100). Past those caps the
+  newest rows win and the activity card labels truncation; other
+  aggregates silently reflect the loaded window. Owner-scale data
+  stays far below these bounds; revisit before any multi-user use.
+- The quote detail page resolves its approval badge from the
+  newest 100 approvals; older approvals show version-level state
+  only.
+- A Supabase outage at the auth step renders the login prompt
+  (resolveOwner cannot distinguish outage from signed-out); table
+  read outages degrade to visible per-table error notes.
+- No error.tsx/loading.tsx boundaries exist app-wide (consistent
+  with the pre-existing app); unexpected render throws hit the
+  default Next error surface.
+- Duplicate-insert outcomes return the attempted id (or empty for
+  DB-generated ids), not a read-back of the stored row; the one
+  path that needs the stored row (agent idempotent replay) does an
+  explicit read first.
+- Dismissed recommendations never re-fire for the same
+  (kind, entity) pair - an owner dismissal is a ruling (see
+  recommendations.ts header).
+- searchParams values are typed as strings; array-valued repeats
+  of a query param render harmlessly but are not modeled.
+
 ## 6. Future gates (not in V1)
 
 - Real (non-simulation) quote issuance: requires owner gate +

@@ -5,6 +5,12 @@
 // approval/acknowledgement and nothing here can act, send, or
 // modify a business record. Idempotency keys are stable per
 // (kind, entity) so re-running generation never duplicates rows.
+// Documented consequence: once a recommendation for a (kind,
+// entity) pair is dismissed, regeneration dedups against it
+// forever - it will not re-fire for the same pair. This is the
+// intended V1 behavior (an owner dismissal is a ruling, not a
+// snooze); time-bucketed keys are a future option if re-firing
+// is ever wanted.
 
 import {
   asBool,
@@ -124,6 +130,7 @@ export function generateRecommendations(
       p,
       inputs.paymentSchedules,
       inputs.paymentEvents,
+      inputs.quoteVersions,
     );
     const projectOrders = inputs.vendorOrders.filter(
       (o) => asString(o.project_id) === projectId,
@@ -334,10 +341,11 @@ export function generateRecommendations(
     }
   }
 
-  // Deterministic order: kind, then entity id.
-  return out.sort((a, b) =>
-    a.kind === b.kind
-      ? a.entity_id.localeCompare(b.entity_id)
-      : a.kind.localeCompare(b.kind),
-  );
+  // Deterministic order: kind, then entity id (plain codepoint
+  // comparison - locale-independent).
+  return out.sort((a, b) => {
+    const ka = `${a.kind}:${a.entity_id}`;
+    const kb = `${b.kind}:${b.entity_id}`;
+    return ka < kb ? -1 : ka > kb ? 1 : 0;
+  });
 }

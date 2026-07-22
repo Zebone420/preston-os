@@ -6,8 +6,12 @@ import { redirect } from 'next/navigation';
 import { logAudit } from '@/lib/audit';
 import { resolveOwner } from '@/lib/ai-os/owner-context';
 import {
+  BUSINESS_TABLES,
+  insertBusinessRecord,
   updateRecommendationStatusCAS,
 } from '@/lib/business/business-store';
+import { loadBusinessData } from '@/lib/business/page-data';
+import { generateRecommendations } from '@/lib/business/recommendations';
 import {
   runQuoteDraftAgent,
   type QuoteDraftRequest,
@@ -28,14 +32,38 @@ function num(v: FormDataEntryValue | null): number | undefined {
   return Number.isFinite(n) ? n : Number.NaN;
 }
 
-// Dollars-and-cents form field -> integer cents. "1200" -> 120000,
-// "1200.50" -> 120050. Invalid input becomes NaN so validation
-// rejects it instead of silently coercing.
+// Dollars-and-cents form field -> integer cents, parsed digit-wise
+// (never via binary-float multiplication): "1200" -> 120000,
+// "1200.50" -> 120050, "1.005" -> 101 (third decimal rounds half
+// up). Invalid input becomes NaN so validation rejects it instead
+// of silently coercing.
 function cents(v: FormDataEntryValue | null): number | undefined {
-  const n = num(v);
-  if (n === undefined) return undefined;
-  if (Number.isNaN(n)) return Number.NaN;
-  return Math.round(n * 100);
+  if (v === null) return undefined;
+  const s = String(v).trim();
+  if (s === '') return undefined;
+  const m = /^(\d+)(?:\.(\d+))?$/.exec(s);
+  if (!m) return Number.NaN;
+  const dollars = Number(m[1]);
+  const frac = (m[2] ?? '').padEnd(3, '0');
+  const centPart = Number(frac.slice(0, 2));
+  const roundUp = Number(frac[2]) >= 5 ? 1 : 0;
+  const out = dollars * 100 + centPart + roundUp;
+  return Number.isSafeInteger(out) ? out : Number.NaN;
+}
+
+// Percent form field -> integer milli-percent, digit-wise:
+// "25" -> 25000, "8.875" -> 8875, "2.01" -> 2010 (no float
+// artifacts like 2009.9999...).
+function milliPct(v: FormDataEntryValue | null): number | undefined {
+  if (v === null) return undefined;
+  const s = String(v).trim();
+  if (s === '') return undefined;
+  const m = /^(\d+)(?:\.(\d+))?$/.exec(s);
+  if (!m) return Number.NaN;
+  const whole = Number(m[1]);
+  const frac = (m[2] ?? '').padEnd(3, '0').slice(0, 3);
+  const out = whole * 1000 + Number(frac);
+  return Number.isSafeInteger(out) ? out : Number.NaN;
 }
 
 function readItems(formData: FormData): QuoteItemInput[] {
@@ -93,7 +121,7 @@ export async function createQuoteDraft(formData: FormData) {
     markup_mode: markupModeRaw,
     markup_value:
       markupModeRaw === 'percent_milli'
-        ? (num(formData.get('markup_percent')) ?? 0) * 1000
+        ? (milliPct(formData.get('markup_percent')) ?? 0)
         : markupModeRaw === 'fixed_cents'
           ? (cents(formData.get('markup_fixed')) ?? 0)
           : 0,
@@ -136,9 +164,22 @@ export async function createQuoteDraft(formData: FormData) {
 
   revalidatePath('/business/quotes');
   revalidatePath('/business');
-  if (result.status === 'completed' || result.status === 'duplicate') {
+  if (
+    (result.status === 'completed' || result.status === 'duplicate') &&
+    result.quote_id
+  ) {
     redirect(
       `/business/quotes/${result.quote_id}?msg=${result.status}`,
+    );
+  }
+  if (result.status === 'duplicate') {
+    // Stored run for this key was a failure - nothing was created.
+    redirect(
+      '/business/quotes?msg=duplicate&detail=' +
+        encodeURIComponent(
+          `stored run was ${result.stored_run_status ?? 'unknown'}; ` +
+            'resubmit the form for a fresh attempt',
+        ),
     );
   }
   const detail =
@@ -147,6 +188,62 @@ export async function createQuoteDraft(formData: FormData) {
       : result.errors.slice(0, 3).join(',');
   redirect(
     `/business/quotes?msg=${result.status}&detail=${encodeURIComponent(detail)}`,
+  );
+}
+
+// Owner-triggered recommendation generation. Runs the pure rule
+// engine over current business data and persists new advice rows
+// (idempotent per (kind, entity); dismissed pairs never re-fire by
+// design). Advice only - nothing here acts on a business record.
+export async function refreshRecommendations() {
+  const ctx = await resolveOwner();
+  if (!ctx) {
+    redirect('/business?msg=denied');
+  }
+  const data = await loadBusinessData(ctx.client);
+  const drafts = generateRecommendations({
+    quotes: data.quotes,
+    projects: data.projects,
+    milestones: data.milestones,
+    vendorOrders: data.vendorOrders,
+    installationEvents: data.installationEvents,
+    paymentSchedules: data.paymentSchedules,
+    paymentEvents: data.paymentEvents,
+    communications: data.communications,
+    quoteVersions: data.quoteVersions,
+    properties: data.properties,
+    nowIso: new Date().toISOString(),
+  });
+  let created = 0;
+  let deduped = 0;
+  let failed = 0;
+  for (const d of drafts) {
+    const res = await insertBusinessRecord(
+      ctx.client,
+      BUSINESS_TABLES.recommendations,
+      { ...d },
+    );
+    if (!res.ok) failed++;
+    else if (res.duplicate) deduped++;
+    else created++;
+  }
+  await logAudit(
+    {
+      actor: 'recommendation-rules',
+      action: 'recommendations_generated',
+      action_class: 'GREEN',
+      environment: 'staging',
+      detail: { evaluated: drafts.length, created, deduped, failed },
+    },
+    { supabase: ctx.audit },
+  );
+  revalidatePath('/business');
+  redirect(
+    '/business?msg=' +
+      encodeURIComponent(
+        `recommendations: ${created} new, ${deduped} existing` +
+          (failed > 0 ? `, ${failed} failed` : ''),
+      ),
   );
 }
 
@@ -183,6 +280,9 @@ export async function decideRecommendation(formData: FormData) {
   );
   revalidatePath('/business');
   redirect(
-    '/business?msg=' + (outcome.ok ? decision : outcome.error ?? 'error'),
+    '/business?msg=' +
+      encodeURIComponent(
+        outcome.ok ? decision : (outcome.error ?? 'error'),
+      ),
   );
 }

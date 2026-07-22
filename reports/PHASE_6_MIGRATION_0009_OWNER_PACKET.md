@@ -44,7 +44,17 @@ DB-level simulation pins (CHECK constraints):
 - quote_versions.simulation_state = 'simulation'
 - quote_draft_runs.simulation_only = true
 - quote_draft_runs.execution_eligible = false
+- business_activity_events.simulation_state = 'simulation'
 Lifting any of these requires a future owner-gated migration.
+
+Privilege hardening (post-audit): every table explicitly revokes
+ALL from anon (Supabase default privileges otherwise leave anon
+with DML that only RLS blocks); mutable tables revoke the default
+delete privilege (records are archived, never hard-deleted);
+quote_versions allows update ONLY on approval_id (column-level
+grant - the priced numbers are privilege-immutable). A guarded
+constraint block adds the quotes.project_id -> projects(id) FK
+after both tables exist.
 
 Existing tables: only `grant insert on approvals to authenticated`.
 No policy, column, or constraint on any existing table changes.
@@ -93,6 +103,27 @@ select conname from pg_constraint
 select privilege_type from information_schema.role_table_grants
  where table_name = 'approvals' and grantee = 'authenticated';
 -- Expect SELECT, UPDATE, INSERT (order varies).
+
+-- anon holds no privilege on any business table:
+select count(*) from information_schema.role_table_grants
+ where grantee = 'anon' and table_name in
+ ('business_clients','quotes','quote_versions','quote_draft_runs',
+  'payment_events','business_activity_events','approval_links');
+-- Expect 0.
+
+-- authenticated cannot hard-delete business records:
+select count(*) from information_schema.role_table_grants
+ where grantee = 'authenticated' and privilege_type = 'DELETE'
+   and table_name like any (array['business\_%','quote%','sales\_%',
+   'project%','vendor\_%','installation\_%','payment\_%',
+   'communication\_%','agent\_recommendations','approval\_links']);
+-- Expect 0.
+
+-- quote_versions update is column-scoped to approval_id:
+select column_name from information_schema.column_privileges
+ where table_name = 'quote_versions'
+   and grantee = 'authenticated' and privilege_type = 'UPDATE';
+-- Expect exactly: approval_id.
 
 ## 6. Rollback considerations
 

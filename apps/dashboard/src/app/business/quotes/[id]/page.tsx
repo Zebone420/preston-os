@@ -72,6 +72,10 @@ export default async function QuoteDetailPage({
       {msg && (
         <p className="mb-4 rounded bg-slate-800 p-2 text-xs">
           agent result: {msg}
+          {msg === 'duplicate' &&
+            ' - this is the previously created draft for that form ' +
+              'submission (idempotent replay). If you intended a NEW ' +
+              'quote, reload the quotes page and submit again.'}
         </p>
       )}
       {data.errors.map((e) => (

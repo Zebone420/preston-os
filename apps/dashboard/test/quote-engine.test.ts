@@ -43,9 +43,12 @@ describe('mulDivRoundHalfUp', () => {
     expect(mulDivRoundHalfUp(200, 8875, 100000)).toBe(18);
     // 100 * 8875 / 100000 = 8.875 -> 9
     expect(mulDivRoundHalfUp(100, 8875, 100000)).toBe(9);
-    // below half stays down: 100 * 6625 / 100000 = 6.625 -> 7,
-    // 100 * 4000 / 100000 = 4.0 -> 4
+    // above half rounds up: 100 * 6625 / 100000 = 6.625 -> 7
+    expect(mulDivRoundHalfUp(100, 6625, 100000)).toBe(7);
+    // exact values stay exact: 100 * 4000 / 100000 = 4.0 -> 4
     expect(mulDivRoundHalfUp(100, 4000, 100000)).toBe(4);
+    // below half stays down: 100 * 4400 / 100000 = 4.4 -> 4
+    expect(mulDivRoundHalfUp(100, 4400, 100000)).toBe(4);
     expect(mulDivRoundHalfUp(1, 1, 3)).toBe(0);
     expect(mulDivRoundHalfUp(1, 1, 2)).toBe(1);
   });
@@ -92,6 +95,20 @@ describe('calculateQuote - NYC installation (owner-ruled V2 math)', () => {
     expect(s.stages[2].amount_cents).toBe(231359);
     const sum = s.stages.reduce((a, x) => a + x.amount_cents, 0);
     expect(sum).toBe(q.total_cents);
+  });
+
+  it('computes each line total correctly (qty applies to both costs)', () => {
+    const q = calculateQuote(NYC_INSTALL);
+    // 3 * (120000 + 45000) + 0 fees
+    expect(q.items[0].line_total_cents).toBe(495000);
+    // 1 * (250000 + 80000) + 5000 fees
+    expect(q.items[1].line_total_cents).toBe(335000);
+    const sum = q.items.reduce((a, it) => a + it.line_total_cents, 0);
+    expect(sum).toBe(
+      q.material_cents +
+        q.labor_cents +
+        (q.fees_cents - (NYC_INSTALL.quote_fees_cents ?? 0)),
+    );
   });
 
   it('exposes material, labor, fees, tax, total, margin separately', () => {
@@ -329,6 +346,24 @@ describe('validateQuoteEngineInput - fail-closed behavior', () => {
     expect(() =>
       calculateQuote({ scope_type: 'installation' }),
     ).toThrow(/invalid input/);
+  });
+
+  it('rejects per-field-valid inputs whose totals exceed the bound', () => {
+    // Each field passes its own check, but the aggregate would
+    // overflow the supported money range: named validation error,
+    // not an internal engine throw.
+    const v = validateQuoteEngineInput({
+      scope_type: 'product_only',
+      jurisdiction: 'NYC',
+      items: Array.from({ length: 3 }, () => ({
+        quantity: 10000,
+        unit_material_cents: 50_000_000_000,
+      })),
+    });
+    expect(v.ok).toBe(false);
+    if (!v.ok) {
+      expect(v.errors).toContain('totals_exceed_supported_bounds');
+    }
   });
 });
 

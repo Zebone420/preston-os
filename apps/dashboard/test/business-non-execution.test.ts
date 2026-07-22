@@ -93,6 +93,22 @@ describe('business layer structural pins - no spawn, no network, no external sys
     }
   });
 
+  it('no vendor price knowledge exists to invent from (Andersen pin)', () => {
+    // Acceptance criterion 18: the agent must never infer Andersen
+    // (or any vendor) product pricing or configuration. Structural
+    // pin: business code contains no vendor price tables or vendor
+    // name references - every price is an explicit owner input.
+    for (const rel of BUSINESS_FILES) {
+      const text = readFileSync(
+        join(__dirname, '..', rel),
+        'utf8',
+      ).toLowerCase();
+      expect(text.includes('andersen'), rel).toBe(false);
+      expect(text.includes('price_list'), rel).toBe(false);
+      expect(text.includes('catalog'), rel).toBe(false);
+    }
+  });
+
   it('approval decisions cannot trigger execution for business kinds', () => {
     // decideApprovalRow records decisions; evaluateExecution blocks all
     // live action types. The business layer adds no execution path: no

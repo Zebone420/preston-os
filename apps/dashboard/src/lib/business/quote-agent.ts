@@ -12,13 +12,27 @@
 //     closed instead of guessing;
 //   - simulation_only=true and execution_eligible=false are forced
 //     on every run row (and DB CHECK-pinned by migration 0009);
-//   - owner approval is always required (approvals row + link);
+//   - owner approval is always required (approvals row + links);
 //   - idempotent: same idempotency_key returns the stored run.
+//
+// Persistence order (audit H2/F2 fix): draft entities first
+// (quote -> version -> items -> schedule), the approval request
+// only after the draft fully exists, then the quote header CAS
+// bump, run record, and activity entry. A mid-sequence failure
+// therefore leaves at worst a visible draft WITHOUT an approval -
+// never a pending approval that points at nothing, and never a
+// current_version that points at a missing version row.
+//
+// Known accepted races (owner-only surface, documented): the
+// idempotency check is check-then-act; a concurrent duplicate
+// submit can create a second draft, which the unique run key then
+// surfaces (run insert dedups; the loser is audited as a race).
 //
 // No clock or randomness inside: callers inject now() and ids().
 
 import type { RuntimeClient } from '../ai-os/store';
 import {
+  attachVersionApproval,
   BUSINESS_TABLES,
   bumpQuoteVersionCAS,
   insertActivityEvent,
@@ -36,6 +50,10 @@ import {
 import { UUID_RE, type QuoteStatus } from './types';
 
 export const QUOTE_AGENT_NAME = 'quote-draft-agent';
+
+const MAX_TITLE_CHARS = 200;
+const MAX_TEXT_CHARS = 500;
+const MAX_EXCLUSIONS = 20;
 
 export interface QuoteDraftRequest extends QuoteEngineInput {
   title?: string;
@@ -69,6 +87,15 @@ export interface QuoteAgentResult {
   missing_fields: string[];
   errors: string[];
   assumptions: string[];
+  // Non-fatal follow-up write failures (links/run/activity). The
+  // draft itself is intact when these appear.
+  warnings: string[];
+  // For duplicate outcomes: the stored run's original status.
+  stored_run_status?: string;
+}
+
+function clip(v: string | undefined, max: number): string {
+  return (v ?? '').trim().slice(0, max);
 }
 
 function requestErrors(req: QuoteDraftRequest): {
@@ -106,16 +133,22 @@ async function recordRun(
   req: QuoteDraftRequest,
   fields: Record<string, unknown>,
 ): Promise<{ ok: boolean; id?: string; duplicate?: boolean }> {
+  // A run row is always written, even for invalid requests. When the
+  // key is missing/invalid we mint a unique fallback so every failed
+  // attempt stays in the audit trail instead of deduping against ''.
+  const key =
+    req.idempotency_key && req.idempotency_key.length >= 8
+      ? req.idempotency_key
+      : `invalid-key:${deps.now()}:${deps.ids()}`;
   const res = await insertBusinessRecord(
     deps.client,
     BUSINESS_TABLES.quoteDraftRuns,
     {
       agent_name: QUOTE_AGENT_NAME,
       input: sanitizeInput(req),
-      correlation_id:
-        req.correlation_id ?? `qd:${req.idempotency_key ?? 'unknown'}`,
-      idempotency_key: req.idempotency_key ?? '',
-      created_by: req.created_by ?? 'owner',
+      correlation_id: req.correlation_id ?? `qd:${key}`,
+      idempotency_key: key,
+      created_by: clip(req.created_by, MAX_TEXT_CHARS) || 'owner',
       simulation_only: true,
       execution_eligible: false,
       ...fields,
@@ -128,7 +161,7 @@ async function recordRun(
 // no free-form nested objects beyond the known engine fields.
 function sanitizeInput(req: QuoteDraftRequest): Record<string, unknown> {
   return {
-    title: req.title ?? '',
+    title: clip(req.title, MAX_TITLE_CHARS),
     client_id: req.client_id ?? null,
     lead_id: req.lead_id ?? null,
     property_id: req.property_id ?? null,
@@ -139,16 +172,18 @@ function sanitizeInput(req: QuoteDraftRequest): Record<string, unknown> {
     markup_mode: req.markup_mode ?? 'none',
     markup_value: req.markup_value ?? 0,
     items: (req.items ?? []).map((it) => ({
-      opening_label: it.opening_label ?? '',
-      product_line: it.product_line ?? '',
-      description: it.description ?? '',
+      opening_label: clip(it.opening_label, MAX_TEXT_CHARS),
+      product_line: clip(it.product_line, MAX_TEXT_CHARS),
+      description: clip(it.description, MAX_TEXT_CHARS),
       quantity: it.quantity ?? null,
       unit_material_cents: it.unit_material_cents ?? null,
       unit_labor_cents: it.unit_labor_cents ?? null,
       line_fees_cents: it.line_fees_cents ?? 0,
     })),
     st124_tracking: req.st124_tracking ?? {},
-    exclusions: req.exclusions ?? [],
+    exclusions: (req.exclusions ?? [])
+      .slice(0, MAX_EXCLUSIONS)
+      .map((e) => clip(e, MAX_TEXT_CHARS)),
   };
 }
 
@@ -161,6 +196,7 @@ export async function runQuoteDraftAgent(
     missing_fields: [],
     errors: [],
     assumptions: [],
+    warnings: [],
   };
 
   // 0. Idempotency: an existing run with this key is authoritative.
@@ -175,6 +211,7 @@ export async function runQuoteDraftAgent(
         ...base,
         status: 'duplicate',
         run_id: String(row.id ?? ''),
+        stored_run_status: String(row.status ?? ''),
         quote_id: row.quote_id ? String(row.quote_id) : undefined,
         quote_version_id: row.quote_version_id
           ? String(row.quote_version_id)
@@ -222,18 +259,7 @@ export async function runQuoteDraftAgent(
     calc = calculateQuote(req);
   } catch (e) {
     const message = e instanceof Error ? e.message : 'engine error';
-    const run = await recordRun(deps, req, {
-      status: 'failed_error',
-      failure_reason: message.slice(0, 500),
-      input_missing_fields: [],
-      assumptions: [],
-    });
-    return {
-      ...base,
-      status: 'failed_error',
-      run_id: run.id,
-      errors: [message],
-    };
+    return failError(deps, req, base, message.slice(0, 200));
   }
 
   const nowIso = deps.now();
@@ -248,18 +274,7 @@ export async function runQuoteDraftAgent(
   if (req.quote_id) {
     const found = await readQuoteById(deps.client, req.quote_id);
     if (!found.ok || found.rows.length === 0) {
-      const run = await recordRun(deps, req, {
-        status: 'failed_error',
-        failure_reason: 'quote_not_found',
-        input_missing_fields: [],
-        assumptions: [],
-      });
-      return {
-        ...base,
-        status: 'failed_error',
-        run_id: run.id,
-        errors: ['quote_not_found'],
-      };
+      return failError(deps, req, base, 'quote_not_found');
     }
     const row = found.rows[0];
     quoteId = String(row.id);
@@ -268,38 +283,13 @@ export async function runQuoteDraftAgent(
   } else {
     quoteId = deps.ids();
     version = 1;
-    quoteTitle = (req.title ?? '').trim();
+    quoteTitle = clip(req.title, MAX_TITLE_CHARS);
     isNewQuote = true;
   }
 
-  // 4. Owner approval request (always required).
-  const approval = await insertApprovalRequest(deps.client, {
-    requested_action:
-      `quote_draft_approval: ${quoteTitle} v${version} ` +
-      `(simulation draft)`,
-    action_class: 'YELLOW',
-    notes:
-      'Quote draft produced by quote-draft-agent in simulation mode. ' +
-      'Approval records a decision only; nothing executes or is ' +
-      'delivered to a client.',
-  });
-  if (!approval.ok || !approval.id) {
-    const run = await recordRun(deps, req, {
-      status: 'failed_error',
-      failure_reason: 'approval_request_failed',
-      input_missing_fields: [],
-      assumptions: [],
-    });
-    return {
-      ...base,
-      status: 'failed_error',
-      run_id: run.id,
-      errors: ['approval_request_failed'],
-    };
-  }
-
-  // 5. Persist quote master row / version bump (CAS).
-  const pendingStatus: QuoteStatus = 'pending_approval';
+  // 4. Persist the draft entities FIRST (quote master as draft,
+  // then version/items/schedule). unique(quote_id, version) is the
+  // arbiter for concurrent version claims.
   if (isNewQuote) {
     const q = await insertBusinessRecord(
       deps.client,
@@ -310,9 +300,9 @@ export async function runQuoteDraftAgent(
         property_id: req.property_id ?? null,
         lead_id: req.lead_id ?? null,
         title: quoteTitle,
-        status: pendingStatus,
-        current_version: version,
-        approval_id: approval.id,
+        status: 'draft',
+        current_version: 0,
+        approval_id: null,
         source: 'agent_simulation',
         provenance: { agent: QUOTE_AGENT_NAME, correlation },
       },
@@ -320,28 +310,8 @@ export async function runQuoteDraftAgent(
     if (!q.ok) {
       return failError(deps, req, base, 'quote_persist_failed');
     }
-  } else {
-    const bump = await bumpQuoteVersionCAS(
-      deps.client,
-      quoteId,
-      version - 1,
-      version,
-      pendingStatus,
-      nowIso,
-    );
-    if (!bump.ok) {
-      return failError(
-        deps,
-        req,
-        base,
-        bump.error === 'version_conflict'
-          ? 'version_conflict'
-          : 'quote_persist_failed',
-      );
-    }
   }
 
-  // 6. Persist the priced version, items, and payment schedule.
   const versionId = deps.ids();
   const v = await insertBusinessRecord(
     deps.client,
@@ -376,13 +346,17 @@ export async function runQuoteDraftAgent(
         correlation,
       },
       simulation_state: 'simulation',
-      approval_id: approval.id,
+      approval_id: null,
       correlation_id: correlation,
       created_by: QUOTE_AGENT_NAME,
     },
   );
   if (!v.ok) {
     return failError(deps, req, base, 'version_persist_failed');
+  }
+  if (v.duplicate) {
+    // Another draft claimed this version number first.
+    return failError(deps, req, base, 'version_conflict');
   }
 
   for (const item of calc.items) {
@@ -422,22 +396,70 @@ export async function runQuoteDraftAgent(
     return failError(deps, req, base, 'schedule_persist_failed');
   }
 
+  // 5. Owner approval request - only now that the draft exists, so
+  // a pending approval can never point at a missing draft.
+  const approval = await insertApprovalRequest(deps.client, {
+    requested_action:
+      `quote_draft_approval: ${quoteTitle} v${version} ` +
+      `(simulation draft)`,
+    action_class: 'YELLOW',
+    notes:
+      'Quote draft produced by quote-draft-agent in simulation mode. ' +
+      'Approval records a decision only; nothing executes or is ' +
+      'delivered to a client.',
+  });
+  if (!approval.ok || !approval.id) {
+    return failError(deps, req, base, 'approval_request_failed');
+  }
+
+  const warnings: string[] = [];
+  const attach = await attachVersionApproval(
+    deps.client,
+    versionId,
+    approval.id,
+  );
+  if (!attach.ok) warnings.push('version_approval_attach_failed');
+
+  // 6. Publish the draft on the quote header (CAS on version) with
+  // the new approval id.
+  const pendingStatus: QuoteStatus = 'pending_approval';
+  const bump = await bumpQuoteVersionCAS(
+    deps.client,
+    quoteId,
+    version - 1,
+    version,
+    pendingStatus,
+    nowIso,
+    approval.id,
+  );
+  if (!bump.ok) {
+    return failError(
+      deps,
+      req,
+      base,
+      bump.error === 'version_conflict'
+        ? 'version_conflict'
+        : 'quote_publish_failed',
+    );
+  }
+
   // 7. Approval links (version + quote, so the Approval Center can
   // deep-link the draft) + run record + activity ledger entry.
-  await insertApprovalLink(
+  const linkV = await insertApprovalLink(
     deps.client,
     approval.id,
     'quote_version',
     versionId,
     'quote_draft_approval',
   );
-  await insertApprovalLink(
+  const linkQ = await insertApprovalLink(
     deps.client,
     approval.id,
     'quote',
     quoteId,
     'quote_draft_approval',
   );
+  if (!linkV.ok || !linkQ.ok) warnings.push('approval_link_failed');
 
   const run = await recordRun(deps, req, {
     status: 'completed',
@@ -446,8 +468,19 @@ export async function runQuoteDraftAgent(
     input_missing_fields: [],
     assumptions: calc.assumptions,
   });
+  if (run.duplicate) {
+    // A concurrent submit with the same key finished first. The
+    // stored run is authoritative; this draft is a race artifact.
+    warnings.push('duplicate_run_race_detected');
+    await deps.audit?.('quote_draft_race_detected', {
+      quote_id: quoteId,
+      idempotency_key: req.idempotency_key ?? '',
+    });
+  } else if (!run.ok) {
+    warnings.push('run_record_failed');
+  }
 
-  await insertActivityEvent(deps.client, {
+  const act = await insertActivityEvent(deps.client, {
     source: QUOTE_AGENT_NAME,
     entity_type: 'quote',
     entity_id: quoteId,
@@ -462,12 +495,14 @@ export async function runQuoteDraftAgent(
     simulation_state: 'simulation',
     idempotency_key: `act:${req.idempotency_key}`,
   });
+  if (!act.ok) warnings.push('activity_record_failed');
 
   await deps.audit?.('quote_draft_created', {
     quote_id: quoteId,
     version,
     total_cents: calc.total_cents,
     simulation: true,
+    warnings,
   });
 
   return {
@@ -481,6 +516,7 @@ export async function runQuoteDraftAgent(
     missing_fields: [],
     errors: [],
     assumptions: calc.assumptions,
+    warnings,
   };
 }
 
@@ -496,6 +532,7 @@ async function failError(
     input_missing_fields: [],
     assumptions: [],
   });
+  await deps.audit?.('quote_draft_failed_error', { reason });
   return {
     ...base,
     status: 'failed_error',

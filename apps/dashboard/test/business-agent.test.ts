@@ -23,7 +23,7 @@ const UNIQUE_KEYS: Record<string, string[][]> = {
   approval_links: [['approval_id', 'entity_type', 'entity_id']],
 };
 
-export function makeFakeDb() {
+export function makeFakeDb(failTables: Set<string> = new Set()) {
   const tables = new Map<string, FakeRow[]>();
   let nextId = 1000;
   const rowsOf = (t: string) => {
@@ -36,6 +36,12 @@ export function makeFakeDb() {
         insert(row: FakeRow) {
           return {
             select() {
+              if (failTables.has(table)) {
+                return Promise.resolve({
+                  data: null,
+                  error: { message: 'injected failure' },
+                });
+              }
               const rows = rowsOf(table);
               for (const keys of UNIQUE_KEYS[table] ?? []) {
                 const clash = rows.find((r) =>
@@ -338,6 +344,76 @@ describe('quote-draft agent - fail-closed behavior', () => {
     expect(result.status).toBe('failed_error');
     expect(result.errors).toContain('quote_not_found');
     expect(db.rowsOf('quote_versions')).toHaveLength(0);
+  });
+
+  it('duplicate replay reports the stored run status', async () => {
+    const db = makeFakeDb();
+    await runQuoteDraftAgent(makeDeps(db), {
+      ...GOOD_REQUEST,
+      items: [{ quantity: 1 }],
+      idempotency_key: 'test-key-fail-1',
+    });
+    const replay = await runQuoteDraftAgent(makeDeps(db), {
+      ...GOOD_REQUEST,
+      items: [{ quantity: 1 }],
+      idempotency_key: 'test-key-fail-1',
+    });
+    expect(replay.status).toBe('duplicate');
+    expect(replay.stored_run_status).toBe('failed_validation');
+    expect(replay.quote_id).toBeUndefined();
+  });
+
+  it('creates no approval when the draft entities fail to persist', async () => {
+    // Audit H2/F2: approval is requested only AFTER the draft fully
+    // exists, so a persistence failure can never leave a pending
+    // approval pointing at nothing.
+    const db = makeFakeDb(new Set(['quote_items']));
+    const result = await runQuoteDraftAgent(makeDeps(db), GOOD_REQUEST);
+    expect(result.status).toBe('failed_error');
+    expect(result.errors).toContain('items_persist_failed');
+    expect(db.rowsOf('approvals')).toHaveLength(0);
+    expect(db.rowsOf('approval_links')).toHaveLength(0);
+    // The quote master stays an unpublished draft at version 0.
+    const quotes = db.rowsOf('quotes');
+    expect(quotes).toHaveLength(1);
+    expect(quotes[0].status).toBe('draft');
+    expect(quotes[0].current_version).toBe(0);
+    const runs = db.rowsOf('quote_draft_runs');
+    expect(runs).toHaveLength(1);
+    expect(runs[0].status).toBe('failed_error');
+  });
+
+  it('records failed runs even without a valid idempotency key', async () => {
+    const db = makeFakeDb();
+    const deps = makeDeps(db); // shared: ids() stays unique per call
+    await runQuoteDraftAgent(deps, {
+      ...GOOD_REQUEST,
+      items: [{ quantity: 1 }],
+      idempotency_key: undefined,
+    });
+    await runQuoteDraftAgent(deps, {
+      ...GOOD_REQUEST,
+      items: [{ quantity: 1 }],
+      idempotency_key: undefined,
+    });
+    // Both failures are individually recorded (fallback keys).
+    expect(db.rowsOf('quote_draft_runs')).toHaveLength(2);
+  });
+
+  it('propagates the correlation id onto every artifact', async () => {
+    const db = makeFakeDb();
+    const result = await runQuoteDraftAgent(makeDeps(db), GOOD_REQUEST);
+    expect(result.status).toBe('completed');
+    const correlation = `qd:${GOOD_REQUEST.idempotency_key}`;
+    expect(db.rowsOf('quote_versions')[0].correlation_id).toBe(
+      correlation,
+    );
+    expect(db.rowsOf('quote_draft_runs')[0].correlation_id).toBe(
+      correlation,
+    );
+    expect(
+      db.rowsOf('business_activity_events')[0].correlation_id,
+    ).toBe(correlation);
   });
 
   it('never persists an execution-eligible or non-simulation run', async () => {

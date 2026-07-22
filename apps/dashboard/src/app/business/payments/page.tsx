@@ -34,6 +34,7 @@ export default async function PaymentsPage() {
       p,
       data.paymentSchedules,
       data.paymentEvents,
+      data.quoteVersions,
     ),
   }));
   const margins = data.quoteVersions.map(buildMarginSummary);

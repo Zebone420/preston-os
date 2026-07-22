@@ -1,7 +1,8 @@
 import Link from 'next/link';
-import { resolveOwner } from '@/lib/ai-os/owner-context';
-import { isAuthConfigured } from '@/lib/owner-auth';
-import { loadBusinessData } from '@/lib/business/page-data';
+import {
+  loadBusinessData,
+  resolveBusinessPageContext,
+} from '@/lib/business/page-data';
 import {
   assessStaleness,
   asString,
@@ -15,11 +16,12 @@ import {
   EmptyNote,
   ErrorNote,
   FooterNote,
+  LoginRequired,
   SimulationBadge,
   StatTile,
   formatTimestamp,
 } from '@/components/business/ui';
-import { decideRecommendation } from './actions';
+import { decideRecommendation, refreshRecommendations } from './actions';
 
 // Executive Dashboard (Phase 6D). Read-oriented; the only actions are
 // acknowledge/dismiss on recommendations (recorded decisions - nothing
@@ -32,27 +34,31 @@ export default async function BusinessOverview({
   searchParams: Promise<{ msg?: string }>;
 }) {
   const { msg } = await searchParams;
-  const configured = isAuthConfigured(process.env);
-  const ctx = configured ? await resolveOwner() : null;
-  if (configured && !ctx) {
-    return (
-      <main className="min-h-screen bg-slate-950 p-8 text-slate-100">
-        <h1 className="text-2xl font-semibold">Business Command Center</h1>
-        <p className="mt-4 rounded bg-amber-900 p-3 text-sm">
-          Owner login required.{' '}
-          <Link href="/login" className="underline">
-            Sign in
-          </Link>
-          .
-        </p>
-      </main>
-    );
+  const { needsLogin, ctx } = await resolveBusinessPageContext();
+  if (needsLogin) {
+    return <LoginRequired title="Business Command Center" />;
   }
 
   const data = await loadBusinessData(ctx?.client ?? null);
   const nowIso = new Date().toISOString();
-  const paymentSummaries = data.projects.map((p) =>
-    buildProjectPaymentSummary(p, data.paymentSchedules, data.paymentEvents),
+  // Outstanding money is aggregated over ACTIVE projects only;
+  // closed/cancelled project balances live on /business/payments.
+  const activeProjects = data.projects.filter((p) =>
+    [
+      'pending_contract',
+      'contracted',
+      'in_progress',
+      'punch_list',
+      'final_inspection',
+    ].includes(asString(p.status)),
+  );
+  const paymentSummaries = activeProjects.map((p) =>
+    buildProjectPaymentSummary(
+      p,
+      data.paymentSchedules,
+      data.paymentEvents,
+      data.quoteVersions,
+    ),
   );
   const summary = buildExecutiveSummary({
     leads: data.leads,
@@ -129,6 +135,16 @@ export default async function BusinessOverview({
           title={`AI recommendations (${openRecs.length} open)`}
           right={<SimulationBadge />}
         >
+          {data.mode === 'connected' && (
+            <form action={refreshRecommendations} className="mb-3">
+              <button className="rounded bg-slate-700 px-2 py-1 text-xs">
+                Generate recommendations now
+              </button>
+              <span className="ml-2 text-xs text-slate-500">
+                runs the advice rules over current data; advice only
+              </span>
+            </form>
+          )}
           <EmptyNote
             show={openRecs.length === 0}
             text="No open recommendations."

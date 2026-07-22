@@ -54,6 +54,10 @@ export default async function QuotesPage({
         <p className="mb-4 rounded bg-slate-800 p-2 text-xs">
           agent result: {msg}
           {detail ? ` (${detail})` : ''}
+          {msg === 'duplicate' &&
+            ' - an earlier submission with the same form key was ' +
+              'returned; nothing new was saved. Reload the form for ' +
+              'a fresh attempt.'}
         </p>
       )}
       {data.errors.map((e) => (

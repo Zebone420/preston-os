@@ -45,28 +45,39 @@ Every outcome (except duplicate) writes exactly one
 quote_draft_runs row with simulation_only=true and
 execution_eligible=false.
 
-## 4. Persistence effects of a completed run
+## 4. Persistence effects of a completed run (in order)
 
-1. approvals: one pending YELLOW row
-   ("quote_draft_approval: <title> vN (simulation draft)").
-2. quotes: new row (v1) or CAS version bump (current_version
-   guards concurrent drafts) with status pending_approval.
-3. quote_versions: one immutable priced snapshot with
+1. quotes: new master row as an unpublished draft (v0), or the
+   existing quote is used (existing-quote path).
+2. quote_versions: one priced snapshot (approval-pending) with
    assumptions, exclusions, payment schedule, provenance,
-   correlation_id, simulation_state='simulation'.
-4. quote_items: one row per line item.
-5. payment_schedules: the deterministic split for the version.
-6. approval_links: two rows (quote_version + quote) so the
+   correlation_id, simulation_state='simulation'. The numbers are
+   privilege-immutable (only approval_id is updatable).
+3. quote_items: one row per line item.
+4. payment_schedules: the deterministic split for the version.
+5. approvals: one pending YELLOW row - created only AFTER the
+   draft fully exists, so a pending approval can never point at
+   a missing draft. approval_id is then attached to the version.
+6. quotes CAS bump: current_version -> N, status
+   pending_approval, approval_id attached (compare-and-set on
+   the previous version guards concurrent drafts).
+7. approval_links: two rows (quote_version + quote) so the
    Approval Center deep-links the draft.
-7. quote_draft_runs: the run record (idempotency anchor).
-8. business_activity_events: quote_draft_created ledger entry.
-9. audit_log: quote_draft_created (YELLOW, staging).
+8. quote_draft_runs: the run record (idempotency anchor).
+9. business_activity_events: quote_draft_created ledger entry.
+10. audit_log: quote_draft_created (YELLOW, staging).
 
-Known partial-failure semantics: writes happen in the order
-above; a failure mid-sequence records failed_error and leaves
-earlier rows in place (an orphan pending approval or a quote
-without a version is visible, auditable state - never silent).
-There is no delete path by design (append-only governance).
+Partial-failure semantics: a failure mid-sequence records a
+failed_error run and leaves at worst a visible, unpublished
+draft (quote at v0 / a version without approval) - never a
+pending approval pointing at nothing, and never a
+current_version pointing at a missing version row. Follow-up
+write failures after the draft is published (links, run record,
+activity) do not fail the draft; they are returned as named
+warnings and audited. A concurrent duplicate submit is arbitrated
+by the unique run key: the loser is audited as
+quote_draft_race_detected. There is no delete path by design
+(append-only governance).
 
 ## 5. Hard guarantees (each has a test or DB pin)
 

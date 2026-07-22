@@ -67,7 +67,10 @@ project_milestones - one row per (project, kind).
   permit_dob|delivery|installation|punch_list|final_inspection|
   final_payment|warranty_closeout), status (pending|in_progress|
   blocked|done|not_applicable), due_date, completed_at, note.
-  unique(project_id, kind).
+  unique(project_id, kind) - a V1 constraint: re-dos (a failed
+  inspection repeated, a second delivery) are modeled by cycling
+  status on the single row plus installation_events/vendor_orders
+  rows, which allow multiples.
 
 vendor_orders - product orders.
   project_id FK, vendor, order_number, order_date,
@@ -130,3 +133,20 @@ approval_links - bridge approvals to business entities.
   record; generic runtime runs remain os_jobs territory.
 - Master-plan messaging/consent tables deferred to the outbound
   communication gate (nothing sends in V1).
+- business_contacts is schema-ready but has no UI in V1.
+
+## Explicit V1 deferrals vs master plan section 10
+
+Recorded as decisions, not omissions:
+- Opening MEASUREMENTS: quote_items carries free-text description
+  only; structured measurement fields arrive with the real-quote
+  gate (they change pricing workflows and need owner field
+  definitions).
+- CLIENT decision + win/loss reason: quotes.status records the
+  OWNER decision; client outcomes live in sales_leads stages
+  (won/lost) without a reason field yet.
+- Follow-up status: computed by the recommendation rules, not
+  stored on the quote.
+- Documents/photos: no document table exists; the
+  missing_document recommendation directs the owner to confirm
+  filings held outside the system.

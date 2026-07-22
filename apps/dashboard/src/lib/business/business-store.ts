@@ -216,6 +216,8 @@ export async function insertBusinessRecord(
 // Compare-and-set bump of quotes.current_version so two concurrent
 // drafts cannot both claim the same version number. Zero matched
 // rows = lost race (caller retries with a fresh read or fails).
+// Also attaches the version's approval id so the quote header
+// always reflects the newest draft's approval state.
 export async function bumpQuoteVersionCAS(
   client: RuntimeClient,
   quoteId: string,
@@ -223,18 +225,23 @@ export async function bumpQuoteVersionCAS(
   toVersion: number,
   status: string,
   nowIso: string,
+  approvalId?: string,
 ): Promise<WriteOutcome> {
   if (!UUID_RE.test(quoteId)) {
     return { ok: false, error: 'invalid quote id' };
   }
   try {
+    const patch: Record<string, unknown> = {
+      current_version: toVersion,
+      status,
+      updated_at: nowIso,
+    };
+    if (approvalId && UUID_RE.test(approvalId)) {
+      patch.approval_id = approvalId;
+    }
     const res = await client
       .from(BUSINESS_TABLES.quotes)
-      .update({
-        current_version: toVersion,
-        status,
-        updated_at: nowIso,
-      })
+      .update(patch)
       .eq('id', quoteId)
       .eq('current_version', String(fromVersion))
       .select('id');
@@ -249,6 +256,37 @@ export async function bumpQuoteVersionCAS(
     return {
       ok: false,
       error: e instanceof Error ? e.message : 'version bump failed',
+    };
+  }
+}
+
+// Attach an approval id to a quote version after the approval row
+// exists. approval_id is the ONLY updatable column on
+// quote_versions (column-level grant in migration 0009); the
+// priced numbers are privilege-immutable.
+export async function attachVersionApproval(
+  client: RuntimeClient,
+  versionId: string,
+  approvalId: string,
+): Promise<WriteOutcome> {
+  if (!UUID_RE.test(versionId) || !UUID_RE.test(approvalId)) {
+    return { ok: false, error: 'invalid id' };
+  }
+  try {
+    const res = await client
+      .from(BUSINESS_TABLES.quoteVersions)
+      .update({ approval_id: approvalId })
+      .eq('id', versionId)
+      .select('id');
+    if (res.error) return { ok: false, error: res.error.message };
+    if (!res.data || res.data.length === 0) {
+      return { ok: false, error: 'version_not_found' };
+    }
+    return { ok: true, id: versionId };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : 'approval attach failed',
     };
   }
 }
