@@ -20,6 +20,7 @@ import { makeSimulationAdapter } from './adapters';
 import {
   ORCH_TABLES,
   clearApprovalGate,
+  parkApprovalGate,
   listGoals,
   listJobsForGoal,
   readApprovalRecord,
@@ -345,9 +346,17 @@ export async function driverStep(
     } else if (act.type === 'dead_letter' && job) {
       const t = await transitionJob(client, job.id, job.status, 'dead_lettered', { failure_reason: act.reason }, nowIso);
       if (t.ok) persisted++;
+    } else if (act.type === 'request_approval' && job) {
+      // PARK a gated job at awaiting_approval (bridge item 5): the engine asked
+      // for owner approval. The driver ONLY parks it - it NEVER creates or
+      // decides the approval (owner-only). The park CAS also requires the job to
+      // be STILL gated, so it cannot re-park a just-cleared job. The job stays
+      // parked until the authoritative approval gate above clears it.
+      const t = await parkApprovalGate(client, job.id, job.status, nowIso);
+      if (t.ok) persisted++;
     }
-    // request_approval / audit / escalate: the driver records but does NOT
-    // decide approvals (owner-only) - handled by the approval router + owner.
+    // audit / escalate: recorded by the engine status; the driver decides no
+    // approvals (owner-only) - handled by the approval gate + owner.
   }
 
   // (The durable iteration was already RESERVED before work above - audit #12.)

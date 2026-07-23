@@ -99,7 +99,10 @@ export function step(state: GoalState, nowMs: number): EngineStep {
           // in the driver, or validateApprovalDecision in the sim) after a
           // verified, owner-bound, hash-bound, approved, non-expired decision.
           if (job.requires_approval) {
-            if (!job.approval_id) actions.push({ type: 'request_approval', job_id: job.id });
+            // Park a gated job (driver moves it -> awaiting_approval) whenever it
+            // is dependency-ready, REGARDLESS of whether an approval row was
+            // pre-attached - so a gated job never sits runnable-but-unparked.
+            actions.push({ type: 'request_approval', job_id: job.id });
             blocked = true;
           } else if (!job.assigned_role) {
             actions.push({ type: 'assign', job_id: job.id, role: 'claude' });
@@ -111,7 +114,7 @@ export function step(state: GoalState, nowMs: number): EngineStep {
       }
       case 'ready': {
         if (job.requires_approval) {
-          if (!job.approval_id) actions.push({ type: 'request_approval', job_id: job.id });
+          actions.push({ type: 'request_approval', job_id: job.id }); // park regardless of approval_id
           blocked = true; // held until requires_approval is authoritatively cleared
         } else {
           actions.push({ type: 'run', job_id: job.id });

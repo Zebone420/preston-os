@@ -190,6 +190,19 @@ export function transitionJobOwned(
   );
 }
 
+// Park a gated job at awaiting_approval, but ONLY while it is STILL gated
+// (requires_approval=true) and in pending/ready (audit MINOR liveness): a stale
+// engine request cannot park a job the owner just un-gated. The driver never
+// creates or decides the approval - it only parks.
+export function parkApprovalGate(
+  client: RuntimeClient, jobId: string, fromStatus: string, nowIso: string,
+): Promise<WriteOutcome> {
+  return casStatus(
+    client, ORCH_TABLES.jobs, jobId, fromStatus, { status: 'awaiting_approval' },
+    canTransitionJob, nowIso, [{ col: 'requires_approval', val: 'true' }],
+  );
+}
+
 // Atomically clear a gated job's approval (audit MAJOR/TOCTOU): transition
 // awaiting_approval -> ready AND set requires_approval=false, but ONLY if EVERY
 // action-defining field still matches what was verified/approved. If any bound
