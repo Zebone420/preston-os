@@ -23,7 +23,13 @@ export interface Bucket {
 }
 
 // A read error mentioning a missing relation means migration 0010 is not
-// applied yet - a distinct, expected state the UI renders calmly (not an error).
+// applied yet - a distinct, expected state the UI renders calmly (not an
+// error). Shared with the dispatcher's orchestrate-once command so both
+// surfaces classify the not-yet-applied state identically.
+export function isMigrationAbsentError(msg: string): boolean {
+  return /does not exist|relation .* does not exist|undefined table|42P01/i.test(msg);
+}
+
 function classify(res: ListOutcome): Bucket {
   if (res.ok) {
     return res.rows.length > 0
@@ -31,7 +37,7 @@ function classify(res: ListOutcome): Bucket {
       : { state: 'empty', rows: [] };
   }
   const msg = res.error ?? '';
-  if (/does not exist|relation .* does not exist|undefined table|42P01/i.test(msg)) {
+  if (isMigrationAbsentError(msg)) {
     return { state: 'migration_absent', rows: [], note: 'migration 0010 not applied' };
   }
   return { state: 'error', rows: [], note: msg };

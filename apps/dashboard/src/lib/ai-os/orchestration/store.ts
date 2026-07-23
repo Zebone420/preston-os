@@ -456,3 +456,38 @@ export function listJobsForGoal(client: RuntimeClient, goalId: string, limit = 2
 export function listOpenApprovals(client: RuntimeClient, limit = 50): Promise<ListOutcome> {
   return runList(client.from(ORCH_TABLES.approvals).select('*').eq('status', 'pending').order('created_at', { ascending: false }).limit(limit));
 }
+// GLOBAL simulation-pin probe (Codex final-review MAJOR #2): does ANY goal
+// row - in any status, inside or outside a selection window - carry
+// simulation_only=false? Migration 0010 CHECK-pins the column, so a hit means
+// drifted/corrupt schema and the caller must refuse to drive anything.
+// (environment='staging' is likewise CHECK-pinned; the eq-only read surface
+// cannot express "not staging" globally, so that axis is verified on the
+// bounded candidate window plus the DB constraint.)
+export function probeSimulationPinViolations(client: RuntimeClient): Promise<ListOutcome> {
+  return runList(client.from(ORCH_TABLES.goals).select('*').eq('simulation_only', 'false').limit(1));
+}
+
+// Targeted single-goal read by id. The driver loads its goal THIS way - a
+// windowed recent-goals scan (listGoals) could miss an old goal that the
+// oldest-first selection legitimately chose once enough newer goals exist
+// (Codex final-review MAJOR #1).
+export function readGoalById(client: RuntimeClient, goalId: string): Promise<ListOutcome> {
+  return runList(client.from(ORCH_TABLES.goals).select('*').eq('id', goalId).limit(1));
+}
+
+// Goals in ONE status, OLDEST first (created_at ascending). Used by the
+// dispatcher's orchestrate-once selection so the globally oldest driveable
+// goal is always inside the read window - a descending recent-goals read
+// (listGoals) could starve old goals forever (Codex initial-review MAJOR #4).
+export function listGoalsByStatus(client: RuntimeClient, status: string, limit = 50): Promise<ListOutcome> {
+  return runList(client.from(ORCH_TABLES.goals).select('*').eq('status', status).order('created_at', { ascending: true }).limit(limit));
+}
+
+// Dependency edges for one goal (job_dependencies rows). The durable driver
+// must NEVER run a goal without its edges (out-of-order execution), so callers
+// treat a read error as fail-closed and refuse to drive. Callers must also
+// treat a FULL read (rows.length === limit) as unprovably complete and refuse
+// (Codex initial-review MAJOR #2) - there is no pagination on this surface.
+export function listDependenciesForGoal(client: RuntimeClient, goalId: string, limit = 10000): Promise<ListOutcome> {
+  return runList(client.from(ORCH_TABLES.deps).select('*').eq('goal_id', goalId).limit(limit));
+}

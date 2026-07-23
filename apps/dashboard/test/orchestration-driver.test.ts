@@ -150,7 +150,7 @@ describe('durable driver - persists transitions, restart-safe, fail-closed', () 
     await seedGoal(db);
     const r = await driverStep(db.client, 'goal-00000001', Date.parse(NOW));
     expect(r.halted).toBe(true);
-    expect(r.reason).toBe('owner_stop_or_unreadable');
+    expect(r.reason).toBe('owner_stop_or_paused');
     expect(r.persisted).toBe(0);
   });
 
@@ -160,6 +160,8 @@ describe('durable driver - persists transitions, restart-safe, fail-closed', () 
     await seedGoal(db);
     const r = await driverStep(db.client, 'goal-00000001', Date.parse(NOW));
     expect(r.halted).toBe(true);
+    // outage, not an owner halt - the reasons are distinct exit classes
+    expect(r.reason).toBe('controls_unreadable');
   });
 });
 

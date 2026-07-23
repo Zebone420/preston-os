@@ -21,9 +21,9 @@ import {
   ORCH_TABLES,
   clearApprovalGate,
   parkApprovalGate,
-  listGoals,
   listJobsForGoal,
   readApprovalRecord,
+  readGoalById,
   transitionGoal,
   transitionJob,
   transitionJobOwned,
@@ -108,17 +108,31 @@ function jobFromRow(r: Record<string, unknown>): GoalJob {
   };
 }
 
+// The model/DB bound every goal to at most 1000 jobs (validateBudget +
+// submit_goal_decomposition). Reading ONE MORE than that maximum proves the
+// read is complete: hitting the limit means the row set cannot be trusted
+// (drifted schema or an out-of-band writer) and the driver must refuse to
+// derive terminality or run anything (Codex initial-review CRITICAL #1).
+export const JOB_READ_LIMIT = 1001;
+export const MAX_GOAL_JOBS = 1000;
+
 // Reconstruct a GoalState from persisted rows. Dependency edges are read from
 // job_dependencies via the caller-provided depends map (or embedded on rows).
+// Returns null when the goal is absent OR when the job read cannot be proven
+// complete (limit hit) - callers halt fail-closed in both cases.
 export async function loadGoalState(
   client: RuntimeClient,
   goalId: string,
   depends: (jobId: string) => string[] = () => [],
 ): Promise<GoalState | null> {
-  const goals = await listGoals(client, 200);
-  const grow = goals.rows.find((r) => String(r.id) === goalId);
+  // Targeted by-id read (Codex final-review MAJOR #1): a windowed recent-goals
+  // scan would miss an old goal chosen by oldest-first selection once more
+  // than a window of newer goals exists. A read error yields null (fail-closed).
+  const goalRes = await readGoalById(client, goalId);
+  const grow = goalRes.ok ? goalRes.rows[0] : undefined;
   if (!grow) return null;
-  const jobsRes = await listJobsForGoal(client, goalId, 500);
+  const jobsRes = await listJobsForGoal(client, goalId, JOB_READ_LIMIT);
+  if (jobsRes.rows.length > MAX_GOAL_JOBS) return null; // unprovably complete
   const jobs = jobsRes.rows.map((r) => {
     const j = jobFromRow(r);
     if (j.depends_on.length === 0) j.depends_on = depends(j.id);
@@ -159,8 +173,14 @@ export async function driverStep(
   const controls = await readSystemControlsChecked(client);
   // The durable worker advances SIMULATION jobs even while execution is
   // disabled (that is the drill), but owner_stop / unreadable controls halt.
-  if (!controls.readOk || controls.controls.owner_stop || controls.controls.paused) {
-    return { halted: true, reason: 'owner_stop_or_unreadable', actions: [], persisted: 0, lockRequired: false };
+  // The two reasons are DISTINCT (Codex initial-review MINOR #7): an owner
+  // halt is an intended operational state (exit 75 upstream); an unreadable
+  // control plane is an outage (exit 70 upstream). Both fail closed.
+  if (!controls.readOk) {
+    return { halted: true, reason: 'controls_unreadable', actions: [], persisted: 0, lockRequired: false };
+  }
+  if (controls.controls.owner_stop || controls.controls.paused) {
+    return { halted: true, reason: 'owner_stop_or_paused', actions: [], persisted: 0, lockRequired: false };
   }
   const state = await loadGoalState(client, goalId, depends);
   if (!state) return { halted: true, reason: 'goal_not_found', actions: [], persisted: 0, lockRequired: false };
@@ -233,6 +253,21 @@ export async function driverStep(
     if (rec.ok) job.status = 'ready';
   }
 
+  // Parked short-circuit (Codex initial-review MAJOR #3): when EVERY
+  // non-terminal job is still awaiting an owner approval after the
+  // authoritative gate pass above (i.e. nothing cleared), there is NOTHING this
+  // step can schedule. Return BEFORE reserving an iteration, so timer-driven
+  // polling of a parked goal - including one whose approval record merely
+  // CLAIMS 'approved' but fails authoritative verification - never burns the
+  // goal's bounded iteration budget while the owner decides.
+  const nonTerminalJobs = state.jobs.filter(
+    (j) => !['completed', 'cancelled', 'dead_lettered'].includes(j.status),
+  );
+  if (nonTerminalJobs.length > 0 &&
+      nonTerminalJobs.every((j) => j.status === 'awaiting_approval')) {
+    return { halted: false, reason: 'awaiting_owner_approval', actions: [], persisted: 0, lockRequired: false };
+  }
+
   // Hard-cap preflight (audit #12 MAJOR): never RESERVE past the durable cap.
   // At/over max_iterations, skip reservation and let the engine escalate/
   // dead-letter this step - the cap is enforced and never exceeded.
@@ -291,8 +326,11 @@ export async function driverStep(
         // Re-observe controls AFTER acquiring the lock (audit #9): the owner may
         // have stopped/paused during acquisition. Fail closed; finally releases.
         const gate = await readSystemControlsChecked(client);
-        if (!gate.readOk || gate.controls.owner_stop || gate.controls.paused) {
-          return { halted: true, reason: 'owner_stop_or_unreadable', actions: s.actions, persisted, lockRequired };
+        if (!gate.readOk) {
+          return { halted: true, reason: 'controls_unreadable', actions: s.actions, persisted, lockRequired };
+        }
+        if (gate.controls.owner_stop || gate.controls.paused) {
+          return { halted: true, reason: 'owner_stop_or_paused', actions: s.actions, persisted, lockRequired };
         }
         // Claim the job with an EXECUTION LEASE (audit BLOCKER): CAS the job to
         // in_progress and stamp THIS run's run_id + lease. Only one run wins the
@@ -314,9 +352,11 @@ export async function driverStep(
         if (!gate2.readOk || gate2.controls.owner_stop || gate2.controls.paused) {
           const requeue = await transitionJobOwned(client, job.id, 'in_progress', 'ready', runId,
             { run_id: null, run_lease_expires_at: null, failure_reason: null }, nowIso);
-          // Distinguish an immediate requeue from one deferred to lease recovery
-          // (audit MINOR) so operators know whether recovery is already pending.
-          const reason = requeue.ok ? 'owner_stop_during_run' : 'owner_stop_during_run:requeue_deferred';
+          // Distinguish an immediate requeue from one deferred to lease
+          // recovery (audit MINOR), and an owner halt from an unreadable
+          // control plane (Codex initial-review MINOR #7).
+          const base = gate2.readOk ? 'owner_stop_during_run' : 'controls_unreadable_during_run';
+          const reason = requeue.ok ? base : base + ':requeue_deferred';
           return { halted: true, reason, actions: s.actions, persisted, lockRequired };
         }
         const to = res.outcome === 'completed' ? 'completed' : 'failed';
