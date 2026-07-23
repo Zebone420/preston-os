@@ -43,11 +43,20 @@ create table if not exists master_goals (
   correlation_id text not null,
   simulation_only boolean not null default true
     check (simulation_only = true),
+  -- Durable iteration counter (audit medium #12): the driver's loop budget
+  -- survives a restart because the count lives here, not in process memory.
+  iteration integer not null default 0
+    check (iteration >= 0),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 create index if not exists idx_master_goals_status
   on master_goals (status, created_at desc);
+-- Idempotency key (audit medium #16): one goal graph per correlation key. A
+-- retried submission can never duplicate the graph - the second insert fails
+-- and the whole transaction (goal + jobs + deps) rolls back.
+create unique index if not exists uq_master_goals_correlation
+  on master_goals (correlation_id);
 
 -- ============================================================
 -- 2. goal_jobs - decomposed, dependency-ordered jobs (simulation)
@@ -180,8 +189,8 @@ create unique index if not exists uq_orchestration_approvals_nonce
 -- RLS: owner-only via public.is_owner(); anon fully revoked; no
 -- table grants delete. master_goals/goal_jobs/agent_contracts are
 -- mutable (owner). job_dependencies/orchestration_approvals are
--- insert+select append-style (approvals update status via a narrow
--- owner update policy).
+-- insert+select only; an approval's status is decided EXCLUSIVELY through
+-- public.decide_orchestration_approval (no update policy, no update grant).
 -- ============================================================
 
 alter table master_goals enable row level security;
@@ -222,19 +231,14 @@ create policy orch_approvals_owner_ins on orchestration_approvals
 drop policy if exists orch_approvals_owner_sel on orchestration_approvals;
 create policy orch_approvals_owner_sel on orchestration_approvals
   for select to authenticated using (public.is_owner());
+-- No direct UPDATE policy and no UPDATE privilege (audit critical #17): the
+-- ONLY way to decide an approval is the narrow transactional function
+-- public.decide_orchestration_approval below. Even the owner session cannot
+-- rewrite an approval row directly - immutability and pending-only/one-time
+-- semantics are DB-enforced, not app-enforced.
 drop policy if exists orch_approvals_owner_upd on orchestration_approvals;
-create policy orch_approvals_owner_upd on orchestration_approvals
-  for update to authenticated
-  using (public.is_owner()) with check (public.is_owner());
--- Immutability (audit finding 7): only the decision fields may change after
--- creation. Column-level grant makes action/hash/owner/environment/scope/
--- created_at privilege-immutable - even the owner cannot rewrite the bound
--- action of a raised approval. Only status/decided_at/nonce are updatable
--- (pending -> terminal, one-time).
 grant select, insert on orchestration_approvals to authenticated;
 revoke update on orchestration_approvals from authenticated;
-grant update (status, decided_at, nonce) on orchestration_approvals
-  to authenticated;
 
 -- ============================================================
 -- Strip Supabase default privileges: anon gets nothing; mutable
@@ -284,3 +288,215 @@ begin
       foreign key (approval_id) references orchestration_approvals (approval_id);
   end if;
 end $$;
+
+-- ============================================================
+-- Atomic goal decomposition (audit medium #16).
+-- public.submit_goal_decomposition persists master goal + goal jobs +
+-- dependency edges in ONE transaction: any insert/validation/constraint
+-- failure rolls the whole graph back (no partial goal). Operationally
+-- idempotent: a per-correlation advisory xact lock serializes concurrent
+-- submissions so a retry (sequential OR concurrent) returns the existing goal
+-- id and inserts nothing; a partial id/correlation cross-match raises
+-- idempotency_conflict. uq_master_goals_correlation remains the durable
+-- backstop of last resort.
+-- SECURITY INVOKER on purpose: the caller's own RLS policies and grants
+-- (owner-only) apply unchanged; the function adds atomicity, not privilege.
+-- Fixed search_path, schema-qualified, no dynamic SQL.
+-- ============================================================
+create or replace function public.submit_goal_decomposition(
+  p_goal jsonb,
+  p_jobs jsonb,
+  p_deps jsonb
+) returns jsonb
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $fn$
+declare
+  v_goal_id uuid;
+  v_corr text;
+  v_corr_of_id text;   -- correlation_id of the row whose id = v_goal_id (if any)
+  v_id_of_corr uuid;   -- id of the row whose correlation_id = v_corr (if any)
+  v_job jsonb;
+  v_dep jsonb;
+  v_count integer := 0;
+begin
+  if not public.is_owner() then
+    raise exception 'owner_required';
+  end if;
+  if p_goal is null or jsonb_typeof(p_goal) <> 'object' then
+    raise exception 'goal_required';
+  end if;
+  v_goal_id := (p_goal->>'id')::uuid;
+  v_corr := nullif(trim(coalesce(p_goal->>'correlation_id', '')), '');
+  if v_goal_id is null or v_corr is null then
+    raise exception 'goal_identity_required';
+  end if;
+  -- Serialize concurrent submissions that share a correlation key so the
+  -- check-then-insert below is OPERATIONALLY idempotent (audit MAJOR): a second
+  -- concurrent caller blocks here until the first commits, then its lookup sees
+  -- the committed row and returns {created:false} instead of a raw unique
+  -- violation. hashtextextended yields a 64-bit key so distinct correlation
+  -- keys effectively never collide/block one another (unlike 32-bit hashtext).
+  perform pg_advisory_xact_lock(
+    hashtextextended('submit_goal_decomposition:' || v_corr, 0));
+  -- Deterministic idempotency (audit MAJOR): a prior submission is a match ONLY
+  -- when the SAME row carries BOTH this id and this correlation_id. A partial /
+  -- cross match (id and correlation pointing at different rows) is an
+  -- idempotency_conflict - never a silent arbitrary pick.
+  select correlation_id into v_corr_of_id from public.master_goals where id = v_goal_id;
+  select id into v_id_of_corr from public.master_goals where correlation_id = v_corr;
+  if v_corr_of_id is not null or v_id_of_corr is not null then
+    if v_corr_of_id is not distinct from v_corr
+        and v_id_of_corr is not distinct from v_goal_id then
+      return jsonb_build_object('goal_id', v_goal_id, 'created', false);
+    end if;
+    raise exception 'idempotency_conflict';
+  end if;
+  if p_jobs is null or jsonb_typeof(p_jobs) <> 'array'
+      or jsonb_array_length(p_jobs) = 0 then
+    raise exception 'jobs_required';
+  end if;
+  if jsonb_array_length(p_jobs) > 1000 then
+    raise exception 'too_many_jobs';
+  end if;
+  insert into public.master_goals
+    (id, title, objective, source, requested_by, status, environment,
+     budget, correlation_id, simulation_only, iteration)
+  values
+    (v_goal_id,
+     p_goal->>'title',
+     p_goal->>'objective',
+     p_goal->>'source',
+     p_goal->>'requested_by',
+     coalesce(p_goal->>'status', 'decomposed'),
+     'staging',
+     coalesce(p_goal->'budget', '{}'::jsonb),
+     v_corr,
+     true,
+     0);
+  for v_job in select * from jsonb_array_elements(p_jobs) loop
+    insert into public.goal_jobs
+      (id, goal_id, kind, title, objective, risk_class, assigned_role,
+       status, attempts, requires_approval, approval_id, runtime_job_id,
+       correlation_id, evidence_refs, executed)
+    values
+      ((v_job->>'id')::uuid,
+       v_goal_id,
+       v_job->>'kind',
+       v_job->>'title',
+       coalesce(v_job->>'objective', ''),
+       coalesce(v_job->>'risk_class', 'GREEN'),
+       v_job->>'assigned_role',
+       coalesce(v_job->>'status', 'pending'),
+       coalesce((v_job->>'attempts')::integer, 0),
+       coalesce((v_job->>'requires_approval')::boolean, false),
+       v_job->>'approval_id',
+       (v_job->>'runtime_job_id')::uuid,
+       coalesce(nullif(v_job->>'correlation_id', ''), v_corr),
+       coalesce(v_job->'evidence_refs', '[]'::jsonb),
+       false);
+    v_count := v_count + 1;
+  end loop;
+  -- A non-null p_deps of the wrong JSON type must fail closed (audit MINOR),
+  -- never be silently treated as "no dependencies" (which would persist an
+  -- incomplete graph for a malformed request).
+  if p_deps is not null and jsonb_typeof(p_deps) <> 'array' then
+    raise exception 'deps_invalid';
+  end if;
+  if p_deps is not null then
+    for v_dep in select * from jsonb_array_elements(p_deps) loop
+      insert into public.job_dependencies (goal_id, job_id, depends_on_job_id)
+      values
+        (v_goal_id,
+         (v_dep->>'job_id')::uuid,
+         (v_dep->>'depends_on_job_id')::uuid);
+    end loop;
+  end if;
+  return jsonb_build_object('goal_id', v_goal_id, 'created', true,
+                            'jobs', v_count);
+end
+$fn$;
+revoke all on function public.submit_goal_decomposition(jsonb, jsonb, jsonb)
+  from public;
+revoke all on function public.submit_goal_decomposition(jsonb, jsonb, jsonb)
+  from anon;
+grant execute on function public.submit_goal_decomposition(jsonb, jsonb, jsonb)
+  to authenticated;
+
+-- ============================================================
+-- Approval decision enforcement (audit critical #17).
+-- public.decide_orchestration_approval is the ONLY write path for approval
+-- decisions (direct UPDATE is revoked above). It locks the row FOR UPDATE,
+-- requires pending status, a valid outcome, owner authorization, real
+-- wall-clock (clock_timestamp(), taken AFTER the lock) before expiry, and
+-- one-time nonce semantics; sets decided_at from that same clock_timestamp();
+-- updates ONLY the decision fields; returns the authoritative
+-- updated row; and fails closed under concurrent decisions (the second
+-- caller blocks on the row lock, then sees status<>pending and aborts).
+-- SECURITY DEFINER is required because authenticated has no UPDATE grant:
+-- fixed search_path, schema-qualified references, no dynamic SQL, execute
+-- revoked from public and anon, granted only to authenticated, and
+-- public.is_owner() is enforced internally. No service role involved.
+-- ============================================================
+create or replace function public.decide_orchestration_approval(
+  p_approval_id text,
+  p_outcome text,
+  p_nonce text
+) returns setof public.orchestration_approvals
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $fn$
+declare
+  v_row public.orchestration_approvals%rowtype;
+  v_now timestamptz;
+begin
+  if not public.is_owner() then
+    raise exception 'owner_required';
+  end if;
+  if p_outcome is null
+      or p_outcome not in ('approved', 'rejected', 'more_info') then
+    raise exception 'outcome_invalid';
+  end if;
+  if p_nonce is null or length(trim(p_nonce)) = 0 then
+    raise exception 'nonce_required';
+  end if;
+  select * into v_row from public.orchestration_approvals
+    where approval_id = p_approval_id
+    for update;
+  if not found then
+    raise exception 'approval_not_found';
+  end if;
+  if v_row.status <> 'pending' then
+    raise exception 'not_pending';
+  end if;
+  if v_row.nonce is not null then
+    raise exception 'already_decided';
+  end if;
+  -- Real wall-clock time AFTER the row lock (audit MAJOR). now() /
+  -- transaction_timestamp() is fixed at transaction start, so a decider that
+  -- waited on FOR UPDATE would compare an approval against a STALE time and
+  -- could accept one that expired while it was blocked. clock_timestamp() is
+  -- the actual time at this point; it gates expiry AND stamps decided_at so
+  -- the recorded decision time cannot predate the decision.
+  v_now := clock_timestamp();
+  if v_now >= v_row.expires_at then
+    raise exception 'expired';
+  end if;
+  update public.orchestration_approvals
+     set status = p_outcome,
+         decided_at = v_now,
+         nonce = p_nonce
+   where approval_id = p_approval_id;
+  return query
+    select * from public.orchestration_approvals
+      where approval_id = p_approval_id;
+end
+$fn$;
+revoke all on function public.decide_orchestration_approval(text, text, text)
+  from public;
+revoke all on function public.decide_orchestration_approval(text, text, text)
+  from anon;
+grant execute on function public.decide_orchestration_approval(text, text, text)
+  to authenticated;

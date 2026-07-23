@@ -315,7 +315,15 @@ describe('P7-CX-01 migration integrity — enforced now', () => {
   it('uses the Phase 7 approval type and protects bound columns', () => {
     expect(sql).toMatch(/approval_id text primary key/);
     expect(sql).toMatch(/foreign key \(approval_id\) references orchestration_approvals \(approval_id\)/);
-    expect(sql).toMatch(/grant update \(status, decided_at, nonce\) on orchestration_approvals/);
+    // Reconciled (#17): direct UPDATE is now fully revoked - there is NO
+    // column-level update grant at all. Approval decisions are made ONLY via
+    // the transactional function, so no bound column can be rewritten by a
+    // direct UPDATE. This is strictly stronger than the prior column-grant.
+    expect(sql).toMatch(/revoke update on orchestration_approvals from authenticated;/);
+    expect(sql).not.toMatch(/grant update \([^)]*\) on orchestration_approvals/);
+    expect(sql).toMatch(/create or replace function public\.decide_orchestration_approval/);
+    // If an update grant were ever re-introduced, it must never cover the
+    // bound action columns (regression guard retained).
     expect(sql).not.toMatch(/grant update \([^)]*action[^)]*\) on orchestration_approvals/);
     expect(sql).not.toMatch(/grant update \([^)]*action_hash[^)]*\) on orchestration_approvals/);
   });
