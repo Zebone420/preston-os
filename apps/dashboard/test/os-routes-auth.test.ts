@@ -133,10 +133,46 @@ describe('owner OS routes - owner-path status mapping', () => {
     const body = (await res.json()) as {
       ok: boolean;
       status: { execution_enabled: boolean; hermes_mode: string; remote_runner_enabled: boolean };
+      orchestration: { status: string; simulation_safe: boolean };
     };
     expect(body.status.execution_enabled).toBe(false);
     expect(body.status.hermes_mode).toBe('disabled');
     expect(body.status.remote_runner_enabled).toBe(false);
+    // Phase 7 readiness rides the same owner-only route and fails closed:
+    // unreadable controls can NEVER present as simulation_ready.
+    expect(body.orchestration.status).toBe('controls_unreadable');
+    expect(body.orchestration.simulation_safe).toBe(false);
+  });
+
+  it('GET /api/os/status surfaces bridge readiness for the owner (read-only)', async () => {
+    // Every read resolves to the safe simulation posture row; the orchestration
+    // tables then read as that same row (present), so the bridge readiness
+    // reaches a definite state without a real DB. The pin here is that the
+    // owner-only status route CARRIES the readiness object (no new surface).
+    const { ctx, calls } = fakeCtx({
+      data: [{
+        id: 'global', execution_enabled: false, owner_stop: false, paused: false,
+        hermes_mode: 'observe_only', remote_runner_enabled: false,
+      }],
+      error: null,
+    });
+    resolveOwnerMock.mockResolvedValue(ctx);
+    const res = await statusGet();
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      orchestration: {
+        status: string; migration_applied: boolean; controls_readable: boolean;
+        simulation_safe: boolean; open_approvals: number;
+      };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.orchestration.controls_readable).toBe(true);
+    expect(body.orchestration.simulation_safe).toBe(true);
+    expect(body.orchestration.migration_applied).toBe(true);
+    expect(typeof body.orchestration.open_approvals).toBe('number');
+    // read-only: the readiness surfacing performs no writes
+    expect(calls.every((c) => c.op === 'select')).toBe(true);
   });
 
   it('POST /api/os/command rejects malformed JSON with 400', async () => {
