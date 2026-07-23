@@ -24,8 +24,11 @@ export type OwnerGateAction =
 
 export interface OwnerGateInput {
   path: string;
-  // Email of the authenticated Supabase user, or null when unauthenticated.
-  userEmail: string | null;
+  // Email of the authenticated Supabase user; null OR undefined when
+  // unauthenticated. Both are treated identically (fail-closed to 'login'),
+  // matching isOwnerEmail - callers with an optional-chained user need not
+  // normalize, and the sign-out regression suite pins the undefined shape.
+  userEmail: string | null | undefined;
   env: Env;
 }
 

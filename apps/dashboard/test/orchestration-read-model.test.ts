@@ -31,7 +31,18 @@ function makeClient(mode: 'data' | 'empty' | 'absent' | 'error') {
           const chain = () => ({ eq() { return chain(); }, order() { return { limit() { return result(rows); } }; }, limit() { return result(rows); } });
           return chain();
         },
-        update() { return { eq() { return { eq() { return { select() { return Promise.resolve({ data: [], error: null }); } }; }, select() { return Promise.resolve({ data: [], error: null }); } }; } }; },
+        update() {
+          // Full UpdateEqChain shape (eq/lte/gt recursion + select), matching
+          // the store's guard-chain contract - the read model never updates,
+          // so every branch resolves to an empty write result.
+          const chain = () => ({
+            eq() { return chain(); },
+            lte() { return chain(); },
+            gt() { return chain(); },
+            select() { return Promise.resolve({ data: [], error: null }); },
+          });
+          return { eq() { return chain(); } };
+        },
       };
     },
   };
