@@ -28,8 +28,10 @@ command -v node >/dev/null 2>&1 || fail "node not found on PATH"
 
 # Report which required NAMES are present (never their values). Service mode
 # requires URL + KEY + ENV=staging + TOKEN_STORE; REFRESH_TOKEN is needed once
-# for --bootstrap; TOKEN is diagnostic-only.
-for v in SUPABASE_URL SUPABASE_RUNTIME_KEY SUPABASE_RUNTIME_ENV SUPABASE_RUNTIME_TOKEN_STORE SUPABASE_RUNTIME_REFRESH_TOKEN SUPABASE_RUNTIME_TOKEN; do
+# for --bootstrap; TOKEN is diagnostic-only. ORCH_BASE_COMMIT and
+# ORCH_ALLOWED_PATHS are required by orchestrate-once only (Phase 7); the
+# command itself fails closed (78) when they are missing or invalid.
+for v in SUPABASE_URL SUPABASE_RUNTIME_KEY SUPABASE_RUNTIME_ENV SUPABASE_RUNTIME_TOKEN_STORE SUPABASE_RUNTIME_REFRESH_TOKEN SUPABASE_RUNTIME_TOKEN ORCH_BASE_COMMIT ORCH_ALLOWED_PATHS; do
   if grep -qE "^${v}=" "$ENV_FILE"; then echo "PREFLIGHT: env ${v} present"; fi
 done
 

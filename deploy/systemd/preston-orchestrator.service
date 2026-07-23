@@ -1,0 +1,41 @@
+[Unit]
+Description=Preston AI OS Phase-7 goal driver (simulation only, bounded)
+After=network-online.target
+Wants=network-online.target
+# Shares the worker service identity + rotating refresh-token store.
+# SERIALIZATION IS ENFORCED, not just documented: every sharing oneshot
+# (worker + orchestrator) runs under the same flock file, so a timer
+# overlap or a manual start can never race the one-time token rotation.
+# The owner still enables at most one timer (worker OR orchestrator).
+
+[Service]
+Type=oneshot
+# Same least-privilege runtime identity as the worker (owner-allowlisted
+# authenticated user; never the service-role key).
+User=preston-worker
+Group=preston-worker
+WorkingDirectory=/srv/preston-os/apps/dashboard
+EnvironmentFile=/etc/preston/worker.env
+# One bounded Phase-7 goal-driving pass via the compiled dispatcher
+# (npm run build:os-runtime). Simulation only: the durable driver hands
+# every run to the executed:false adapter; owner_stop/pause halt (exit 75);
+# approvals/leases/fences enforced; missing ORCH_* config exits 78.
+# flock: see the token-store serialization note in [Unit].
+ExecStart=/usr/bin/flock -w 90 /var/lib/preston/worker/.dispatch.lock /usr/bin/node dist/os-runtime/bin.js orchestrate-once --max 10
+Restart=no
+# Exit 75 (owner stop/pause halt) is the INTENDED operational halt state,
+# not a service failure. Unreadable-controls outages exit 70 and DO fail.
+SuccessExitStatus=75
+TimeoutStartSec=120
+RuntimeMaxSec=300
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# Same token-store carve-out as the worker (shared identity/store).
+ReadWritePaths=/var/lib/preston/worker
+LogsDirectory=preston
+StandardOutput=append:/var/log/preston/orchestrator.log
+StandardError=append:/var/log/preston/orchestrator.log
+# No [Install]: the SERVICE never auto-starts. The timer (owner-enabled) or an
+# explicit owner `systemctl start` fires it.

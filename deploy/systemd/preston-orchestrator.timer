@@ -1,0 +1,17 @@
+[Unit]
+Description=Preston AI OS Phase-7 goal driver timer (DISABLED by default)
+
+[Timer]
+# Fires 5 min after boot and 5 min after the previous run FINISHES, so a
+# bounded oneshot never overlaps itself. Do NOT enable together with
+# preston-worker.timer (shared rotating refresh-token store).
+OnBootSec=5min
+OnUnitInactiveSec=5min
+AccuracySec=30s
+Unit=preston-orchestrator.service
+
+[Install]
+WantedBy=timers.target
+# Present in the repo but INACTIVE until the owner runs:
+#   systemctl enable --now preston-orchestrator.timer
+# Placing these files (or pulling repo changes) never activates anything.

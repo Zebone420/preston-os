@@ -13,7 +13,12 @@ WorkingDirectory=/srv/preston-os/apps/dashboard
 EnvironmentFile=/etc/preston/worker.env
 # Runs the compiled dispatcher (npm run build:os-runtime) in a bounded
 # simulate-loop. Execution stays disabled by controls; nothing runs live.
-ExecStart=/usr/bin/node dist/os-runtime/bin.js worker-loop --max 5
+# flock serializes every dispatcher oneshot that shares this identity's
+# ROTATING refresh-token store (worker + Phase-7 orchestrator): two
+# concurrent startups would race the one-time token rotation and could
+# revoke the session family. -w 90 waits inside TimeoutStartSec; on
+# timeout the run fails visibly and the timer simply retries later.
+ExecStart=/usr/bin/flock -w 90 /var/lib/preston/worker/.dispatch.lock /usr/bin/node dist/os-runtime/bin.js worker-loop --max 5
 Restart=no
 TimeoutStartSec=120
 RuntimeMaxSec=300
