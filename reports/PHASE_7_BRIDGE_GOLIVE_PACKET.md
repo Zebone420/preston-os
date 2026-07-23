@@ -1,10 +1,26 @@
 # PHASE 7 - BRIDGE GO-LIVE PACKET (FINAL, owner-run)
 
-Date: 2026-07-23. Status: AUTHORITATIVE. Supersedes the 2026-07-22 draft of
-this file and the migration block of
-`reports/PHASE_7_MIGRATION_0010_FINAL_OWNER_PACKET.md`. A read-only Codex
-audit of this packet ran before finalization; all 11 substantive findings
-were reconciled in this version (section 11).
+Date: 2026-07-23 (revision 2, orchestrate-once local gate complete).
+Status: AUTHORITATIVE. Supersedes the 2026-07-23 revision 1 of this file
+and the migration block of
+`reports/PHASE_7_MIGRATION_0010_FINAL_OWNER_PACKET.md`.
+
+Codex audit history: (a) the revision-1 packet audit (11 findings, all
+reconciled - section 11); (b) an initial read-only architecture/security
+review of the orchestrate-once design (8 findings, all reconciled -
+section 12); (c) a final read-only review of the real implementation
+diff + tests (2 MAJOR + 1 MINOR, all reconciled and re-confirmed -
+section 12). Zero unreconciled blocker/critical/major findings remain.
+
+WHAT CHANGED IN REVISION 2: the two verified gaps of revision 1 are
+CLOSED locally. The deployed dispatcher now has an `orchestrate-once`
+command that drives Phase-7 goals through the existing durable driver
+(simulation-only), `loadBridgeReadiness` is exposed on the owner-only
+`GET /api/os/status` route, the two lagging test-file typing issues are
+repaired (no suppression), a `preston-orchestrator` systemd unit pair
+exists, and Gate 6B + the drill below are fully specified with no
+blocked steps. Owner-run boundaries (migration, merge, Vercel + host
+deployment at the new `$TIP`, activation, drill) remain owner-run.
 
 This is the exact, dependency-ordered owner path from "locally complete and
 tested" to "staging deployed, activated in simulation, remotely verified".
@@ -57,20 +73,28 @@ scoped - no unrelated files in any commit):
 | 7a53210 | bridge end-to-end gate + gated-job parking | completion-engine.ts, driver.ts, store.ts, orchestration-bridge-e2e.test |
 | a01bb4e | durable evidence persistence + bridge readiness/health read model | driver.ts, read-model.ts, orchestration-bridge-e2e.test |
 | ca71300 | draft go-live packet | this file (draft) |
-| `$TIP` | THIS finalized packet (docs only) | this file |
+| cad21d2 | revision-1 finalized packet (docs only) | this file |
+| d4ce7c3 | driver by-id goal load, provable-complete job reads (1001-cap), parked short-circuit BEFORE iteration reserve, distinct controls_unreadable vs owner_stop_or_paused reasons | driver.ts, orchestration/store.ts (readGoalById, listGoalsByStatus, listDependenciesForGoal, probeSimulationPinViolations), read-model.ts (shared migration-absent classifier), orchestration-driver.test |
+| 1f11d98 | `orchestrate-once` dispatcher command: bounded single-goal durable drive, fail-closed config/control/selection/completeness gates, exit mapping, 27-test focused suite | os-runtime/dispatcher.ts, test/orchestrate-once.test.ts |
+| 9de4611 | owner-only `GET /api/os/status` now carries `orchestration` = loadBridgeReadiness (no new subsystem, no anon access) | api/os/status/route.ts, os-routes-auth.test |
+| 908180b | typing repairs, no suppression: OwnerGateInput.userEmail admits undefined (fail-closed unchanged), read-model test fake gains full update guard-chain | owner-auth.ts, orchestration-read-model.test |
+| 8af0b13 | preston-orchestrator systemd unit pair (disabled, hardened, SuccessExitStatus=75), flock token-store serialization on worker + orchestrator, ORCH env NAMES, preflight name report, unit pins | deploy/systemd (3 files), deploy/preflight-health.sh, env.template, systemd-units.test |
+| `$TIP` | THIS revision-2 packet (docs only) | this file |
 
-Validation matrix, re-run 2026-07-23 at the branch head on this machine:
+Validation matrix, re-run 2026-07-23 at the revision-2 branch head on this
+machine (after the orchestrate-once gate):
 
 | Check | Result |
 |---|---|
-| Full vitest suite | 846 tests: 841 pass, 5 fail - ALL 5 are `worktree-prep.test.ts` shelling to `bash` (Windows PATH env limitation, documented since Phase 5; compensated below). Owner-environment runs show 846/846. |
-| Compensating Git Bash checks | `bash -n` on worktree_prepare.sh / secret_scan.sh / red_boundary_scan.sh: 3/3 OK |
+| Full vitest suite | 879 tests: 874 pass, 5 fail - ALL 5 are `worktree-prep.test.ts` shelling to `bash` (Windows PATH env limitation, documented since Phase 5; compensated below). Owner-environment runs show all-pass. |
+| Compensating Git Bash checks | `bash -n` on worktree_prepare.sh / secret_scan.sh / red_boundary_scan.sh / preflight-health.sh: 4/4 OK |
+| Focused orchestrate-once suite | 27/27 pass (test/orchestrate-once.test.ts: routing, config gates, control gates, selection, full drive, approvals, leases/locks/recovery, completeness boundaries, containment) |
 | Bridge end-to-end tests | 9/9 pass (orchestration-bridge-e2e.test.ts) |
-| Orchestration/migration/driver/durable/drills/security-regression suites | pass (inside the 841) |
-| os-runtime build (`npm run build:os-runtime`, tsc strict) | PASS |
-| Lint (`npm run lint`) | PASS |
-| Next.js production build (`npm run build`) | PASS on `master` (`b3f18b0`) in the primary repo. NOT runnable inside the feature worktree (Turbopack rejects the node_modules junction - environment limitation, not code). The branch adds NO `src/app` files, so the app surface is identical; owner CI/Vercel is the authoritative build check at `$TIP`. |
-| App-graph `tsc --noEmit` (includes test files) | 2 errors, BOTH in test files only: `business-signout.test.ts:80` (pre-exists on master) and `orchestration-read-model.test.ts:26` (branch store typing gained lte/gt; the older test fake lags). EMPIRICALLY EXCLUDED from `next build` (master build passes with the same tsc failure) and invisible to vitest. Recorded as hygiene debt for the follow-up local gate. NOT a go-live blocker. |
+| Orchestration/migration/driver/durable/drills/security-regression suites | 220/220 pass across 15 files |
+| os-runtime build (`npm run build:os-runtime`, tsc strict) | PASS; compiled `bin.js orchestrate-once` startup proven: exits 78 fail-closed with redacted structured log when runtime env is absent |
+| Lint (`npm run lint`) | PASS (0 errors, 0 warnings) |
+| Next.js production build (`npm run build`) | PASS inside the feature worktree itself. The node_modules junction was replaced by a real `npm ci` install (valid non-junction environment), removing the revision-1 caveat. All routes compile; /os and /os/orchestration dynamic. |
+| App-graph `tsc --noEmit` (includes test files) | PASS, 0 errors. Both revision-1 lagging test-file errors repaired at the source (no suppression, no exclusion): `owner-auth.ts` OwnerGateInput.userEmail now admits `undefined` (fail-closed behavior unchanged; pins the undefined-session case), and the `orchestration-read-model.test.ts` fake gained the full update guard-chain (eq/lte/gt). |
 | secret_scan.sh (worktree root) | 0 findings |
 | red_boundary_scan.sh (worktree root) | 0 findings |
 
@@ -82,24 +106,43 @@ commits were Codex-reviewed during the build sessions. The final packet
 audit findings and dispositions are in section 11 - zero unreconciled
 blocker/critical/major findings remain.
 
-TWO VERIFIED GAPS (material, honest; they gate sections 6-7, NOT
-push/merge/migration/deployment):
+THE TWO REVISION-1 GAPS ARE CLOSED (this revision's local gate):
 
-- The durable goal driver (`driveGoal`) is exported library code exercised
-  by tests only. The deployed dispatcher supports exactly
-  `health | db-health | worker-loop | hermes-loop`; there is NO
-  `orchestrate-once` command and no route invokes the driver. On a deployed
-  host, Phase-7 goals cannot be DRIVEN yet.
-- The bridge readiness read model (`loadBridgeReadiness`) is likewise
-  library-only - no endpoint or page invokes it yet. Readiness must be
-  verified via the `/os/orchestration` page summary + owner SQL until it is
-  wired.
+- `orchestrate-once` dispatcher command: the deployed dispatcher surface
+  is now `health | db-health | worker-loop | hermes-loop |
+  orchestrate-once`. One bounded invocation selects AT MOST ONE eligible
+  non-terminal simulation goal (status decomposed/running/blocked,
+  DETERMINISTIC oldest-first per status - no starvation window) and
+  advances it via the existing `driveGoal` durable driver under the
+  owner-scoped runtime identity. Fail-closed gates, in order: runtime env
+  + staging allowlist + production-URL refusal (78); ORCH_BASE_COMMIT
+  7-40 hex and ORCH_ALLOWED_PATHS relative/no-traversal (78); controls
+  unreadable (70); owner_stop/paused (75); execution_enabled or
+  remote_runner_enabled true = unsafe posture for a simulation-only
+  command (78); migration 0010 absent (78); GLOBAL simulation-pin probe -
+  any master_goals row with simulation_only=false anywhere refuses the
+  whole run (70); unprovably-complete job (>1000 rows) or dependency-edge
+  (bound-filling) reads (70). Worktree locks use a crypto-random
+  per-invocation token; run ids are minted by the driver itself
+  (crypto.randomUUID). A goal parked on owner approvals is SKIPPED
+  without burning its iteration budget (both a dispatcher fast path and
+  a driver-level short-circuit BEFORE the iteration reserve). Exit codes:
+  0 ok/no-op/bounded-progress/parked, 75 owner halt, 70 outage or
+  ambiguous state, 78 configuration.
+- `loadBridgeReadiness` is exposed on the EXISTING owner-only
+  authenticated route `GET /api/os/status` as the `orchestration` field
+  (same session auth + allowlist re-check as every /api/os route; no new
+  subsystem, no anonymous access, no duplicate read model). The owner
+  reads migration state, control posture, simulation-safety, and backlog
+  from the deployed dashboard - phone-friendly, laptop closed.
 
-Both belong to ONE small follow-up LOCAL gate ("orchestrate-once wiring"):
-add the dispatcher command + readiness surfacing + refresh the two lagging
-test fakes. Goal submission, decomposition persistence, approval
-issuance/decision, and all read models already work via the dashboard
-action + SQL RPCs.
+Also in this gate: `preston-orchestrator.service/.timer` unit pair
+(disabled, hardened, oneshot; details in Gate 6B), flock serialization of
+the shared rotating refresh-token store across worker + orchestrator
+oneshots, ORCH_* env NAMES in env.template + preflight name report, and
+the two test-file typing repairs. Goal submission, decomposition
+persistence, approval issuance/decision, and all read models continue to
+work via the dashboard action + SQL RPCs.
 
 ## 2. MIGRATION 0010 REVIEW (read-only inspection; H-3 respected)
 
@@ -206,9 +249,12 @@ git -C C:\dev\preston-os diff --stat master...phase7/reconcile-approval-enforcem
 git -C C:\dev\preston-os diff master...phase7/reconcile-approval-enforcement
 ```
 Record the branch tip hash as `$TIP`. STOP IF: any file outside
-`apps/dashboard/src/lib/ai-os/`, `apps/dashboard/test/`,
-`supabase/migrations/0010_phase7_orchestration.sql`, `deploy/`, `reports/`
-appears in the stat, or the tip is not the finalized-packet docs commit.
+`apps/dashboard/src/lib/ai-os/`, `apps/dashboard/src/os-runtime/`,
+`apps/dashboard/src/app/api/os/status/route.ts`,
+`apps/dashboard/src/lib/owner-auth.ts`, `apps/dashboard/test/`,
+`supabase/migrations/0010_phase7_orchestration.sql`, `deploy/`,
+`env.template`, `reports/` appears in the stat, or the tip is not the
+revision-2 packet docs commit.
 
 ```powershell
 # 3.3 Push master's 2 base commits, then the branch (remote backup/review)
@@ -414,24 +460,40 @@ STOP IF: build fails or `bin.js` absent -> section 8.2.
 ```bash
 # 5.5 Env files remain protected (names only - never print values)
 sudo stat -c '%U:%G %a' /etc/preston/worker.env
+# Phase 7: verify the two NEW names exist in worker.env (owner adds the
+# VALUES: ORCH_BASE_COMMIT=$TIP, ORCH_ALLOWED_PATHS=apps/dashboard/).
+sudo grep -cE '^ORCH_BASE_COMMIT=' /etc/preston/worker.env
+sudo grep -cE '^ORCH_ALLOWED_PATHS=' /etc/preston/worker.env
 ```
-EXPECT: owner `preston-worker`, mode `600`. STOP IF group/world readable.
+EXPECT: owner `preston-worker`, mode `600`; both greps return 1. STOP IF
+group/world readable. If the ORCH names are absent, add them (values:
+the pinned commit hash and a comma list of RELATIVE path prefixes) -
+orchestrate-once fails closed (exit 78) without them.
 
 ```bash
-# 5.6 Systemd units: compare first; back up + refresh ONLY if changed
+# 5.6 Systemd units: compare first; back up + refresh ONLY if changed.
+# The worker service CHANGED in revision 2 (flock serialization) and the
+# orchestrator pair is NEW - expect diffs on first deployment at $TIP.
 diff /etc/systemd/system/preston-worker.service /srv/preston-os/deploy/systemd/preston-worker.service
 diff /etc/systemd/system/preston-worker.timer /srv/preston-os/deploy/systemd/preston-worker.timer
-# ONLY if a diff is non-empty:
+ls /etc/systemd/system/preston-orchestrator.* 2>/dev/null
+# ONLY if a diff is non-empty (or the orchestrator units are absent):
 sudo mkdir -p /root/preston-unit-backup && sudo cp /etc/systemd/system/preston-worker.* /root/preston-unit-backup/
 sudo cp /srv/preston-os/deploy/systemd/preston-worker.service /etc/systemd/system/
 sudo cp /srv/preston-os/deploy/systemd/preston-worker.timer /etc/systemd/system/
+sudo cp /srv/preston-os/deploy/systemd/preston-orchestrator.service /etc/systemd/system/
+sudo cp /srv/preston-os/deploy/systemd/preston-orchestrator.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 # Always verify nothing is enabled/active:
-systemctl is-enabled preston-worker.timer preston-hermes-observe.timer
-systemctl is-active preston-worker.service preston-hermes-observe.service
+systemctl is-enabled preston-worker.timer preston-orchestrator.timer preston-hermes-observe.timer
+systemctl is-active preston-worker.service preston-orchestrator.service preston-hermes-observe.service
 ```
 EXPECT: timers `disabled` (or hermes as previously owner-set to
 observe-only), services `inactive`. STOP IF anything auto-started.
+NOTE: the worker and orchestrator share ONE runtime identity and ONE
+rotating refresh-token store; their oneshots serialize on
+`/var/lib/preston/worker/.dispatch.lock` (flock, enforced in both unit
+files). Even so, enable AT MOST ONE of the two timers at a time.
 
 ```bash
 # 5.7 Preflight (read-only; PROVES: env names present, tight perms, build
@@ -477,22 +539,25 @@ sudo systemctl enable --now preston-worker.timer
 
 Deactivation mirror: `sudo systemctl disable --now preston-worker.timer`.
 This re-proves the Phase-5 posture (bounded oneshot, exit 75 on
-owner_stop/paused). It cannot advance Phase-7 goals.
+owner_stop/paused). It cannot advance Phase-7 goals. Disable this timer
+BEFORE crossing Gate 6B (one worker-identity timer at a time; the flock
+in both units enforces serialization, the single-timer rule keeps the
+schedule unambiguous).
 
-### Gate 6B - Phase-7 goal-driving activation: BLOCKED (do not attempt)
+### Gate 6B - Phase-7 goal-driving activation (RUNNABLE in this revision)
 
-ALL of the following must be true before Gate 6B exists as a runnable
-command; as of this packet the FIRST box cannot be checked, so THERE IS NO
-6B COMMAND IN THIS PACKET by design:
+Preconditions - ALL boxes must be checked before the activation command:
 
-- [ ] `orchestrate-once` dispatcher command implemented, tested, merged,
-      and deployed at a new `$TIP` (follow-up LOCAL gate; includes wiring
-      `loadBridgeReadiness` to an owner-visible surface and a unit/timer
-      revision for the new command - a separate packet revision will name
-      the exact unit change and activation command).
+- [x] `orchestrate-once` dispatcher command implemented + tested +
+      readiness on the owner status route (THIS revision, commits
+      d4ce7c3..`$TIP`). Deployment at the new `$TIP` is owner-run
+      (sections 3-5).
 - [ ] Migration 0010 applied + verified (4.6) + behaviorally verified (4.7).
-- [ ] Host and Vercel deployments at the same pin.
-- [ ] Preflight PASS + 5.8 posture exact.
+- [ ] Host and Vercel deployments at the same pin (`$TIP`).
+- [ ] Preflight PASS + 5.8 posture exact + ORCH_* names present (5.5).
+- [ ] Deployed unit files match the repo (5.6), orchestrator pair
+      installed, all timers disabled, `preston-worker.timer` NOT enabled
+      while driving Phase-7 goals.
 - [ ] Approval path verified RPC-only (4.7 B2/B3).
 - [ ] Pause/stop/kill verified from the phone (5.8 row readable; global
       kill SQL from `docs/PRESTON_AI_EMERGENCY_SHUTOFF_SPEC_v1.md` at hand).
@@ -501,17 +566,64 @@ command; as of this packet the FIRST box cannot be checked, so THERE IS NO
       `execution_enabled=false`).
 - [ ] Rollback commands ready (section 8).
 
-## 7. PHONE + LAPTOP-CLOSED DRILL (owner-operated; runs only after Gate 6B
-## exists and is crossed - i.e. NOT YET)
+THE DEPLOYED UNIT: `preston-orchestrator.service` - oneshot, hardened
+(ProtectSystem=strict, NoNewPrivileges, RuntimeMaxSec=300, no [Install]),
+runs as the existing `preston-worker` identity with `worker.env`, and
+executes:
+
+```
+/usr/bin/flock -w 90 /var/lib/preston/worker/.dispatch.lock \
+  /usr/bin/node dist/os-runtime/bin.js orchestrate-once --max 10
+```
+
+`SuccessExitStatus=75` on this unit only: an owner stop/pause halt is a
+HEALTHY state, not a unit failure (an unreadable control plane exits 70
+and DOES fail the unit).
+
+THE OWNER ACTIVATION COMMAND (one bounded pass per invocation; use this
+for the drill - each drill step that says "run the oneshot" means exactly
+this command):
+
+```bash
+sudo systemctl start preston-orchestrator.service
+systemctl show -p ExecMainStatus preston-orchestrator.service   # exit code
+sudo tail -n 5 /var/log/preston/orchestrator.log                # JSON summary
+```
+
+RECURRING activation (OPTIONAL, only after the section-7 drill PASSES;
+never together with the worker timer):
+
+```bash
+sudo systemctl disable --now preston-worker.timer
+sudo systemctl enable --now preston-orchestrator.timer
+```
+
+Deactivation mirror: `sudo systemctl disable --now
+preston-orchestrator.timer`. Exit codes: 0 = ok / no eligible goal /
+bounded progress / parked awaiting the owner; 75 = owner_stop or paused;
+70 = outage or ambiguous state (controls/pin/read failures); 78 =
+configuration (env names, unsafe posture, migration absent).
+
+## 7. PHONE + LAPTOP-CLOSED DRILL (owner-operated; runs after the Gate 6B
+## checklist is fully checked - NO step is blocked in this revision)
 
 Preconditions: phone SSH (key-based) to the staging host; owner login to
 the Supabase dashboard and the Vercel-deployed dashboard. Steps marked
-[6B] require the `orchestrate-once` worker and are BLOCKED until that
-gate; steps 1-10 + 20-21 are runnable earlier but the drill only PASSES
+[RUN] invoke the Gate 6B oneshot:
+`sudo systemctl start preston-orchestrator.service`, then read the exit
+code via `systemctl show -p ExecMainStatus preston-orchestrator.service`
+and the JSON summary via
+`sudo tail -n 5 /var/log/preston/orchestrator.log`. The drill PASSES only
 as a whole, in order, laptop closed throughout.
 
 For every step: on FAILURE, stop the drill, run the stop action, record
 evidence, do not proceed.
+
+Bridge readiness is remotely inspectable at ANY step: the deployed
+dashboard's owner session can read `GET /api/os/status` - the
+`orchestration` field reports migration_applied, controls, simulation
+safety, and backlog; `status` must be `simulation_ready` while driving
+(or `halted` during steps 15-18).
 
 | # | Step | Command / UI action | Expected | Failure => stop action |
 |---|---|---|---|---|
@@ -525,15 +637,15 @@ evidence, do not proceed.
 | 8 | Approval blocks | Inspect the gated (RED-objective) job row | `status='awaiting_approval'`, `requires_approval=true`, never advances on its own | 8.4 |
 | 9 | Owner approval | `select status, decided_at from public.decide_orchestration_approval('<id>','approved','<fresh-nonce>');` | `approved`, `decided_at` set | 8.4 |
 | 10 | Replayed/invalid nonce | Repeat step 9 with the same approval id | `not_pending` error; a consumed nonce on another approval -> unique violation | 8.4 |
-| 11 | Expired approval fails at execution | Approve a second gated job, let `expires_at` pass, run the worker [6B] | Clearance refused, job stays parked | 8.4 |
-| 12 | Hash binding | Tamper one bound field in a test-goal approval scenario, run worker [6B] | Refused on hash mismatch; untampered path clears | 8.4 |
-| 13 | Bounded claim | Run the oneshot; SQL: `select run_id, run_lease_expires_at, status from goal_jobs where goal_id='<goal>';` [6B] | Only the permitted ready job claimed, under a run_id lease | 8.5 |
-| 14 | Evidence + result | SQL: `select status, evidence_refs, executed from goal_jobs where id='<job>';` [6B] | `completed`, non-empty evidence ref, `executed=false` | 8.4 |
-| 15 | Pause prevents claims | Shutoff-spec SQL sets `paused=true`; run the oneshot [6B] | Exit 75, no new `run_id` stamped | 8.6 |
-| 16 | Resume | Shutoff-spec SQL sets `paused=false`; run the oneshot [6B] | Claims resume | 8.6 |
-| 17 | Owner stop halts flow | Shutoff-spec SQL sets `owner_stop=true`; run the oneshot [6B] | Exit 75, nothing persisted | 8.6 |
-| 18 | Global kill leaves nothing | Full kill SQL (shutoff spec) + `sudo systemctl disable --now preston-worker.timer`; then `systemctl is-active preston-worker.service; pgrep -f os-runtime` | No Preston runtime process; timer disabled | 8.10 |
-| 19 | Restart recovery | Re-enable, start a multi-job goal, kill the oneshot mid-run, run again [6B] | Completed jobs NOT re-run (attempts unchanged); goal completes; expired-lease job requeued | 8.5 |
+| 11 | Expired approval fails at execution | Approve a second gated job, let `expires_at` pass, then [RUN] | Clearance refused, job stays parked (`awaiting_approval`), exit 0 | 8.4 |
+| 12 | Hash binding | Tamper one bound field in a test-goal approval scenario, then [RUN] | Refused on hash mismatch (stays parked); untampered path clears | 8.4 |
+| 13 | Bounded claim | [RUN]; SQL: `select run_id, run_lease_expires_at, status from goal_jobs where goal_id='<goal>';` | Only the permitted ready job(s) claimed, each under a run_id lease | 8.5 |
+| 14 | Evidence + result | SQL: `select status, evidence_refs, executed from goal_jobs where id='<job>';` | `completed`, non-empty run-bound evidence ref, `executed=false` | 8.4 |
+| 15 | Pause prevents claims | Shutoff-spec SQL sets `paused=true`; [RUN] | ExecMainStatus=75 (unit reports success - SuccessExitStatus), no new `run_id` stamped | 8.6 |
+| 16 | Resume | Shutoff-spec SQL sets `paused=false`; [RUN] | Claims resume | 8.6 |
+| 17 | Owner stop halts flow | Shutoff-spec SQL sets `owner_stop=true`; [RUN] | ExecMainStatus=75, nothing persisted | 8.6 |
+| 18 | Global kill leaves nothing | Full kill SQL (shutoff spec) + `sudo systemctl disable --now preston-worker.timer preston-orchestrator.timer`; then `systemctl is-active preston-worker.service preston-orchestrator.service; pgrep -f os-runtime` | No Preston runtime process; timers disabled | 8.10 |
+| 19 | Restart recovery | Clear the kill row, start a multi-job goal, kill the oneshot mid-run (`sudo systemctl kill preston-orchestrator.service`), wait out `run_lease_expires_at`, then [RUN] again | Completed jobs NOT re-run (attempts unchanged); expired-lease job requeued and finishes; goal completes | 8.5 |
 | 20 | Hermes observe-only | `systemctl is-enabled preston-hermes-observe.timer`; SQL check `hermes_mode` | Unchanged from pre-drill posture; no Hermes side effects | 8.6 |
 | 21 | No external business write | Review Airtable TEST base activity, email outbox, Telegram bot (dormant) + `select count(*) from goal_jobs where executed=true;` | Zero external writes; count = 0 | FULL 8.9 containment + incident note |
 
@@ -558,12 +670,12 @@ update system_controls set owner_stop=true, paused=true,
   hermes_mode='disabled', updated_at=now() where id='global';
 ```
 plus on the host: `sudo systemctl disable --now preston-worker.timer
-preston-hermes-observe.timer`.
+preston-orchestrator.timer preston-hermes-observe.timer`.
 
 | Scenario | Containment / rollback |
 |---|---|
 | 8.1 Migration failure (4.2 mixed slate, 4.5 error, or 4.6 mismatch) | STOP all SQL. A partial apply leaves inert objects, not corruption. Capture the exact error + failing verification letters. Do NOT hand-craft repair DDL and do NOT re-run the file over a partial state. Report for a corrected-migration gate. Diagnose via the 4.3 dump in a SCRATCH project only. |
-| 8.2 Deployment failure (5.4 or bad behavior at the pin) | Host: `git checkout $PREV && npm ci && npm run build:os-runtime`; if 5.6 replaced units, restore them: `sudo cp /root/preston-unit-backup/preston-worker.* /etc/systemd/system/ && sudo systemctl daemon-reload`; re-run preflight. Dashboard: Vercel -> promote/redeploy the PREVIOUS production deployment recorded in 3.6. The applied migration may stay (inert). |
+| 8.2 Deployment failure (5.4 or bad behavior at the pin) | Host: `git checkout $PREV && npm ci && npm run build:os-runtime`; if 5.6 replaced units, restore them: `sudo cp /root/preston-unit-backup/preston-worker.* /etc/systemd/system/`, remove the new pair if reverting fully (`sudo rm /etc/systemd/system/preston-orchestrator.service /etc/systemd/system/preston-orchestrator.timer`), then `sudo systemctl daemon-reload`; re-run preflight. Dashboard: Vercel -> promote/redeploy the PREVIOUS production deployment recorded in 3.6. The applied migration may stay (inert). |
 | 8.3 Worker crash loop | The timer fires a bounded oneshot (RuntimeMaxSec=300, no Restart=), so no tight loop; still: disable the timer, read `/var/log/preston/worker.log`, keep `owner_stop=true` until diagnosed. |
 | 8.4 Incorrect approval behavior (any 4.7 or drill 8-12 deviation) | Global kill. Approvals are decide-once and expiring - do NOT fix rows by hand. Record the approval id + returned row; treat as a code/DB defect gate. |
 | 8.5 Duplicate execution / duplicate goal / lease violation | Global kill. Preserve rows (DELETE is revoked anyway). Capture `run_id`s + `attempts`; a fencing violation = NO-GO until root-caused. |
@@ -577,31 +689,32 @@ preston-hermes-observe.timer`.
 
 | Boundary | Verdict | Unmet condition (if not GO) |
 |---|---|---|
-| Local implementation | CONDITIONAL GO | `orchestrate-once` dispatcher command + readiness surfacing not implemented (one small LOCAL gate); two test-file-only tsc errors to clean up in the same gate. Everything else verified green. |
+| Local implementation | GO | complete: orchestrate-once + readiness surfacing implemented, tested, Codex-reviewed twice + confirmation pass; app-graph tsc 0 errors; Next build passes in the worktree itself |
 | Commit quality | GO | - |
 | Push (3.3) | GO | - |
 | Merge (3.5, ff-only) | GO | run AFTER section 4 per the execution order |
 | Staging migration (4) | GO | 4.2 sentinels + 4.3 backup first |
-| Deployment (5) | GO | dashboard + dispatcher deploy fully; goal-driving waits on the local gate |
-| Simulation activation (6) | CONDITIONAL GO | Gate 6A (Phase-5 worker re-validation) available now; Gate 6B (Phase-7 goal driving) BLOCKED on `orchestrate-once` |
-| Phone/laptop-closed drill (7) | NO-GO | steps 11-19 need Gate 6B; drill runs only after sections 3-6 complete in order |
+| Deployment (5) | GO | includes the ORCH_* env names (5.5) and the revised/new unit files (5.6) |
+| Simulation activation (6) | GO | Gate 6A optional; Gate 6B runnable once its checklist boxes (migration, same-pin deployments, preflight, posture, units) are all checked |
+| Phone/laptop-closed drill (7) | CONDITIONAL GO | runnable with NO blocked steps; requires sections 3-6 complete in order and Gate 6B crossed first |
 | Remote-Live staging | NO-GO | requires the full 21-step drill PASS |
 | Production activation | NO-GO | separate owner-approved RED gate; also blocked by backup/LA-10 closure + production-readiness blockers P1-P22 |
 
 ## 10. FINAL PERCENTAGES
 
-- Bridge completion: 88% (all bridge logic, migration, tests, and this
-  packet done and re-verified; remaining: the `orchestrate-once` +
-  readiness wiring gate, then owner-run live boundaries).
-- Remote-Live readiness: 60% (code + packet ready; migration not applied,
-  nothing deployed at `$TIP`, activation gates open, drill not run).
-- Overall Preston AI OS completion: 55% (durable simulation orchestration
-  built and bridge-ready; real-agent execution, business go-live, knowledge
-  layer, and all production gates remain).
+- Bridge implementation (local scope: code + tests + packet): 100%
+  (both revision-1 gaps closed; zero unreconciled Codex findings; all
+  local validation matrices green).
+- Remote-Live staging bridge: 65% (everything local done; migration not
+  applied, nothing deployed at the new `$TIP`, Gate 6B boxes unchecked,
+  21-step drill not run - all owner-run).
+- Overall Preston AI OS completion: 57% (durable simulation
+  orchestration built, wired, and deployable; real-agent execution,
+  business go-live, knowledge layer, and all production gates remain).
 
-## 11. CODEX FINAL AUDIT DISPOSITION (read-only audit of this packet)
+## 11. CODEX REVISION-1 PACKET AUDIT DISPOSITION (read-only, historical)
 
-11 substantive findings; every one reconciled in this version:
+11 substantive findings; every one reconciled in revision 1:
 
 1. BLOCKER - audited file was uncommitted -> resolved by the finalization
    commit (`$TIP`); the git sequence approves the committed packet.
@@ -635,6 +748,81 @@ preston-hermes-observe.timer`.
 
 Confirmed by the same audit: migration blob + SHA-256 match the repo; the
 dispatcher command surface and the `driveGoal`/`loadBridgeReadiness` gap
-are exactly as stated; no command in this packet targets production,
-enables execution or the remote runner, prints a credential value, sends a
-business message, or activates Hermes.
+were exactly as stated at revision 1 (both closed in revision 2); no
+command in this packet targets production, enables execution or the
+remote runner, prints a credential value, sends a business message, or
+activates Hermes.
+
+## 12. CODEX ORCHESTRATE-ONCE REVIEWS (this revision's local gate)
+
+Two mandated read-only Codex runs plus a confirmation pass; every
+blocker/critical/major finding reconciled in code, with tests pinning
+each fix.
+
+INITIAL architecture/security review (pre-implementation design +
+partial diff) - 8 findings, all reconciled:
+
+1. CRITICAL - bounded job reads (500) below the 1000-job model/DB cap
+   could finalize a goal with unread jobs -> reads now use
+   JOB_READ_LIMIT=1001 and REFUSE when the row count exceeds
+   MAX_GOAL_JOBS (driver loadGoalState returns null; dispatcher exits
+   70 `job graph overflow`). Boundary test: 1001 jobs.
+2. MAJOR - dependency-edge reads could silently truncate -> bound raised
+   to 10000 with an explicit full-read refusal (70). Boundary test:
+   10000 edges.
+3. MAJOR - a parked goal whose approval merely CLAIMS `approved` (but
+   fails authoritative verification) would burn one iteration per timer
+   tick to the durable cap -> the DRIVER now short-circuits
+   `awaiting_owner_approval` BEFORE reserving an iteration whenever
+   every non-terminal job is parked and nothing cleared; the dispatcher
+   fast path remains as an optimization. Tests pin zero burn for both
+   the undecided and the forged-approved cases.
+4. MAJOR - "oldest goal" selection was oldest-of-the-newest-100 window
+   (starvation) -> selection now reads OLDEST-FIRST per driveable
+   status (listGoalsByStatus ascending) and merges, so the globally
+   oldest driveable goal is always in the window.
+5. MAJOR - documented-only mutual exclusion of the shared rotating
+   refresh-token store -> ENFORCED serialization: worker and
+   orchestrator ExecStart both wrap in
+   `flock -w 90 /var/lib/preston/worker/.dispatch.lock`; unit tests pin
+   the same lock file in both and its absence from hermes.
+6. MAJOR - unsafe ORCH_ALLOWED_PATHS entries (absolute/traversal) were
+   accepted and became doomed lock acquisitions -> validated at the
+   config gate with the same rules as the lock layer; exit 78.
+7. MINOR - `owner_stop_or_unreadable` conflated an owner halt with a
+   control-plane outage -> distinct `owner_stop_or_paused` (75) and
+   `controls_unreadable` (70) reasons end to end, incl. mid-run.
+8. MINOR - exit 75 would mark the oneshot failed -> the orchestrator
+   unit declares `SuccessExitStatus=75` (worker keeps its recorded
+   Phase-5 decision unchanged).
+
+Also answered by the initial review: no external execute/send path (the
+simulation adapter pins executed:false); no owner_stop/pause/approval/
+lease/fence bypass found; excluding `proposed` goals is sound; widening
+OwnerGateInput.userEmail is a typing repair, not an authorization
+change; readiness on the owner status route adds no anonymous exposure.
+
+FINAL review (real implementation diff + tests) - verdict: the eight
+reconciliations "materially present", approval/lease/fence/simulation
+enforcement intact, no new external business-write path; 2 MAJOR +
+1 MINOR new findings, all reconciled:
+
+1. MAJOR - oldest-first selection could pick a goal the driver's
+   newest-200 `listGoals` scan could not load -> `loadGoalState` now
+   loads BY ID (`readGoalById`); test drives an old goal past 250 newer
+   rows.
+2. MAJOR - the simulation-pin refusal only covered the selection
+   window -> a GLOBAL probe (`probeSimulationPinViolations`,
+   `simulation_only=eq.false` limit 1) refuses the whole run on a hit
+   anywhere in master_goals; the environment axis stays DB-CHECK-pinned
+   plus window-checked (the eq-only read surface cannot express "not
+   staging" globally - stated, not hidden). Test: pin violation on a
+   TERMINAL (out-of-window) goal refuses the run.
+3. MINOR - missing boundary tests -> added: 1001 jobs, 10000 edges,
+   out-of-window pin violation, 250-newer-goals load, mid-run pause ->
+   75 and mid-run controls outage -> 70.
+
+CONFIRMATION pass verdict: all three findings RESOLVED; "PASS - no new
+blocker, critical, or major defect found; TypeScript validation passes."
+(The reviewer's own sandbox could not run vitest - read-only temp-dir
+EPERM; the suites pass in this environment, matrix in section 1.)
