@@ -81,6 +81,8 @@ export interface GoalJob {
   correlation_id: string;
   evidence_refs: string[]; // checkpoint / audit ids
   failure_reason: string | null;
+  run_id?: string | null; // execution lease owner while in_progress (audit BLOCKER)
+  run_lease_expires_at?: string | null; // in_progress claim expiry (restart recovery)
   created_at: string;
   updated_at: string;
 }

@@ -21,7 +21,10 @@ const JOB_EDGES: Record<GoalJobStatus, readonly GoalJobStatus[]> = {
   pending: ['ready', 'assigned', 'in_progress', 'awaiting_approval', 'cancelled'],
   ready: ['assigned', 'in_progress', 'awaiting_approval', 'cancelled'],
   assigned: ['in_progress', 'ready', 'cancelled'],
-  in_progress: ['awaiting_review', 'completed', 'failed', 'cancelled'],
+  // 'ready' is the RESTART-RECOVERY edge (audit #4): an orphaned in_progress
+  // job (worker crashed/stopped mid-run, no live lease) is requeued to ready to
+  // re-run, without consuming a retry.
+  in_progress: ['awaiting_review', 'completed', 'failed', 'cancelled', 'ready'],
   awaiting_review: ['completed', 'failed', 'cancelled'],
   awaiting_approval: ['ready', 'cancelled', 'dead_lettered', 'failed'],
   failed: ['ready', 'dead_lettered', 'cancelled'], // retry -> ready

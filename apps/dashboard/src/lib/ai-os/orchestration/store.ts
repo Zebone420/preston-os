@@ -66,6 +66,7 @@ export async function insertMasterGoal(
     budget: goal.budget,
     correlation_id: goal.correlation_id,
     simulation_only: true, // forced
+    iteration: 0, // durable loop counter starts at 0 (matches the DB default)
   });
 }
 
@@ -132,18 +133,23 @@ async function casStatus(
   patch: Record<string, unknown>,
   guard: (from: string, to: string) => boolean,
   nowIso: string,
+  ownerEq?: { col: string; val: string },
 ): Promise<WriteOutcome> {
   const to = String(patch.status ?? '');
   if (!guard(fromStatus, to)) {
     return { ok: false, error: `illegal_transition:${fromStatus}->${to}` };
   }
   try {
-    const res = await client
+    let q = client
       .from(table)
       .update({ ...patch, updated_at: nowIso })
       .eq('id', id)
-      .eq('status', fromStatus)
-      .select('id');
+      .eq('status', fromStatus);
+    // Optional ownership condition (audit BLOCKER): the CAS also matches an
+    // execution-ownership column (run_id) so only the run that owns the job may
+    // transition it - atomically, on the single job row.
+    if (ownerEq) q = q.eq(ownerEq.col, ownerEq.val);
+    const res = await q.select('id');
     if (res.error) return { ok: false, error: res.error.message };
     if (!res.data || res.data.length === 0) {
       return { ok: false, error: 'status_changed_elsewhere' };
@@ -166,6 +172,21 @@ export function transitionJob(
   patch: Record<string, unknown>, nowIso: string,
 ): Promise<WriteOutcome> {
   return casStatus(client, ORCH_TABLES.jobs, id, from, { ...patch, status: to }, canTransitionJob, nowIso);
+}
+
+// Transition a job ONLY if it is still owned by the given run_id (audit
+// BLOCKER): the terminal result CAS (in_progress -> completed/failed) and
+// lease-expiry recovery (in_progress -> ready) are conditioned on the run that
+// claimed the job, so a superseded, revived, or crashed worker can never
+// persist a result or requeue a run it no longer owns. Atomic on the job row.
+export function transitionJobOwned(
+  client: RuntimeClient, id: string, from: string, to: GoalJob['status'],
+  runId: string, patch: Record<string, unknown>, nowIso: string,
+): Promise<WriteOutcome> {
+  return casStatus(
+    client, ORCH_TABLES.jobs, id, from, { ...patch, status: to }, canTransitionJob, nowIso,
+    { col: 'run_id', val: runId },
+  );
 }
 
 // --- approvals -------------------------------------------------------------

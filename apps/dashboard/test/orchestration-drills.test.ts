@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { RuntimeClient } from '../src/lib/ai-os/store';
 import { driveGoal, driverStep } from '../src/lib/ai-os/orchestration/driver';
-import { insertGoalJob, insertMasterGoal, transitionJob } from '../src/lib/ai-os/orchestration/store';
+import { insertGoalJob, insertMasterGoal, transitionJob, transitionJobOwned } from '../src/lib/ai-os/orchestration/store';
 import { decomposeGoal, type TaskSpec } from '../src/lib/ai-os/orchestration/decomposition';
 import { DEFAULT_BUDGET, type MasterGoal } from '../src/lib/ai-os/orchestration/model';
 import { acquireWorktreeLock, releaseWorktreeLock } from '../src/lib/ai-os/orchestration/worktree-lock-store';
@@ -59,30 +59,54 @@ async function seed(db: ReturnType<typeof makeFakeDb>) {
   return (id: string) => (id === 'job-0000-b' ? ['job-0000-a'] : []);
 }
 
+// Edit jobs require a worktree lock (audit #2); the real worker always supplies
+// one. base_commit matches decideAcquire's hex requirement.
+const lockCtx = {
+  base_commit: 'abc1234',
+  allowed_paths: ['apps/dashboard/src/'],
+  token: (jobId: string) => `tok-${jobId}`,
+};
+
 // D-1 RESTART DRILL: a crash mid-goal (fresh driver over persisted rows) resumes.
 describe('drill: restart recovery', () => {
   it('a fresh driver resumes from persisted status; completed work is not redone', async () => {
     const db = makeFakeDb();
     const depends = await seed(db);
     let t = Date.parse(NOW);
-    await driverStep(db.client, 'goal-00000001', (t += 1000), depends); // job a completes
+    await driverStep(db.client, 'goal-00000001', (t += 1000), depends, lockCtx); // job a completes
     // "process crash" - drop all in-memory state; a NEW drive reads the DB.
-    const r = await driveGoal(db.client, 'goal-00000001', () => (t += 1000), 50, depends);
+    const r = await driveGoal(db.client, 'goal-00000001', () => (t += 1000), 50, depends, lockCtx);
     expect(r.reason).toBe('completed');
     expect(Number(db.rowsOf('goal_jobs').find((j) => j.id === 'job-0000-a')!.attempts)).toBe(1); // not re-run
   });
 });
 
-// D-2 CANCELLATION DRILL: a cancelled job is re-observed and not run.
+// D-2 CANCELLATION DRILL (corrected per audit): a job cancelled OUT OF BAND
+// while it holds an in_progress execution lease cannot have a result persisted -
+// the run-owned terminal CAS fails because the status is no longer in_progress.
 describe('drill: mid-attempt cancellation re-observation', () => {
-  it('a job cancelled out of band is not run and the goal closes', async () => {
+  it('a run cannot complete a job cancelled during its in_progress lease', async () => {
+    const db = makeFakeDb();
+    await seed(db);
+    const runId = 'run:job-0000-a:1:tok';
+    // job a is claimed (in_progress) by a run
+    await transitionJob(db.client, 'job-0000-a', 'pending', 'in_progress',
+      { run_id: runId, run_lease_expires_at: '2026-07-22T12:10:00.000Z' }, NOW);
+    // OWNER cancels it out of band DURING the attempt (in_progress -> cancelled)
+    await transitionJob(db.client, 'job-0000-a', 'in_progress', 'cancelled', {}, NOW);
+    // the original run now tries to persist completion, owned by its run_id:
+    const late = await transitionJobOwned(db.client, 'job-0000-a', 'in_progress', 'completed', runId,
+      { run_id: null, run_lease_expires_at: null }, NOW);
+    expect(late.ok).toBe(false); // cancellation wins; the stale run cannot complete it
+    expect(db.rowsOf('goal_jobs').find((j) => j.id === 'job-0000-a')!.status).toBe('cancelled');
+  });
+
+  it('a job cancelled before running is not run and the goal closes', async () => {
     const db = makeFakeDb();
     const depends = await seed(db);
-    // owner cancels job b before it runs
     await transitionJob(db.client, 'job-0000-b', 'pending', 'cancelled', {}, NOW);
     let t = Date.parse(NOW);
-    const r = await driveGoal(db.client, 'goal-00000001', () => (t += 1000), 50, depends);
-    // a completes; b stays cancelled; goal terminal
+    const r = await driveGoal(db.client, 'goal-00000001', () => (t += 1000), 50, depends, lockCtx);
     expect(db.rowsOf('goal_jobs').find((j) => j.id === 'job-0000-b')!.status).toBe('cancelled');
     expect(['completed', 'cancelled']).toContain(r.reason);
   });

@@ -87,6 +87,15 @@ create table if not exists goal_jobs (
   correlation_id text not null,
   evidence_refs jsonb not null default '[]',
   failure_reason text,
+  -- Execution lease (audit BLOCKER / #3/#4): the run that currently owns this
+  -- job's in_progress execution. run_id is stamped when a worker claims the job
+  -- (pending/ready/assigned -> in_progress); a result is persisted ONLY by a
+  -- transition CONDITIONED on the same run_id (single-row atomic ownership, so a
+  -- superseded/revived/recovered worker cannot persist). run_lease_expires_at
+  -- bounds the claim; restart recovery requeues an in_progress job whose lease
+  -- has expired, CAS'd on that same run_id.
+  run_id text,
+  run_lease_expires_at timestamptz,
   executed boolean not null default false
     check (executed = false),
   created_at timestamptz not null default now(),

@@ -12,16 +12,19 @@
 // runtime owner packet). Until migration 0010 is applied and this runs on the
 // staging host under the existing dispatcher, NO durable runtime exists.
 
+import { randomUUID } from 'node:crypto';
 import type { RuntimeClient } from '../store';
 import { readSystemControlsChecked } from '../store';
 import { step, type EngineAction } from './completion-engine';
 import { makeSimulationAdapter } from './adapters';
 import {
+  ORCH_TABLES,
   listGoals,
   listJobsForGoal,
   readApprovalRecord,
   transitionGoal,
   transitionJob,
+  transitionJobOwned,
   verifyAuthoritativeApproval,
 } from './store';
 import { actionHash } from './approvals';
@@ -43,6 +46,10 @@ export interface DriverLockContext {
 }
 
 const EDIT_KINDS = new Set(['code', 'test', 'migration', 'repair', 'documentation']);
+// How long a job's in_progress execution lease is valid before restart recovery
+// may requeue it. Bounds orphan recovery latency; the deployment's oneshot runs
+// well within this. (Simulation adapters complete within a single step.)
+const RUN_LEASE_MS = 10 * 60 * 1000;
 import type {
   AgentRole,
   ExecutionBudget,
@@ -93,6 +100,8 @@ function jobFromRow(r: Record<string, unknown>): GoalJob {
     correlation_id: String(r.correlation_id ?? ''),
     evidence_refs: Array.isArray(r.evidence_refs) ? (r.evidence_refs as string[]) : [],
     failure_reason: r.failure_reason ? String(r.failure_reason) : null,
+    run_id: r.run_id ? String(r.run_id) : null,
+    run_lease_expires_at: r.run_lease_expires_at ? String(r.run_lease_expires_at) : null,
     created_at: String(r.created_at ?? ''), updated_at: String(r.updated_at ?? ''),
   };
 }
@@ -122,6 +131,7 @@ export interface DriverStepResult {
   reason: string;
   actions: EngineAction[];
   persisted: number; // number of DB transitions applied
+  lockRequired: boolean; // an edit job could not run: no lock context (#2)
 }
 
 // Advance one durable step. Halts fail-closed on owner_stop/execution-disabled
@@ -133,15 +143,20 @@ export async function driverStep(
   nowMs: number,
   depends: (jobId: string) => string[] = () => [],
   lockCtx?: DriverLockContext,
+  // Injected unique-run-ID minter (audit BLOCKER): each job claim gets a FRESH,
+  // globally unique execution-incarnation id. Default is crypto.randomUUID
+  // (server-side); tests inject a deterministic-but-unique counter. Ownership is
+  // NEVER derived from time or the worktree token (those can repeat).
+  newRunId: () => string = () => randomUUID(),
 ): Promise<DriverStepResult> {
   const controls = await readSystemControlsChecked(client);
   // The durable worker advances SIMULATION jobs even while execution is
   // disabled (that is the drill), but owner_stop / unreadable controls halt.
   if (!controls.readOk || controls.controls.owner_stop || controls.controls.paused) {
-    return { halted: true, reason: 'owner_stop_or_unreadable', actions: [], persisted: 0 };
+    return { halted: true, reason: 'owner_stop_or_unreadable', actions: [], persisted: 0, lockRequired: false };
   }
   const state = await loadGoalState(client, goalId, depends);
-  if (!state) return { halted: true, reason: 'goal_not_found', actions: [], persisted: 0 };
+  if (!state) return { halted: true, reason: 'goal_not_found', actions: [], persisted: 0, lockRequired: false };
   const nowIso = new Date(nowMs).toISOString();
 
   // AUTHORITATIVE approval gate: for every job awaiting approval, read its
@@ -165,22 +180,68 @@ export async function driverStep(
     // not authoritatively approved => stays awaiting_approval (fail-closed)
   }
 
+  // Restart recovery (audit #4): a job persisted as in_progress across a step
+  // boundary is owned by a prior run via its execution lease (run_id +
+  // run_lease_expires_at). Recover it ONLY when that lease has DEFINITELY
+  // expired, and CAS the requeue on the SAME run_id - so a genuinely running
+  // worker (live lease) is never disturbed, and a lock/DB read that cannot
+  // prove expiry never requeues (fail-closed). No worktree read is involved, so
+  // a transient lock-read failure cannot masquerade as "unlocked".
+  for (const job of state.jobs) {
+    if (job.status !== 'in_progress') continue;
+    const leaseMs = Date.parse(job.run_lease_expires_at ?? '');
+    const expired = Number.isFinite(leaseMs) && leaseMs <= nowMs;
+    if (!expired) continue; // live lease OR unknown expiry => leave it (fail-closed)
+    const rec = await transitionJobOwned(
+      client, job.id, 'in_progress', 'ready', job.run_id ?? '',
+      { run_id: null, run_lease_expires_at: null, failure_reason: null }, nowIso,
+    );
+    if (rec.ok) job.status = 'ready';
+  }
+
+  // Hard-cap preflight (audit #12 MAJOR): never RESERVE past the durable cap.
+  // At/over max_iterations, skip reservation and let the engine escalate/
+  // dead-letter this step - the cap is enforced and never exceeded.
+  const atCap = state.iteration >= state.goal.budget.max_iterations;
+  if (!atCap) {
+    // Reserve THIS iteration BEFORE doing work: CAS iteration N -> N+1. A lost
+    // CAS (another worker took it) or a DB error HALTS fail-closed - work is
+    // never done on an unreserved iteration.
+    const reserve = await client
+      .from(ORCH_TABLES.goals)
+      .update({ iteration: state.iteration + 1, updated_at: nowIso })
+      .eq('id', goalId)
+      .eq('iteration', String(state.iteration))
+      .select('id');
+    if (reserve.error) {
+      return { halted: true, reason: 'iteration_reserve_error', actions: [], persisted: 0, lockRequired: false };
+    }
+    if (!reserve.data || reserve.data.length === 0) {
+      return { halted: true, reason: 'iteration_reserved_by_other', actions: [], persisted: 0, lockRequired: false };
+    }
+  }
+
   const s = step(state, nowMs);
   const byId = new Map(state.jobs.map((j) => [j.id, j]));
   let persisted = 0;
+  let lockRequired = false;
 
   for (const act of s.actions) {
     const jobId = (act as { job_id?: string }).job_id;
     const job = jobId ? byId.get(jobId) : undefined;
     if (act.type === 'run' && job) {
-      // Isolation gate: an implementation job acquires its own worktree lock
-      // BEFORE running. A lost acquisition (another holder) skips the run this
-      // cycle - concurrent-safe. Released after the simulated run.
-      const needsLock = lockCtx && EDIT_KINDS.has(job.kind);
+      const isEdit = EDIT_KINDS.has(job.kind);
+      // Mandatory-lock gate (audit #2): an edit-capable job (code/test/
+      // migration/repair/documentation) must NEVER run without an acquired
+      // worktree lock. With no lock context we FAIL CLOSED - skip the run and
+      // signal lockRequired so the loop halts rather than spinning. Read-only
+      // kinds (audit/recommendation/unknown) may proceed without a lock.
+      if (isEdit && !lockCtx) { lockRequired = true; continue; }
       const worktreeId = `wt-${job.id}`;
-      const token = needsLock ? lockCtx!.token(job.id) : '';
+      const token = isEdit ? lockCtx!.token(job.id) : '';
       let fence = 0;
-      if (needsLock) {
+      let acquired = false;
+      if (isEdit) {
         const acq = await acquireWorktreeLock(client, {
           worktree_id: worktreeId, repo: 'preston-os', job_id: job.id,
           owner: job.assigned_role ?? 'claude', token,
@@ -190,22 +251,58 @@ export async function driverStep(
         });
         if (!acq.ok) continue; // held by another / unsafe => skip this cycle
         fence = acq.lock.fence;
+        acquired = true;
       }
-      // Two-phase: mark in_progress (a real running state, restart-visible),
-      // then let the SIMULATION adapter complete/fail it. Both are CAS.
-      const mark = await transitionJob(client, job.id, job.status, 'in_progress', {}, nowIso);
-      if (!mark.ok) {
-        if (needsLock) await releaseWorktreeLock(client, worktreeId, token, fence, nowIso);
-        continue; // another worker took it (concurrent-safe)
+      try {
+        // Re-observe controls AFTER acquiring the lock (audit #9): the owner may
+        // have stopped/paused during acquisition. Fail closed; finally releases.
+        const gate = await readSystemControlsChecked(client);
+        if (!gate.readOk || gate.controls.owner_stop || gate.controls.paused) {
+          return { halted: true, reason: 'owner_stop_or_unreadable', actions: s.actions, persisted, lockRequired };
+        }
+        // Claim the job with an EXECUTION LEASE (audit BLOCKER): CAS the job to
+        // in_progress and stamp THIS run's run_id + lease. Only one run wins the
+        // status CAS, so the job is owned by exactly one run. The worktree lock
+        // (edit jobs) provides filesystem isolation; the run_id provides atomic
+        // RESULT ownership on the single job row - decoupled, no cross-table
+        // TOCTOU. A lost claim (another run took it) skips; finally releases.
+        const runId = `${job.id}:${newRunId()}`; // globally unique per claim
+        const runLeaseIso = new Date(nowMs + RUN_LEASE_MS).toISOString();
+        const mark = await transitionJob(client, job.id, job.status, 'in_progress',
+          { run_id: runId, run_lease_expires_at: runLeaseIso }, nowIso);
+        if (!mark.ok) continue;
+        const res = makeSimulationAdapter(job.assigned_role ?? 'claude').runJob(job, nowIso);
+        // Re-observe controls AFTER the adapter, BEFORE persisting the result
+        // (audit #9): if the owner stopped mid-run, do NOT persist completion.
+        // Requeue THIS run to ready (owned by run_id) so it re-runs once the
+        // stop clears; then halt. finally releases the worktree lock.
+        const gate2 = await readSystemControlsChecked(client);
+        if (!gate2.readOk || gate2.controls.owner_stop || gate2.controls.paused) {
+          const requeue = await transitionJobOwned(client, job.id, 'in_progress', 'ready', runId,
+            { run_id: null, run_lease_expires_at: null, failure_reason: null }, nowIso);
+          // Distinguish an immediate requeue from one deferred to lease recovery
+          // (audit MINOR) so operators know whether recovery is already pending.
+          const reason = requeue.ok ? 'owner_stop_during_run' : 'owner_stop_during_run:requeue_deferred';
+          return { halted: true, reason, actions: s.actions, persisted, lockRequired };
+        }
+        const to = res.outcome === 'completed' ? 'completed' : 'failed';
+        // Result persistence OWNED by run_id (audit BLOCKER): atomic on the job
+        // row and conditioned on the SAME run_id, so a superseded, revived, or
+        // recovered run - or an out-of-band cancellation (status no longer
+        // in_progress) - can never persist a result it does not own. Clears the
+        // lease on the terminal transition.
+        const t = await transitionJobOwned(client, job.id, 'in_progress', to, runId, {
+          attempts: job.attempts + 1,
+          failure_reason: res.failure_reason,
+          run_id: null,
+          run_lease_expires_at: null,
+        }, nowIso);
+        if (t.ok) persisted++;
+      } finally {
+        // Guaranteed release (audit #10): the lock is released on every path -
+        // success, skip, adapter throw, or mid-run halt.
+        if (acquired) await releaseWorktreeLock(client, worktreeId, token, fence, nowIso);
       }
-      const res = makeSimulationAdapter(job.assigned_role ?? 'claude').runJob(job, nowIso);
-      const to = res.outcome === 'completed' ? 'completed' : 'failed';
-      const t = await transitionJob(client, job.id, 'in_progress', to, {
-        attempts: job.attempts + 1,
-        failure_reason: res.failure_reason,
-      }, nowIso);
-      if (t.ok) persisted++;
-      if (needsLock) await releaseWorktreeLock(client, worktreeId, token, fence, nowIso);
     } else if (act.type === 'assign' && job) {
       const t = await transitionJob(client, job.id, job.status, 'assigned', { assigned_role: act.role }, nowIso);
       if (t.ok) persisted++;
@@ -220,11 +317,18 @@ export async function driverStep(
     // decide approvals (owner-only) - handled by the approval router + owner.
   }
 
-  // Reflect the engine's goal status onto the persisted goal (CAS).
+  // (The durable iteration was already RESERVED before work above - audit #12.)
+
+  // Reflect the engine's goal status onto the persisted goal (CAS). Do NOT
+  // ignore the result (audit #13): a lost CAS (concurrent worker) or an illegal
+  // edge leaves the status unchanged and self-heals next cycle (re-derived from
+  // job rows); we never force a contradictory status. Surface it in the reason.
+  let reason = s.reason;
   if (s.status !== state.goal.status) {
-    await transitionGoal(client, goalId, state.goal.status, s.status, nowIso);
+    const gt = await transitionGoal(client, goalId, state.goal.status, s.status, nowIso);
+    if (!gt.ok) reason = `${s.reason}:goal_cas_unapplied`;
   }
-  return { halted: false, reason: s.reason, actions: s.actions, persisted };
+  return { halted: false, reason, actions: s.actions, persisted, lockRequired };
 }
 
 // Restart-safe drive: bounded loop over driverStep until done/halted. Reloads
@@ -237,20 +341,45 @@ export async function driveGoal(
   maxCycles = 500,
   depends: (jobId: string) => string[] = () => [],
   lockCtx?: DriverLockContext,
+  newRunId: () => string = () => randomUUID(),
 ): Promise<{ cycles: number; halted: boolean; reason: string }> {
   let cycles = 0;
   let lastReason = 'noop';
   while (cycles++ < Math.min(maxCycles, 5000)) {
-    const r = await driverStep(client, goalId, now(), depends, lockCtx);
+    const r = await driverStep(client, goalId, now(), depends, lockCtx, newRunId);
     lastReason = r.reason;
     if (r.halted) return { cycles, halted: true, reason: r.reason };
+    // Fail closed (audit #2): an edit job needed a lock but no lock context was
+    // provided and nothing else progressed - do not spin; halt with a clear,
+    // actionable reason rather than looping to maxCycles.
+    if (r.lockRequired && r.persisted === 0) {
+      return { cycles, halted: true, reason: 'lock_context_required' };
+    }
     // Reload to check terminality (restart-safe: state is authoritative in DB).
     const state = await loadGoalState(client, goalId, depends);
     if (!state) return { cycles, halted: true, reason: 'goal_not_found' };
-    const done = state.jobs.every((j) => ['completed', 'cancelled', 'dead_lettered'].includes(j.status));
+    const allTerminal = state.jobs.length > 0 &&
+      state.jobs.every((j) => ['completed', 'cancelled', 'dead_lettered'].includes(j.status));
+    if (allTerminal) {
+      // Correct terminal semantics (audit #14): a goal is NOT "completed" merely
+      // because every job is terminal. A dead-lettered job => failed; a
+      // cancelled job (none dead-lettered) => cancelled; only all-completed =>
+      // completed. Mirrors the completion engine's status derivation.
+      const anyDead = state.jobs.some((j) => j.status === 'dead_lettered');
+      const anyCancelled = state.jobs.some((j) => j.status === 'cancelled');
+      const reason = anyDead ? 'failed' : anyCancelled ? 'cancelled' : 'completed';
+      // Durably reflect the terminal status onto the goal row (audit MAJOR): the
+      // last driverStep derived goal status BEFORE the final job transitions, so
+      // the row may still read 'running'. CAS from its current status to the
+      // terminal one; surface (not force) an unapplied CAS.
+      const goalStatus = anyDead ? 'failed' : anyCancelled ? 'cancelled' : 'completed';
+      const gt = state.goal.status === goalStatus
+        ? { ok: true }
+        : await transitionGoal(client, goalId, state.goal.status, goalStatus, new Date(now()).toISOString());
+      return { cycles, halted: false, reason: gt.ok ? reason : `${reason}:goal_cas_unapplied` };
+    }
     const blockedOnApproval = state.jobs.some((j) => j.status === 'awaiting_approval') &&
       state.jobs.every((j) => ['completed', 'cancelled', 'dead_lettered', 'awaiting_approval'].includes(j.status));
-    if (done) return { cycles, halted: false, reason: 'completed' };
     if (blockedOnApproval) return { cycles, halted: false, reason: 'awaiting_owner_approval' };
   }
   return { cycles, halted: true, reason: lastReason };
