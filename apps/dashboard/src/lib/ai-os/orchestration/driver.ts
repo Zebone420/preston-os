@@ -320,6 +320,17 @@ export async function driverStep(
           return { halted: true, reason, actions: s.actions, persisted, lockRequired };
         }
         const to = res.outcome === 'completed' ? 'completed' : 'failed';
+        // Evidence, persisted idempotently and BOUND to this run (audit #15):
+        // the ref carries the goal/job/run/attempt/outcome so it is traceable,
+        // and it is written INSIDE the run-owned terminal CAS below - so exactly
+        // one owning run records it, once, per attempt (a superseded/recovered
+        // run cannot append; retries accumulate one ref per distinct run_id).
+        // Invariant: the driver's run-owned terminal transition is the SOLE
+        // writer of evidence_refs, so this read-modify-append cannot lose a
+        // concurrent evidence write (none exists by design). A DB-side jsonb
+        // append RPC would be the belt-and-suspenders against a hypothetical
+        // out-of-band direct UPDATE to the row.
+        const evidenceRef = `sim:goal:${goalId}:job:${job.id}:run:${runId}:attempt:${job.attempts + 1}:${to}`;
         // Result persistence OWNED by run_id (audit BLOCKER): atomic on the job
         // row and conditioned on the SAME run_id, so a superseded, revived, or
         // recovered run - or an out-of-band cancellation (status no longer
@@ -328,6 +339,7 @@ export async function driverStep(
         const t = await transitionJobOwned(client, job.id, 'in_progress', to, runId, {
           attempts: job.attempts + 1,
           failure_reason: res.failure_reason,
+          evidence_refs: [...job.evidence_refs, evidenceRef],
           run_id: null,
           run_lease_expires_at: null,
         }, nowIso);

@@ -6,6 +6,7 @@
 // never fabricates rows. Reuses the store read adapters (no duplicate queries).
 
 import type { RuntimeClient } from '../store';
+import { readSystemControlsChecked } from '../store';
 import {
   listGoals,
   listJobsForGoal,
@@ -83,8 +84,12 @@ export async function loadOrchestrationReadModel(
     if (!jr.ok) { jobsErr = jr.error; continue; }
     allJobs.push(...jr.rows);
   }
-  const jobs: Bucket = jobsErr && allJobs.length === 0
-    ? { state: 'error', rows: [], note: jobsErr }
+  // ANY per-goal job read failure marks the whole bucket 'error' (audit MAJOR):
+  // a partial success would otherwise mask the omission and let readiness report
+  // healthy on incomplete data (and undercount failures/dead-letters). Rows that
+  // did load are retained for display, but the state is fail-closed 'error'.
+  const jobs: Bucket = jobsErr
+    ? { state: 'error', rows: allJobs, note: jobsErr }
     : allJobs.length > 0 ? { state: 'ok', rows: allJobs } : { state: 'empty', rows: [] };
 
   const failedRows = allJobs.filter((j) => str(j, 'status') === 'failed');
@@ -105,5 +110,83 @@ export async function loadOrchestrationReadModel(
       failed_jobs: failedRows.length,
       dead_lettered_jobs: deadRows.length,
     },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Bridge readiness / health (bridge item 13): a single, remotely-inspectable,
+// fail-closed signal the owner can read (phone/dashboard) to know whether the
+// bridge is safe and operable WITHOUT touching the laptop. It answers: is
+// migration 0010 applied, are the safety controls readable and in the expected
+// simulation-safe posture (execution OFF, remote runner OFF, Hermes observe-
+// only), is the runtime halted (owner_stop/paused), and what is the work
+// backlog (open approvals, failures, dead-letters). Never throws.
+export interface BridgeReadiness {
+  migration_applied: boolean;
+  controls_readable: boolean;
+  execution_enabled: boolean;
+  remote_runner_enabled: boolean;
+  hermes_mode: string;
+  owner_stop: boolean;
+  paused: boolean;
+  simulation_safe: boolean; // execution off + remote runner off + hermes observe_only
+  read_model_readable: boolean; // every readiness-critical bucket read cleanly
+  // Backlog counts within the BOUNDED recent window (loadOrchestrationReadModel
+  // caps: recent goals + their jobs + open approvals). They are a lower bound,
+  // not an exact global count, and are only trustworthy when read_model_readable
+  // is true; an errored read forces read_model_unreadable rather than a false 0.
+  open_approvals: number;
+  failed_jobs: number;
+  dead_lettered_jobs: number;
+  // A coarse status the owner reads at a glance. Fail-closed: any unknown
+  // (unreadable controls OR unreadable read model) is NEVER 'simulation_ready'.
+  status:
+    | 'controls_unreadable'
+    | 'read_model_unreadable'
+    | 'migration_absent'
+    | 'halted'
+    | 'unsafe_controls'
+    | 'simulation_ready';
+}
+
+export async function loadBridgeReadiness(client: RuntimeClient): Promise<BridgeReadiness> {
+  const ctl = await readSystemControlsChecked(client);
+  const c = ctl.controls;
+  const model = await loadOrchestrationReadModel(client);
+  const simulation_safe =
+    ctl.readOk && c.execution_enabled === false &&
+    c.remote_runner_enabled === false && c.hermes_mode === 'observe_only';
+  // Every readiness-critical bucket must have read cleanly ('ok' or 'empty').
+  // An 'error' state (RLS denial, network, query failure) must NOT be treated as
+  // healthy - loadOrchestrationReadModel sets applied=true for an errored goals
+  // read, so we check the bucket states explicitly (fail-closed).
+  const readable = (s: ReadState) => s === 'ok' || s === 'empty';
+  const read_model_readable = model.applied &&
+    readable(model.goals.state) && readable(model.approvals.state) &&
+    readable(model.jobs.state) && readable(model.failures.state) &&
+    readable(model.dead_letters.state);
+
+  let status: BridgeReadiness['status'];
+  if (!ctl.readOk) status = 'controls_unreadable';        // fail-closed: cannot verify safety
+  else if (!model.applied) status = 'migration_absent';   // schema not applied yet
+  else if (!read_model_readable) status = 'read_model_unreadable'; // fail-closed on a read error
+  else if (c.owner_stop || c.paused) status = 'halted';   // owner has stopped/paused
+  else if (!simulation_safe) status = 'unsafe_controls';  // controls left an unsafe posture
+  else status = 'simulation_ready';                        // applied + safe + readable + not halted
+
+  return {
+    migration_applied: model.applied,
+    controls_readable: ctl.readOk,
+    execution_enabled: c.execution_enabled === true,
+    remote_runner_enabled: c.remote_runner_enabled === true,
+    hermes_mode: String(c.hermes_mode ?? ''),
+    owner_stop: c.owner_stop === true,
+    paused: c.paused === true,
+    simulation_safe,
+    read_model_readable,
+    open_approvals: model.summary.open_approvals,
+    failed_jobs: model.summary.failed_jobs,
+    dead_lettered_jobs: model.summary.dead_lettered_jobs,
+    status,
   };
 }

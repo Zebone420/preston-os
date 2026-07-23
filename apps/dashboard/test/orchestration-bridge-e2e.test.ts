@@ -9,6 +9,7 @@ import {
 } from '../src/lib/ai-os/orchestration/store';
 import { decomposeGoal, type TaskSpec } from '../src/lib/ai-os/orchestration/decomposition';
 import { driveGoal, driverStep, loadGoalState } from '../src/lib/ai-os/orchestration/driver';
+import { loadBridgeReadiness, loadOrchestrationReadModel } from '../src/lib/ai-os/orchestration/read-model';
 
 // ===========================================================================
 // BRIDGE END-TO-END (item 14): one traceable owner command flows through the
@@ -170,6 +171,9 @@ describe('BRIDGE end-to-end (simulation control-plane trace)', () => {
     expect(finalB.status).toBe('completed'); // (7/8) verified hash + non-expired => cleared + ran
     expect(finalB.requires_approval).toBe(false); // (6) clearance persisted
     expect(finalB.assigned_role).toBe('claude'); // (10) controlled agent assignment
+    // (11) durable evidence returned, bound to the run that produced it
+    expect(Array.isArray(finalB.evidence_refs)).toBe(true);
+    expect((finalB.evidence_refs as string[]).some((r) => r.includes(':run:job-0000-b:') && r.endsWith(':completed'))).toBe(true);
     expect(db.rowsOf('master_goals')[0].status).toBe('completed');
     expect(db.rowsOf('goal_jobs').every((j) => j.executed === false)).toBe(true); // (17) still no real write
   });
@@ -266,6 +270,125 @@ describe('BRIDGE end-to-end (simulation control-plane trace)', () => {
       expect(r.halted).toBe(true); // (13/14) pause + owner_stop/global_kill halt
       expect(JSON.stringify(db.rowsOf('goal_jobs'))).toBe(before); // nothing advanced
     }
+  });
+
+  it('reports bridge readiness/health for remote inspection (item 13)', async () => {
+    // simulation-safe posture + migration applied (goal present) => ready
+    const db = makeFakeDb();
+    await insertMasterGoal(db.client, (intakeCommand({ envelope: submitEnvelope(), ownerAllowlist: new Set([OWNER]), seenNonces: new Set(), goalId: 'goal-00000001', now: NOW }) as { goal: import('../src/lib/ai-os/orchestration/model').MasterGoal }).goal);
+    const ready = await loadBridgeReadiness(db.client);
+    expect(ready.status).toBe('simulation_ready');
+    expect(ready.simulation_safe).toBe(true);
+    expect(ready.execution_enabled).toBe(false);
+    expect(ready.remote_runner_enabled).toBe(false);
+    expect(ready.hermes_mode).toBe('observe_only');
+
+    // owner_stop => halted
+    const stopped = makeFakeDb({ id: 'global', execution_enabled: false, owner_stop: true, paused: false, hermes_mode: 'observe_only', remote_runner_enabled: false, updated_at: NOW });
+    expect((await loadBridgeReadiness(stopped.client)).status).toBe('halted');
+
+    // an unsafe control posture is flagged (never silently "ready")
+    const unsafe = makeFakeDb({ id: 'global', execution_enabled: true, owner_stop: false, paused: false, hermes_mode: 'observe_only', remote_runner_enabled: false, updated_at: NOW });
+    expect((await loadBridgeReadiness(unsafe.client)).status).toBe('unsafe_controls');
+    expect((await loadBridgeReadiness(unsafe.client)).simulation_safe).toBe(false);
+
+    // paused => halted
+    const paused = makeFakeDb({ id: 'global', execution_enabled: false, owner_stop: false, paused: true, hermes_mode: 'observe_only', remote_runner_enabled: false, updated_at: NOW });
+    expect((await loadBridgeReadiness(paused.client)).status).toBe('halted');
+    // remote_runner enabled => unsafe
+    const rr = makeFakeDb({ id: 'global', execution_enabled: false, owner_stop: false, paused: false, hermes_mode: 'observe_only', remote_runner_enabled: true, updated_at: NOW });
+    expect((await loadBridgeReadiness(rr.client)).simulation_safe).toBe(false);
+    expect((await loadBridgeReadiness(rr.client)).status).toBe('unsafe_controls');
+    // Hermes not observe_only => unsafe
+    const hermes = makeFakeDb({ id: 'global', execution_enabled: false, owner_stop: false, paused: false, hermes_mode: 'active', remote_runner_enabled: false, updated_at: NOW });
+    expect((await loadBridgeReadiness(hermes.client)).status).toBe('unsafe_controls');
+
+    // unreadable controls fail closed (cannot verify safety)
+    const noControls = makeFakeDb();
+    noControls.rowsOf('system_controls').length = 0;
+    expect((await loadBridgeReadiness(noControls.client)).status).toBe('controls_unreadable');
+
+    // a generic read error on the orchestration read model fails closed - it
+    // must NEVER be reported as simulation_ready (error must not become 0/ok).
+    const errClient: RuntimeClient = {
+      from(table: string) {
+        return {
+          insert() { return { select() { return Promise.resolve({ data: [{ id: 'x' }], error: null }); } }; },
+          select() {
+            const chain = () => ({
+              eq() { return chain(); },
+              order() { return { limit() { return Promise.resolve({ data: null, error: table === 'system_controls' ? null : { message: 'permission denied' } }); } }; },
+              limit() { return Promise.resolve({ data: table === 'system_controls' ? [{ id: 'global', execution_enabled: false, owner_stop: false, paused: false, hermes_mode: 'observe_only', remote_runner_enabled: false }] : null, error: table === 'system_controls' ? null : { message: 'permission denied' } }); },
+            });
+            return chain();
+          },
+          update() { const chain = () => ({ eq() { return chain(); }, lte() { return chain(); }, gt() { return chain(); }, select() { return Promise.resolve({ data: [], error: null }); } }); return chain(); },
+        };
+      },
+    };
+    const errReady = await loadBridgeReadiness(errClient);
+    expect(errReady.status).toBe('read_model_unreadable');
+    expect(errReady.read_model_readable).toBe(false);
+
+    // MIXED result: one goal's jobs read succeeds, another fails. The partial
+    // failure must NOT be masked as healthy (it would undercount failures).
+    const controlsRow = [{ id: 'global', execution_enabled: false, owner_stop: false, paused: false, hermes_mode: 'observe_only', remote_runner_enabled: false }];
+    const mixedClient: RuntimeClient = {
+      from(table: string) {
+        return {
+          insert() { return { select() { return Promise.resolve({ data: [{ id: 'x' }], error: null }); } }; },
+          select() {
+            let goalId = '';
+            const chain = () => ({
+              eq(_c: string, v: string) { goalId = v; return chain(); },
+              order() { return { limit() { return resolve(); } }; },
+              limit() { return resolve(); },
+            });
+            const resolve = () => {
+              if (table === 'system_controls') return Promise.resolve({ data: controlsRow, error: null });
+              if (table === 'master_goals') return Promise.resolve({ data: [{ id: 'goal-1', status: 'running' }, { id: 'goal-2', status: 'running' }], error: null });
+              if (table === 'orchestration_approvals') return Promise.resolve({ data: [], error: null });
+              if (table === 'goal_jobs') {
+                return goalId === 'goal-2'
+                  ? Promise.resolve({ data: null, error: { message: 'permission denied' } }) // one goal's jobs unreadable
+                  : Promise.resolve({ data: [{ id: 'j1', goal_id: 'goal-1', status: 'completed' }], error: null });
+              }
+              return Promise.resolve({ data: [], error: null });
+            };
+            return chain();
+          },
+          update() { const chain = () => ({ eq() { return chain(); }, lte() { return chain(); }, gt() { return chain(); }, select() { return Promise.resolve({ data: [], error: null }); } }); return chain(); },
+        };
+      },
+    };
+    const mixed = await loadBridgeReadiness(mixedClient);
+    expect(mixed.status).toBe('read_model_unreadable'); // partial failure is NOT masked
+    expect(mixed.read_model_readable).toBe(false);
+    // decisive: the read model itself marks the jobs bucket 'error' on ANY
+    // per-goal failure (even though goal-1's rows loaded and are retained).
+    const rm = await loadOrchestrationReadModel(mixedClient);
+    expect(rm.jobs.state).toBe('error');
+    expect(rm.jobs.rows.length).toBeGreaterThan(0); // partial rows retained for display
+  });
+
+  it('evidence accumulates across attempts (does not replace prior refs) (#15)', async () => {
+    const db = makeFakeDb();
+    const intake = intakeCommand({ envelope: submitEnvelope(), ownerAllowlist: new Set([OWNER]), seenNonces: new Set(), goalId: 'goal-00000001', now: NOW });
+    if (!(intake.ok && intake.kind === 'goal')) throw new Error('intake');
+    await insertMasterGoal(db.client, intake.goal);
+    // a ready code job that already carries evidence from a PRIOR attempt
+    db.rowsOf('goal_jobs').push({
+      id: 'job-0000-a', goal_id: 'goal-00000001', kind: 'code', title: 'impl', objective: 'add helper',
+      risk_class: 'GREEN', assigned_role: 'claude', status: 'ready', attempts: 1, requires_approval: false,
+      approval_id: null, runtime_job_id: null, correlation_id: 'corr-00000001',
+      evidence_refs: ['sim:prior-attempt-evidence'], failure_reason: null, created_at: NOW, updated_at: NOW,
+    });
+    const lockCtx = { base_commit: 'abc1234', allowed_paths: ['apps/dashboard/src/'], token: (j: string) => `tok-${j}` };
+    await driverStep(db.client, 'goal-00000001', ms(NOW) + 1000, () => [], lockCtx);
+    const refs = db.rowsOf('goal_jobs')[0].evidence_refs as string[];
+    expect(refs).toContain('sim:prior-attempt-evidence'); // prior evidence preserved
+    expect(refs.some((r) => r.includes(':run:job-0000-a:') && r.endsWith(':completed'))).toBe(true); // new ref appended
+    expect(refs.length).toBe(2);
   });
 
   it('a fresh driver resumes from persisted store state (reload/resume) (15)', async () => {
