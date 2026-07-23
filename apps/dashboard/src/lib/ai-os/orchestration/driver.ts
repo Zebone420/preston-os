@@ -19,6 +19,7 @@ import { step, type EngineAction } from './completion-engine';
 import { makeSimulationAdapter } from './adapters';
 import {
   ORCH_TABLES,
+  clearApprovalGate,
   listGoals,
   listJobsForGoal,
   readApprovalRecord,
@@ -27,7 +28,7 @@ import {
   transitionJobOwned,
   verifyAuthoritativeApproval,
 } from './store';
-import { actionHash } from './approvals';
+import { canonicalActionHash, jobApprovalEnvelope } from './crypto-binding';
 import {
   acquireWorktreeLock,
   releaseWorktreeLock,
@@ -149,6 +150,11 @@ export async function driverStep(
   // NEVER derived from time or the worktree token (those can repeat).
   newRunId: () => string = () => randomUUID(),
 ): Promise<DriverStepResult> {
+  // Fail closed on a bad execution clock at the boundary (audit MINOR): a
+  // non-finite nowMs would otherwise throw at new Date(nowMs).toISOString().
+  if (!Number.isFinite(nowMs)) {
+    return { halted: true, reason: 'execution_clock_invalid', actions: [], persisted: 0, lockRequired: false };
+  }
   const controls = await readSystemControlsChecked(client);
   // The durable worker advances SIMULATION jobs even while execution is
   // disabled (that is the drill), but owner_stop / unreadable controls halt.
@@ -168,13 +174,40 @@ export async function driverStep(
   for (const job of state.jobs) {
     if (job.status !== 'awaiting_approval' || !job.requires_approval || !job.approval_id) continue;
     const record = await readApprovalRecord(client, job.approval_id);
-    const expectedHash = actionHash(`${job.kind}: ${job.objective || job.title}`, `goal_job:${job.id}`, 'staging');
+    // Canonical SHA-256 authorization binding (audit #8): rebuild the SAME
+    // action envelope the owner approved (from the job being executed + the
+    // record's validity window) and compare its canonical digest. The
+    // non-authoritative FNV hash is NOT used in this durable auth path. Expiry
+    // is checked against the CURRENT execution clock (audit #7, nowMs).
+    const expectedHash = record
+      ? canonicalActionHash(jobApprovalEnvelope({
+          approval_id: job.approval_id,
+          job_kind: job.kind,
+          job_id: job.id,
+          job_objective: job.objective,
+          job_title: job.title,
+          risk_class: job.risk_class,
+          assigned_role: job.assigned_role ?? '',
+          owner_identity: state.goal.requested_by,
+          created_at: String(record.created_at ?? ''),
+          expires_at: String(record.expires_at ?? ''),
+        }))
+      : '';
     const check = verifyAuthoritativeApproval(record, job, {
       owner_identity: state.goal.requested_by,
       action_hash: expectedHash,
-    });
+    }, nowMs);
     if (check.ok) {
-      const t = await transitionJob(client, job.id, 'awaiting_approval', 'ready', {}, nowIso);
+      // Atomic, TOCTOU-safe clearance (audit #6/MAJOR): the CAS clears the gate
+      // ONLY if EVERY bound action field still matches what was just verified,
+      // and persists requires_approval=false together with the status change -
+      // so a concurrent action-swap between verify and clear cannot inherit the
+      // approval, and a restart never sees a ready-but-still-gated row.
+      const t = await clearApprovalGate(client, {
+        id: job.id, goal_id: job.goal_id, approval_id: job.approval_id,
+        kind: job.kind, objective: job.objective, title: job.title,
+        risk_class: job.risk_class, assigned_role: job.assigned_role ?? null,
+      }, nowIso);
       if (t.ok) { job.requires_approval = false; job.status = 'ready'; }
     }
     // not authoritatively approved => stays awaiting_approval (fail-closed)

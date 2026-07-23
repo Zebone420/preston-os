@@ -12,11 +12,13 @@ import {
 } from '../src/lib/ai-os/orchestration/worktree-lock-store';
 import {
   insertGoalJob,
+  insertJobApproval,
   insertMasterGoal,
   transitionJob,
   transitionJobOwned,
 } from '../src/lib/ai-os/orchestration/store';
 import { decomposeGoal, type TaskSpec } from '../src/lib/ai-os/orchestration/decomposition';
+import { canonicalActionHash, jobApprovalEnvelope } from '../src/lib/ai-os/orchestration/crypto-binding';
 import { DEFAULT_BUDGET, type MasterGoal } from '../src/lib/ai-os/orchestration/model';
 
 const NOW = '2026-07-22T12:00:00.000Z';
@@ -262,6 +264,115 @@ describe('driver - recovery, iteration, terminal reflection (audit #3/#4/#12/#14
     });
     await driverStep(db.client, 'goal-00000001', Date.parse(NOW) + 1000, depends, editLockCtx);
     expect(db.rowsOf('goal_jobs').find((j) => j.id === 'job-0000-a')!.status).not.toBe('completed');
+  });
+});
+
+describe('driver - canonical SHA-256 approval binding + execution expiry (#7/#8)', () => {
+  function seedGatedJob(db: ReturnType<typeof makeFakeDb>, hash: string, expiresAt: string) {
+    // a RED migration job parked awaiting owner approval
+    db.rowsOf('goal_jobs').push({
+      id: 'job-0000-g', goal_id: 'goal-00000001', kind: 'migration', title: 'apply',
+      objective: 'apply 0011', risk_class: 'RED', assigned_role: 'claude',
+      status: 'awaiting_approval', attempts: 0, requires_approval: true,
+      approval_id: 'apr-00000009', runtime_job_id: null, correlation_id: 'corr-0001',
+      evidence_refs: [], failure_reason: null, created_at: NOW, updated_at: NOW,
+    });
+    db.rowsOf('orchestration_approvals').push({
+      approval_id: 'apr-00000009', goal_id: 'goal-00000001', job_id: 'job-0000-g',
+      status: 'approved', owner_identity: 'owner@preston.nyc', action_hash: hash,
+      environment: 'staging', nonce: 'n9', decided_at: NOW, created_at: NOW, expires_at: expiresAt,
+    });
+  }
+  const expiresAt = '2026-07-22T12:30:00.000Z';
+  const goodHash = canonicalActionHash(jobApprovalEnvelope({
+    approval_id: 'apr-00000009', job_kind: 'migration', job_id: 'job-0000-g',
+    job_objective: 'apply 0011', job_title: 'apply', risk_class: 'RED',
+    assigned_role: 'claude', owner_identity: 'owner@preston.nyc',
+    created_at: NOW, expires_at: expiresAt,
+  }));
+
+  it('clears a gated job when a CANONICAL-hash approval binds the exact action (#8)', async () => {
+    const db = makeFakeDb();
+    await insertMasterGoal(db.client, goal());
+    seedGatedJob(db, goodHash, expiresAt);
+    // execute BEFORE expiry
+    await driverStep(db.client, 'goal-00000001', Date.parse('2026-07-22T12:05:00.000Z'), () => []);
+    const j = db.rowsOf('goal_jobs').find((x) => x.id === 'job-0000-g')!;
+    expect(j.status).toBe('ready');
+    expect(j.requires_approval).toBe(false);
+  });
+
+  it('does NOT clear a gated job when the hash does not bind the action (#8)', async () => {
+    const db = makeFakeDb();
+    await insertMasterGoal(db.client, goal());
+    seedGatedJob(db, 'not-the-canonical-hash', expiresAt);
+    await driverStep(db.client, 'goal-00000001', Date.parse('2026-07-22T12:05:00.000Z'), () => []);
+    const j = db.rowsOf('goal_jobs').find((x) => x.id === 'job-0000-g')!;
+    expect(j.status).toBe('awaiting_approval');
+    expect(j.requires_approval).toBe(true);
+  });
+
+  // Every action-defining field must be bound (BLOCKER): approve action A, then
+  // mutate one field so the executed action differs - the approval must NOT clear.
+  for (const mut of [
+    { field: 'title', value: 'sneaky-title' },      // title bound even when objective set
+    { field: 'objective', value: 'apply 0099' },
+    { field: 'kind', value: 'code' },
+    { field: 'risk_class', value: 'GREEN' },
+    { field: 'assigned_role', value: 'codex' },      // executing role bound
+  ] as const) {
+    it(`does NOT clear when "${mut.field}" was changed after approval (BLOCKER)`, async () => {
+      const db = makeFakeDb();
+      await insertMasterGoal(db.client, goal());
+      seedGatedJob(db, goodHash, expiresAt); // hash bound to the ORIGINAL action
+      // owner-facing action swapped after the approval was issued
+      db.rowsOf('goal_jobs').find((x) => x.id === 'job-0000-g')![mut.field] = mut.value;
+      await driverStep(db.client, 'goal-00000001', Date.parse('2026-07-22T12:05:00.000Z'), () => []);
+      const j = db.rowsOf('goal_jobs').find((x) => x.id === 'job-0000-g')!;
+      expect(j.status).toBe('awaiting_approval'); // swapped action cannot inherit the approval
+    });
+  }
+
+  it('end-to-end: insertJobApproval derives the hash so the driver clears it (BLOCKER)', async () => {
+    const db = makeFakeDb();
+    await insertMasterGoal(db.client, goal());
+    // gated job (no pre-seeded approval)
+    db.rowsOf('goal_jobs').push({
+      id: 'job-0000-g', goal_id: 'goal-00000001', kind: 'migration', title: 'apply',
+      objective: 'apply 0011', risk_class: 'RED', assigned_role: 'claude',
+      status: 'awaiting_approval', attempts: 0, requires_approval: true,
+      approval_id: 'apr-00000009', runtime_job_id: null, correlation_id: 'corr-0001',
+      evidence_refs: [], failure_reason: null, created_at: NOW, updated_at: NOW,
+    });
+    // creation derives the hash INTERNALLY from the job - no caller-supplied hash
+    const ins = await insertJobApproval(db.client, {
+      approval_id: 'apr-00000009', goal_id: 'goal-00000001',
+      job: { id: 'job-0000-g', kind: 'migration', objective: 'apply 0011', title: 'apply', risk_class: 'RED', assigned_role: 'claude' },
+      owner_identity: 'owner@preston.nyc', created_at: NOW, expires_at: expiresAt,
+    });
+    expect(ins.ok).toBe(true);
+    // owner decides it approved
+    Object.assign(db.rowsOf('orchestration_approvals')[0], { status: 'approved', decided_at: NOW, nonce: 'n9' });
+    await driverStep(db.client, 'goal-00000001', Date.parse('2026-07-22T12:05:00.000Z'), () => []);
+    expect(db.rowsOf('goal_jobs').find((x) => x.id === 'job-0000-g')!.status).toBe('ready');
+  });
+
+  it('does NOT clear a gated job whose approval expired by execution time (#7)', async () => {
+    const db = makeFakeDb();
+    await insertMasterGoal(db.client, goal());
+    seedGatedJob(db, goodHash, expiresAt);
+    // execute AFTER expiry (12:45 > 12:30): correct hash, but expired now
+    await driverStep(db.client, 'goal-00000001', Date.parse('2026-07-22T12:45:00.000Z'), () => []);
+    const j = db.rowsOf('goal_jobs').find((x) => x.id === 'job-0000-g')!;
+    expect(j.status).toBe('awaiting_approval');
+  });
+
+  it('halts fail-closed on a non-finite execution clock', async () => {
+    const db = makeFakeDb();
+    await insertMasterGoal(db.client, goal());
+    const r = await driverStep(db.client, 'goal-00000001', Number.NaN, () => []);
+    expect(r.halted).toBe(true);
+    expect(r.reason).toBe('execution_clock_invalid');
   });
 });
 

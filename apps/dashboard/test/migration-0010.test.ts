@@ -96,6 +96,18 @@ describe('migration 0010 - orchestration', () => {
     expect(sql).not.toMatch(/create policy orch_approvals_owner_upd/);
   });
 
+  it('approvals can only be INSERTed pending + undecided (audit BLOCKER)', () => {
+    // A directly-inserted approval must be born pending/undecided so a caller
+    // cannot INSERT a pre-approved row that bypasses decide_orchestration_approval.
+    const m = sql.match(/create policy orch_approvals_owner_ins[\s\S]*?\);/);
+    expect(m).not.toBeNull();
+    const pol = m![0];
+    expect(pol).toMatch(/for insert to authenticated/);
+    // conditions must be AND-joined (an OR rewrite would let a forged terminal
+    // row slip through), so assert the exact conjunction.
+    expect(pol).toMatch(/public\.is_owner\(\)\s+and status = 'pending'\s+and nonce is null\s+and decided_at is null/);
+  });
+
   it('uses a nullable decision nonce with a PARTIAL unique index', () => {
     // nonce is NULL while pending (a plain NOT NULL would block pending
     // inserts); uniqueness is enforced only on real decision nonces via a

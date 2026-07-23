@@ -15,6 +15,7 @@ import {
   canTransitionJob,
 } from './transitions';
 import type { ApprovalRequest } from './approvals';
+import { canonicalActionHash, jobApprovalEnvelope } from './crypto-binding';
 
 export const ORCH_TABLES = {
   goals: 'master_goals',
@@ -133,7 +134,7 @@ async function casStatus(
   patch: Record<string, unknown>,
   guard: (from: string, to: string) => boolean,
   nowIso: string,
-  ownerEq?: { col: string; val: string },
+  conds: Array<{ col: string; val: string }> = [],
 ): Promise<WriteOutcome> {
   const to = String(patch.status ?? '');
   if (!guard(fromStatus, to)) {
@@ -145,10 +146,10 @@ async function casStatus(
       .update({ ...patch, updated_at: nowIso })
       .eq('id', id)
       .eq('status', fromStatus);
-    // Optional ownership condition (audit BLOCKER): the CAS also matches an
-    // execution-ownership column (run_id) so only the run that owns the job may
-    // transition it - atomically, on the single job row.
-    if (ownerEq) q = q.eq(ownerEq.col, ownerEq.val);
+    // Extra CAS conditions (audit BLOCKER/TOCTOU): the update also matches
+    // ownership (run_id) or every action-defining field, so only the exact
+    // observed row transitions - atomically, on the single row.
+    for (const c of conds) q = q.eq(c.col, c.val);
     const res = await q.select('id');
     if (res.error) return { ok: false, error: res.error.message };
     if (!res.data || res.data.length === 0) {
@@ -185,22 +186,67 @@ export function transitionJobOwned(
 ): Promise<WriteOutcome> {
   return casStatus(
     client, ORCH_TABLES.jobs, id, from, { ...patch, status: to }, canTransitionJob, nowIso,
-    { col: 'run_id', val: runId },
+    [{ col: 'run_id', val: runId }],
+  );
+}
+
+// Atomically clear a gated job's approval (audit MAJOR/TOCTOU): transition
+// awaiting_approval -> ready AND set requires_approval=false, but ONLY if EVERY
+// action-defining field still matches what was verified/approved. If any bound
+// field (kind/objective/title/risk/role/approval_id/goal_id) was mutated
+// between verification and this write, the CAS matches zero rows and the gate
+// does NOT clear - so a swapped action can never inherit an old approval.
+//
+// Why the single-row job CAS is sufficient here: the OTHER inputs to
+// verification are already immutable-after-decision. The approval row cannot
+// change post-decision - migration 0010 REVOKEs UPDATE on
+// orchestration_approvals and routes the one-time pending->terminal decision
+// through decide_orchestration_approval, so status/nonce/hash/owner/expiry are
+// frozen once approved. The owner identity is bound INTO the action_hash, so a
+// later change to master_goals.requested_by cannot retroactively make this
+// frozen approval authorize a different owner. A belt-and-suspenders atomic
+// three-row RPC is a documented follow-up, not required for correctness here.
+export function clearApprovalGate(
+  client: RuntimeClient,
+  job: {
+    id: string; goal_id: string; approval_id: string; kind: string;
+    objective: string; title: string; risk_class: string; assigned_role: string | null;
+  },
+  nowIso: string,
+): Promise<WriteOutcome> {
+  return casStatus(
+    client, ORCH_TABLES.jobs, job.id, 'awaiting_approval',
+    { status: 'ready', requires_approval: false }, canTransitionJob, nowIso,
+    [
+      { col: 'approval_id', val: job.approval_id },
+      { col: 'goal_id', val: job.goal_id },
+      { col: 'kind', val: job.kind },
+      { col: 'objective', val: job.objective },
+      { col: 'title', val: job.title },
+      { col: 'risk_class', val: job.risk_class },
+      { col: 'assigned_role', val: String(job.assigned_role ?? '') },
+      { col: 'requires_approval', val: 'true' },
+    ],
   );
 }
 
 // --- approvals -------------------------------------------------------------
 
+// Simulation/non-durable approval insert. Structurally CANNOT create a
+// job-scoped durable authorization (audit BLOCKER): goal_id and job_id are
+// forced to null, so a record from this path can never satisfy the durable
+// driver's job/goal scope check (record.job_id === job.id). It also carries a
+// caller-supplied action_hash, which is exactly why it must never be
+// job-scoped. The ONLY path that mints a driver-acceptable job approval is
+// insertJobApproval, which derives the hash internally. No production caller.
 export async function insertApproval(
   client: RuntimeClient,
   req: ApprovalRequest,
-  goalId: string | null,
-  jobId: string | null,
 ): Promise<WriteOutcome> {
   return insertRow(client, ORCH_TABLES.approvals, {
     approval_id: req.approval_id,
-    goal_id: goalId,
-    job_id: jobId,
+    goal_id: null,
+    job_id: null,
     action: req.action,
     environment: 'staging',
     affected_resource: req.affected_resource,
@@ -214,6 +260,69 @@ export async function insertApproval(
     nonce: null,
     status: 'pending',
     expires_at: req.expires_at,
+  });
+}
+
+// Create a gated job's approval, deriving the authorization hash INTERNALLY
+// from the authoritative job (audit BLOCKER). The caller can NEVER supply a
+// precomputed hash whose bound action differs from what is displayed and later
+// executed - create and verify use the SAME jobApprovalEnvelope, so they bind
+// identically end to end. created_at/expires_at are set explicitly (not DB
+// defaults) so the persisted validity window equals the hashed one.
+export async function insertJobApproval(
+  client: RuntimeClient,
+  args: {
+    approval_id: string;
+    goal_id: string;
+    job: {
+      id: string; kind: string; objective: string; title: string;
+      risk_class: string; assigned_role: string | null;
+    };
+    owner_identity: string;
+    created_at: string;
+    expires_at: string;
+    reason?: string;
+    expected_effect?: string;
+    rollback_plan?: string;
+  },
+): Promise<WriteOutcome> {
+  // A gated job MUST be assigned before an approval is minted (audit MAJOR):
+  // the executing role is part of the authorization, and it lets the atomic
+  // clearance CAS match a concrete (non-null) role - a null role could not be
+  // matched by an equality CAS against a nullable column in real Postgres.
+  if (!args.job.assigned_role || !String(args.job.assigned_role).trim()) {
+    return { ok: false, error: 'assigned_role_required' };
+  }
+  const envelope = jobApprovalEnvelope({
+    approval_id: args.approval_id,
+    job_kind: args.job.kind,
+    job_id: args.job.id,
+    job_objective: args.job.objective,
+    job_title: args.job.title,
+    risk_class: args.job.risk_class,
+    assigned_role: args.job.assigned_role ?? '',
+    owner_identity: args.owner_identity,
+    created_at: args.created_at,
+    expires_at: args.expires_at,
+  });
+  return insertRow(client, ORCH_TABLES.approvals, {
+    approval_id: args.approval_id,
+    goal_id: args.goal_id,
+    job_id: args.job.id,
+    action: envelope.action,
+    environment: 'staging',
+    affected_resource: envelope.affected_resource,
+    reason: args.reason ?? '',
+    risk_class: args.job.risk_class,
+    evidence_refs: [],
+    expected_effect: args.expected_effect ?? '',
+    rollback_plan: args.rollback_plan ?? '',
+    action_hash: canonicalActionHash(envelope),
+    owner_identity: args.owner_identity,
+    nonce: null,
+    status: 'pending',
+    created_at: args.created_at,
+    expires_at: args.expires_at,
   });
 }
 
@@ -266,6 +375,7 @@ export function verifyAuthoritativeApproval(
   record: Record<string, unknown> | undefined,
   job: { id: string; goal_id: string; approval_id: string | null },
   expected: { owner_identity: string; action_hash: string },
+  nowMs: number,
 ): AuthoritativeApprovalCheck {
   if (!record) return { ok: false, reason: 'no_approval_record' };
   if (!job.approval_id) return { ok: false, reason: 'job_has_no_approval_id' };
@@ -281,6 +391,13 @@ export function verifyAuthoritativeApproval(
   const expires = Date.parse(String(record.expires_at ?? ''));
   if (!Number.isFinite(decided)) return { ok: false, reason: 'decision_timestamp_invalid' };
   if (Number.isFinite(expires) && decided >= expires) return { ok: false, reason: 'decision_expired' };
+  // Execution-time expiry (audit #7): authorization is checked against the
+  // CURRENT execution clock, not just the decision time. An approval that was
+  // validly decided but has since expired must NOT authorize execution. Fail
+  // closed if the execution clock OR the expiry is unparseable (a NaN clock
+  // must never slip through NaN>=x === false).
+  if (!Number.isFinite(nowMs)) return { ok: false, reason: 'execution_clock_invalid' };
+  if (!Number.isFinite(expires) || nowMs >= expires) return { ok: false, reason: 'expired_at_execution' };
   return { ok: true, reason: 'authoritatively_approved' };
 }
 

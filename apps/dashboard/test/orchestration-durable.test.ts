@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { RuntimeClient } from '../src/lib/ai-os/store';
 import {
+  clearApprovalGate,
   decideApproval,
+  insertApproval,
   insertGoalJob,
+  insertJobApproval,
   insertMasterGoal,
   listJobsForGoal,
   persistDecomposedGoal,
@@ -10,6 +13,7 @@ import {
   transitionJob,
   verifyAuthoritativeApproval,
 } from '../src/lib/ai-os/orchestration/store';
+import { makeApprovalRequest } from '../src/lib/ai-os/orchestration/approvals';
 import {
   canTransitionGoal,
   canTransitionJob,
@@ -26,6 +30,7 @@ import { decomposeGoal, type TaskSpec } from '../src/lib/ai-os/orchestration/dec
 import { DEFAULT_BUDGET, type MasterGoal } from '../src/lib/ai-os/orchestration/model';
 
 const NOW = '2026-07-22T12:00:00.000Z';
+const NOW_MS = Date.parse(NOW); // execution clock for verifyAuthoritativeApproval (#7)
 
 // Fake RuntimeClient enforcing PK uniqueness + CAS eq() semantics.
 function makeFakeDb() {
@@ -197,20 +202,92 @@ describe('authoritative approval verification - fail closed (P7-CX-01 defect A)'
     environment: 'staging', nonce: 'n1', decided_at: NOW, expires_at: '2026-07-22T12:15:00.000Z',
   };
   it('accepts only a fully-bound, approved, non-expired record', () => {
-    expect(verifyAuthoritativeApproval(goodRecord, job, expected).ok).toBe(true);
+    expect(verifyAuthoritativeApproval(goodRecord, job, expected, NOW_MS).ok).toBe(true);
   });
   it('rejects forged/absent/mismatched records (no bare-id unlock)', () => {
-    expect(verifyAuthoritativeApproval(undefined, job, expected).reason).toBe('no_approval_record');
-    expect(verifyAuthoritativeApproval(goodRecord, { ...job, approval_id: null }, expected).reason).toBe('job_has_no_approval_id');
-    expect(verifyAuthoritativeApproval({ ...goodRecord, status: 'pending' }, job, expected).reason).toBe('not_approved');
-    expect(verifyAuthoritativeApproval({ ...goodRecord, owner_identity: 'intruder' }, job, expected).reason).toBe('owner_mismatch');
-    expect(verifyAuthoritativeApproval({ ...goodRecord, action_hash: 'deadbeef' }, job, expected).reason).toBe('action_hash_mismatch');
-    expect(verifyAuthoritativeApproval({ ...goodRecord, job_id: 'other' }, job, expected).reason).toBe('job_scope_mismatch');
-    expect(verifyAuthoritativeApproval({ ...goodRecord, goal_id: 'other' }, job, expected).reason).toBe('goal_scope_mismatch');
-    expect(verifyAuthoritativeApproval({ ...goodRecord, environment: 'production' }, job, expected).reason).toBe('environment_mismatch');
-    expect(verifyAuthoritativeApproval({ ...goodRecord, nonce: null }, job, expected).reason).toBe('nonce_missing');
-    expect(verifyAuthoritativeApproval({ ...goodRecord, decided_at: 'bad' }, job, expected).reason).toBe('decision_timestamp_invalid');
-    expect(verifyAuthoritativeApproval({ ...goodRecord, decided_at: '2026-07-22T12:20:00.000Z' }, job, expected).reason).toBe('decision_expired');
+    expect(verifyAuthoritativeApproval(undefined, job, expected, NOW_MS).reason).toBe('no_approval_record');
+    expect(verifyAuthoritativeApproval(goodRecord, { ...job, approval_id: null }, expected, NOW_MS).reason).toBe('job_has_no_approval_id');
+    expect(verifyAuthoritativeApproval({ ...goodRecord, status: 'pending' }, job, expected, NOW_MS).reason).toBe('not_approved');
+    expect(verifyAuthoritativeApproval({ ...goodRecord, owner_identity: 'intruder' }, job, expected, NOW_MS).reason).toBe('owner_mismatch');
+    expect(verifyAuthoritativeApproval({ ...goodRecord, action_hash: 'deadbeef' }, job, expected, NOW_MS).reason).toBe('action_hash_mismatch');
+    expect(verifyAuthoritativeApproval({ ...goodRecord, job_id: 'other' }, job, expected, NOW_MS).reason).toBe('job_scope_mismatch');
+    expect(verifyAuthoritativeApproval({ ...goodRecord, goal_id: 'other' }, job, expected, NOW_MS).reason).toBe('goal_scope_mismatch');
+    expect(verifyAuthoritativeApproval({ ...goodRecord, environment: 'production' }, job, expected, NOW_MS).reason).toBe('environment_mismatch');
+    expect(verifyAuthoritativeApproval({ ...goodRecord, nonce: null }, job, expected, NOW_MS).reason).toBe('nonce_missing');
+    expect(verifyAuthoritativeApproval({ ...goodRecord, decided_at: 'bad' }, job, expected, NOW_MS).reason).toBe('decision_timestamp_invalid');
+    expect(verifyAuthoritativeApproval({ ...goodRecord, decided_at: '2026-07-22T12:20:00.000Z' }, job, expected, NOW_MS).reason).toBe('decision_expired');
+  });
+  it('rejects a validly-decided approval expired by EXECUTION time (#7)', () => {
+    // decided 12:00, expires 12:15 - valid at decision, but the EXECUTION clock
+    // has moved past expiry. Authorization must be refused at execution time.
+    const pastExpiry = Date.parse('2026-07-22T12:20:00.000Z');
+    expect(verifyAuthoritativeApproval(goodRecord, job, expected, pastExpiry).reason).toBe('expired_at_execution');
+    // still authorized one second before expiry
+    const beforeExpiry = Date.parse('2026-07-22T12:14:59.000Z');
+    expect(verifyAuthoritativeApproval(goodRecord, job, expected, beforeExpiry).ok).toBe(true);
+    // EXACT boundary: nowMs === expires is expired (>=)
+    expect(verifyAuthoritativeApproval(goodRecord, job, expected, Date.parse('2026-07-22T12:15:00.000Z')).reason).toBe('expired_at_execution');
+    // an unparseable / absent expiry fails closed at execution time
+    expect(verifyAuthoritativeApproval({ ...goodRecord, expires_at: 'nope' }, job, expected, NOW_MS).ok).toBe(false);
+    expect(verifyAuthoritativeApproval({ ...goodRecord, expires_at: undefined }, job, expected, NOW_MS).ok).toBe(false);
+    // a NON-FINITE execution clock fails closed (NaN >= x must not slip through)
+    expect(verifyAuthoritativeApproval(goodRecord, job, expected, Number.NaN).reason).toBe('execution_clock_invalid');
+    expect(verifyAuthoritativeApproval(goodRecord, job, expected, Number.POSITIVE_INFINITY).reason).toBe('execution_clock_invalid');
+    expect(verifyAuthoritativeApproval(goodRecord, job, expected, Number.NEGATIVE_INFINITY).reason).toBe('execution_clock_invalid');
+  });
+});
+
+describe('durable approval creation boundary (audit BLOCKER/MAJOR)', () => {
+  it('insertApproval CANNOT create a job-scoped durable approval', async () => {
+    const db = makeFakeDb();
+    const made = makeApprovalRequest({
+      approval_id: 'apr-00000009', action: 'migration: apply 0011',
+      affected_resource: 'goal_job:job-0000-g', reason: 'r', risk_class: 'RED',
+      evidence_refs: [], expected_effect: 'e', rollback_plan: 'rb',
+      owner_identity: 'owner@preston.nyc', now: NOW,
+    });
+    if (!made.ok) throw new Error('make');
+    // even if a caller supplies a canonical-looking hash + job resource, the
+    // stored record is forced to null job/goal scope, so it can NEVER match a job.
+    const ins = await insertApproval(db.client, made.request);
+    expect(ins.ok).toBe(true);
+    const row = db.rowsOf('orchestration_approvals')[0];
+    expect(row.job_id).toBe(null);
+    expect(row.goal_id).toBe(null);
+  });
+
+  it('insertJobApproval requires an assigned role', async () => {
+    const db = makeFakeDb();
+    const ins = await insertJobApproval(db.client, {
+      approval_id: 'apr-00000009', goal_id: 'goal-00000001',
+      job: { id: 'job-0000-g', kind: 'migration', objective: 'o', title: 't', risk_class: 'RED', assigned_role: null },
+      owner_identity: 'owner@preston.nyc', created_at: NOW, expires_at: '2026-07-22T12:30:00.000Z',
+    });
+    expect(ins.ok).toBe(false);
+    expect(ins.error).toBe('assigned_role_required');
+  });
+
+  it('clearApprovalGate does not clear when a bound field changed (verify->clear TOCTOU)', async () => {
+    const db = makeFakeDb();
+    db.rowsOf('goal_jobs').push({
+      id: 'job-0000-g', goal_id: 'goal-00000001', status: 'awaiting_approval',
+      requires_approval: true, approval_id: 'apr-9', kind: 'migration',
+      objective: 'apply 0011', title: 'apply', risk_class: 'RED', assigned_role: 'claude',
+    });
+    const verified = {
+      id: 'job-0000-g', goal_id: 'goal-00000001', approval_id: 'apr-9', kind: 'migration',
+      objective: 'apply 0011', title: 'apply', risk_class: 'RED', assigned_role: 'claude',
+    };
+    // a concurrent writer swaps the title AFTER verification, BEFORE clearance
+    db.rowsOf('goal_jobs')[0].title = 'swapped-title';
+    const r = await clearApprovalGate(db.client, verified, NOW); // verified fields != row
+    expect(r.ok).toBe(false);
+    expect(db.rowsOf('goal_jobs')[0].status).toBe('awaiting_approval'); // not cleared
+    // clearing with the CURRENT (matching) fields works
+    const r2 = await clearApprovalGate(db.client, { ...verified, title: 'swapped-title' }, NOW);
+    expect(r2.ok).toBe(true);
+    expect(db.rowsOf('goal_jobs')[0].status).toBe('ready');
+    expect(db.rowsOf('goal_jobs')[0].requires_approval).toBe(false);
   });
 });
 

@@ -234,9 +234,20 @@ grant select, insert on job_dependencies to authenticated;
 revoke update, delete on job_dependencies from authenticated;
 
 alter table orchestration_approvals enable row level security;
+-- A directly-inserted approval may ONLY be born PENDING and undecided (audit
+-- BLOCKER): status='pending', nonce is null, decided_at is null. This forbids a
+-- caller from INSERTing a pre-approved row (status='approved' + nonce +
+-- decided_at + a publicly-reproducible canonical hash) that would satisfy the
+-- durable driver's verification and bypass decide_orchestration_approval. The
+-- ONLY way to reach 'approved' is that one-time locked RPC.
 drop policy if exists orch_approvals_owner_ins on orchestration_approvals;
 create policy orch_approvals_owner_ins on orchestration_approvals
-  for insert to authenticated with check (public.is_owner());
+  for insert to authenticated with check (
+    public.is_owner()
+    and status = 'pending'
+    and nonce is null
+    and decided_at is null
+  );
 drop policy if exists orch_approvals_owner_sel on orchestration_approvals;
 create policy orch_approvals_owner_sel on orchestration_approvals
   for select to authenticated using (public.is_owner());
