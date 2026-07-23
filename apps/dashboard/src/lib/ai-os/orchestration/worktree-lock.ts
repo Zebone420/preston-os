@@ -3,7 +3,7 @@
 // ownership token, base-commit pin, dirty-tree rejection, branch-collision
 // rejection, allowed-path enforcement, always-expiring lease, and stale-lock
 // recovery WITH FENCING (a stale successor's higher fence supersedes; a
-// revived stale holder cannot act). The DB (existing `locks` table, unique id)
+// revived stale holder cannot act). The DB (existing repository_worktrees row, unique id)
 // is the real compare-and-set; this module decides, it does not perform I/O,
 // git, or filesystem operations. The actual `git worktree add` runs only via
 // the owner-run worktree_prepare.sh at an activation gate.
@@ -47,6 +47,10 @@ export type AcquireResult =
   | { ok: false; reason: string };
 
 const DEFAULT_TTL = 30 * 60 * 1000;
+// A lease must be positive and bounded. A zero/negative TTL would mint an
+// already-expired lock (instant stale-takeover churn); an excessive TTL would
+// let a crashed holder block a worktree for far too long. 6h hard cap.
+const MAX_TTL = 6 * 60 * 60 * 1000;
 
 function validId(s: string): boolean {
   return typeof s === 'string' && RUNTIME_ID_RE.test(s);
@@ -85,6 +89,11 @@ export function decideAcquire(input: AcquireInput): AcquireResult {
 
   const nowMs = Date.parse(input.now);
   if (!Number.isFinite(nowMs)) return { ok: false, reason: 'now_invalid' };
+  // TTL validation (audit #18): reject zero/negative/non-finite/excessive.
+  if (input.ttlMs !== undefined &&
+      (!Number.isFinite(input.ttlMs) || input.ttlMs <= 0 || input.ttlMs > MAX_TTL)) {
+    return { ok: false, reason: 'ttl_invalid' };
+  }
 
   const existing = input.existing ?? null;
   let fence = 1;
