@@ -303,11 +303,17 @@ ANY deviation = HARD STOP (report, do not apply):
 ```sql
 -- 0002 sentinel (expect 1 row)
 select proname from pg_proc where proname = 'is_owner';
--- 0001/0004/0005/0006/0009 sentinels (expect ALL of: approvals, os_jobs,
--- repository_worktrees, system_controls, telegram_updates, clients)
+-- 0001/0004/0005/0006/0009 sentinels (expect ALL of: approvals,
+-- business_clients, os_jobs, repository_worktrees, system_controls,
+-- telegram_updates). The 0009 sentinel table is business_clients -
+-- migration 0009 never creates a bare "clients" table (an earlier
+-- revision of this packet named it wrongly; verified against
+-- 0009_phase6b_business_foundation.sql on 2026-07-23). Note: 0010
+-- itself references NO 0009 object - this sentinel only proves the
+-- prior 0009 gate was applied in order.
 select table_name from information_schema.tables where table_schema='public'
  and table_name in ('approvals','os_jobs','repository_worktrees',
- 'system_controls','telegram_updates','clients') order by table_name;
+ 'system_controls','telegram_updates','business_clients') order by table_name;
 -- 0005 id-alignment sentinel (expect data_type = 'text')
 select data_type from information_schema.columns
  where table_name='job_attempts' and column_name='id';
