@@ -48,6 +48,29 @@ any ambiguity about what the export contains -> use Path B.
 
 ## PATH B - owner-run pg_dump (RECOMMENDED)
 
+### 2026-07-23 ADDENDUM (owner-authorized tooling install + hardening)
+
+- PostgreSQL client tools 17.10 are INSTALLED on ZPC26 at
+  `C:\Program Files\PostgreSQL\17\bin` (pg_dump/pg_restore/psql
+  17.10; EDB installer, Authenticode-verified, commandlinetools
+  component ONLY - no local server, no service, no data directory).
+  The bin directory was appended to the USER Path; a freshly opened
+  PowerShell window finds pg_dump directly.
+- CREDENTIAL HARDENING (Codex read-only audit, HIGH finding
+  reconciled): do NOT stage the password in $env:PGPASSWORD - a
+  plaintext environment variable is readable from the process
+  environment and is inherited by child processes. Instead run
+  pg_dump/psql WITHOUT any password variable and type the password
+  into pg_dump's OWN interactive `Password:` prompt per invocation.
+  The secret then never enters a shell variable, the environment,
+  history, a file, or a transcript. B1's PGPASSWORD block is
+  superseded accordingly; PGHOST/PGUSER prompts remain fine
+  (non-secret). B6 cleanup then only needs PGHOST/PGUSER.
+- For the Phase 7 migration 0010 gate the dump landing zone is
+  `C:\dev\backups` (the original legacy-audit path in B2 remains
+  valid for the LA-10 register; either location is outside the
+  repo and *.dump is gitignored).
+
 ### B0. Prerequisites (check only; install nothing this session)
 
 1. PostgreSQL client tools on your machine: run
