@@ -264,6 +264,125 @@ describe('D2 local - atomic persistence, no partial rows', () => {
   });
 });
 
+describe('D2 local - form capacity matches parser capacity (D2-C2)', () => {
+  // D2-C2 regression pin: the deployed form rendered only rows 1-3 while
+  // readTasks parses up to 6, making a 4-task goal unsubmittable. The UI
+  // must keep rendering ALL six parser-supported rows via the single
+  // task${i}_* field template.
+  it('page renders six task rows, controlled kind select, exact field names', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const src = readFileSync(
+      join(__dirname, '../src/app/os/orchestration/page.tsx'),
+      'utf8',
+    );
+    // 1. exactly six rows from the single template
+    expect(src).toContain('[1, 2, 3, 4, 5, 6].map((i) => (');
+    expect(src).not.toContain('{[1, 2, 3].map');
+    // 2+7. kind is a SELECT with the unchanged submitted field name; the
+    //      other fields keep their input names
+    expect(src).toContain('<select name={`task${i}_kind`}');
+    for (const f of ['title', 'objective', 'depends']) {
+      expect(src).toContain('name={`task${i}_' + f + '`}');
+    }
+    // 4. arbitrary kind text is no longer enterable via the form
+    expect(src).not.toContain('<input name={`task${i}_kind`}');
+    // 3. every parser-accepted kind appears with its exact submitted value
+    //    (JOB_KINDS order), plus the blank placeholder option
+    expect(src).toContain('<option value="">Select work type</option>');
+    for (const k of ['documentation', 'code', 'test', 'migration',
+      'audit', 'repair', 'recommendation', 'unknown']) {
+      expect(src).toContain(`<option value="${k}">`);
+    }
+    // safety presentation: gated kind labeled, note present; server stays
+    // authoritative (no client-side policy logic exists in the page)
+    expect(src).toContain('Migration - owner approval required');
+    expect(src).toContain(
+      'Some work types may require owner approval before execution.',
+    );
+    // 6. per-row accessible name for each kind select
+    expect(src).toContain('aria-label={`Task ${i} kind`}');
+  });
+
+  it('six-task submission flows through the parser (rows 4-6 live)', async () => {
+    const db = makeFakeDb();
+    resolveOwnerMock.mockResolvedValue({
+      ownerEmail: OWNER,
+      client: db.client,
+      audit: {},
+    });
+    const fd = new FormData();
+    fd.set('title', 'Capacity check goal');
+    fd.set('objective', 'verify six-row intake in simulation');
+    for (let i = 1; i <= 6; i++) {
+      fd.set(`task${i}_kind`, 'audit');
+      fd.set(`task${i}_title`, `Row ${i} check`);
+      fd.set(`task${i}_objective`, `record row ${i} evidence in a local note`);
+    }
+    let msg = '';
+    try {
+      await submitMasterGoal(fd);
+      throw new Error('expected redirect');
+    } catch (e) {
+      msg = String((e as Error).message);
+    }
+    expect(decodeURIComponent(msg)).toContain('goal submitted: 6 jobs');
+    expect(db.rowsOf('goal_jobs')).toHaveLength(6);
+  });
+
+  it('the exact four-task D2 topology submits through the form action', async () => {
+    const db = makeFakeDb();
+    resolveOwnerMock.mockResolvedValue({
+      ownerEmail: OWNER,
+      client: db.client,
+      audit: {},
+    });
+
+    const fd = new FormData();
+    fd.set('title', 'Remote-live drill goal');
+    fd.set('objective',
+      'produce drill evidence for the remote-live bridge in simulation');
+    const rows: Array<[string, string, string, string]> = [
+      ['audit', 'Config audit',
+        'review dashboard configuration in an isolated worktree', ''],
+      ['migration', 'Schema change draft',
+        'draft a schema change plan for owner review', '1'],
+      ['documentation', 'Findings summary',
+        'summarize audit findings in a local report', '1'],
+      ['migration', 'Expiry fixture',
+        'draft a follow-up schema note for owner review', ''],
+    ];
+    rows.forEach(([kind, title, objective, depends], idx) => {
+      const i = idx + 1;
+      fd.set(`task${i}_kind`, kind);
+      fd.set(`task${i}_title`, title);
+      fd.set(`task${i}_objective`, objective);
+      if (depends) fd.set(`task${i}_depends`, depends);
+    });
+    // rows 5-6 left blank: readTasks must ignore them
+
+    let redirectMsg = '';
+    try {
+      await submitMasterGoal(fd);
+      throw new Error('expected redirect');
+    } catch (e) {
+      redirectMsg = String((e as Error).message);
+    }
+    expect(decodeURIComponent(redirectMsg)).toContain(
+      'goal submitted: 4 jobs',
+    );
+
+    expect(db.rowsOf('master_goals')).toHaveLength(1);
+    const jobs = db.rowsOf('goal_jobs');
+    expect(jobs).toHaveLength(4);
+    expect(db.rowsOf('job_dependencies')).toHaveLength(2);
+    const gated = jobs.filter((j) => j.requires_approval === true);
+    expect(gated).toHaveLength(2);
+    for (const j of gated) expect(j.kind).toBe('migration');
+    for (const j of jobs) expect(j.executed).toBe(false);
+  });
+});
+
 describe('D2 local - form layer mints fresh identity per submission', () => {
   it('two identical submissions create two goals with distinct ids and correlations', async () => {
     const db = makeFakeDb();
