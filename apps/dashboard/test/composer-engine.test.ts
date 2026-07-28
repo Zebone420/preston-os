@@ -204,6 +204,28 @@ describe('composer engine - interpretation', () => {
     expect(a.proposal_hash).not.toBe(b.proposal_hash);
   });
 
+  it('pins the CL-3 dependency-ordered drill request (owner packet binding)', () => {
+    // The staging lifecycle owner packet quotes this request verbatim and
+    // promises this exact interpretation; changing either side must fail here.
+    const p = okOf(composeRequest(
+      'Create a staging-only goal to verify the Phase 7 dashboard status page. ' +
+      'Create tasks to inspect the staging status data, then generate a ' +
+      'simulation-only readiness summary, then attach internal evidence. ' +
+      'Do not deploy, send messages, access production, change credentials, ' +
+      'perform financial actions, or make external writes.'));
+    expect(p.goals).toHaveLength(1);
+    const [t1, t2, t3] = p.goals[0].tasks;
+    expect(p.goals[0].tasks).toHaveLength(3);
+    expect([t1.kind, t2.kind, t3.kind]).toEqual(['audit', 'documentation', 'documentation']);
+    expect(t1.depends_on_local).toEqual([]);
+    expect(t2.depends_on_local).toEqual(['t1']); // "then" chains sequentially
+    expect(t3.depends_on_local).toEqual(['t2']);
+    expect(p.goals[0].tasks.every((t) => t.tier === 'GREEN' && !t.requires_approval)).toBe(true);
+    expect(p.approvals_required).toBe(0);
+    expect(p.constraints).toHaveLength(1);
+    expect(p.proposal_hash).toBe('5bd2ea4b');
+  });
+
   it('classifies a migration task as gated (policy engine authority)', () => {
     const p = okOf(composeRequest(
       'Create a goal to prepare a schema note. ' +
