@@ -27,6 +27,9 @@ tested" to "staging deployed, activated in simulation, remotely verified".
 Every live-boundary step is OWNER-ONLY. Claude performs none of them. All
 SQL runs in the Supabase STAGING SQL editor as the owner. Nothing in this
 packet enables execution, sending, production writes, or Hermes activity.
+[CORRECTION 2026-07-28: "as the owner" is wrong for the 4.7 RPC/policy
+drills - the SQL editor runs as role postgres with no JWT. See the
+section 13 addendum for the ratified corrected method.]
 
 EXECUTION ORDER (dependency-correct; the section numbers keep the standard
 packet layout, the ORDER is this):
@@ -832,3 +835,89 @@ CONFIRMATION pass verdict: all three findings RESOLVED; "PASS - no new
 blocker, critical, or major defect found; TypeScript validation passes."
 (The reviewer's own sandbox could not run vitest - read-only temp-dir
 EPERM; the suites pass in this environment, matrix in section 1.)
+
+## 13. ADDENDUM 2026-07-28 - MIGRATION 0010 GATE EXECUTED; 4.7
+## EXECUTION-CONTEXT DEFECT AND CORRECTED METHOD
+
+Sections 4.2-4.7 were executed by the owner on 2026-07-27/28 and
+PASSED in full. Authoritative evidence:
+reports/PHASE_7_MIGRATION_0010_GATE_EVIDENCE.md. Four items are
+recorded here so this packet stays correct for any future reader.
+
+### 13.1 Execution-context defect (drill-time finding, repaired)
+
+The header claim "All SQL runs in the Supabase STAGING SQL editor as
+the owner" was WRONG for the 4.7 behavioral drills. The SQL editor
+executes as role postgres with NO JWT:
+
+- auth.uid() is NULL, so public.is_owner() returns false and both
+  RPCs correctly refuse with owner_required (observed at B1a; the
+  fail-closed guard worked as designed).
+- Worse, role postgres BYPASSES row-level security, so B2a would have
+  skipped the INSERT policy under test and B3's forge attempt would
+  have falsely SUCCEEDED, presenting as a critical defect (or, if
+  unnoticed, as an untested guard). 4.7 as originally written was
+  both unrunnable and, where runnable, invalid.
+
+The three candidate execution paths were reconciled against the
+repository before any workaround was proposed: (1) an app/API route -
+does not exist; the app source contains zero .rpc() callers at any
+commit (the RPCs are DB-side enforcement primitives); (2) an
+authenticated client holding a live owner JWT - rejected as
+credential exposure with no packet authorization; (3) transaction-
+local owner-claims simulation - adopted, owner-ratified 2026-07-27.
+
+### 13.2 Ratified corrected method (STAGING behavioral drills only)
+
+Each behavioral check runs in its OWN explicit transaction:
+
+    begin;
+    select set_config('request.jwt.claims',
+      json_build_object(
+        'sub',  (select id::text from auth.users
+                  where email = 'info@preston.nyc'),
+        'role', 'authenticated',
+        'email','info@preston.nyc')::text,
+      true);
+    set local role authenticated;
+    -- the single drill statement goes here
+    commit;
+
+Properties: the claims are computed from the owner's REAL auth.users
+row (no manual uuid paste, no token minted, nothing secret); the
+set_config third argument true and SET LOCAL are both transaction-
+scoped, so the context cannot leak past commit/rollback; after the
+role drop, RLS and is_owner() evaluate GENUINELY - nothing is
+weakened, and the method is strictly more rigorous than the original
+packet assumption (which silently bypassed RLS). An expected drill
+ERROR aborts and fully rolls back its own transaction. Scope of the
+ratification: STAGING behavioral verification only.
+
+### 13.3 B2c error-tag reconciliation
+
+The 4.7 expectation "ERROR not_pending" is CORRECT and was observed.
+decide_orchestration_approval carries two sequential replay guards:
+status <> pending -> not_pending (fires first, and fired here), then
+nonce already set -> already_decided (defense-in-depth for the
+theoretical decided-but-still-pending state). A mid-drill citation of
+already_decided as the expected tag was wrong; behavior matches the
+applied code exactly.
+
+### 13.4 Superseded FINAL-packet items (confirmed at execution time)
+
+reports/PHASE_7_MIGRATION_0010_FINAL_OWNER_PACKET.md remains valid
+for its clean-first-run rules and stop conditions, but two items are
+stale and were superseded by this packet's section 4.6 (confirmed
+against the applied blob e513bb1):
+
+- "all 177 lines": the hardened file is 505 non-blank lines (523
+  clipboard lines) after the approval-enforcement commits (291d050,
+  ad41e00, 2478a4f).
+- FINAL packet 6g expected an UPDATE grant on (status, decided_at,
+  nonce): the hardened migration REVOKES direct UPDATE entirely and
+  routes decisions through decide_orchestration_approval (verified
+  as 4.6f = 0 rows).
+
+Also recorded: the backup evidence (session-pooler route, IPv6-only
+direct host root cause, size-heuristic note) lives in the gate
+evidence file section 1; the 4.3 backup step is satisfied.
