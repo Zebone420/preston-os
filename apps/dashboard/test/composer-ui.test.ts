@@ -238,17 +238,20 @@ describe('composer form + page - file contract pins', () => {
     expect(page).toContain('remote_runner:');
     expect(page).toContain('hermes_mode:');
     expect(page).toContain("force-dynamic");
-    // navigation: composer links into the existing surfaces
-    for (const href of ['/os', '/os/orchestration', '/approvals', '/audit']) {
-      expect(page).toContain(`href="${href}"`);
+    // navigation: the composer and the existing surfaces are cross-reachable
+    // via the CENTRAL nav config (components/nav/nav-config.ts), which the
+    // root layout renders on every authenticated page. Page-local nav blocks
+    // are gone BY DESIGN; main-nav.test.ts pins full-route reachability, no
+    // dead links, and the no-page-local-<nav> rule app-wide. Here we pin only
+    // that the composer route and its former link targets live in that one
+    // config, so this page stays cross-linked without local duplicates.
+    const navConfig = readFileSync(
+      join(__dirname, '../src/components/nav/nav-config.ts'), 'utf8');
+    for (const href of ['/os/composer', '/os', '/os/orchestration', '/approvals', '/audit']) {
+      expect(navConfig).toContain(`'${href}'`);
     }
+    expect(page).not.toContain('<nav');
     // responsive paddings (mobile-first)
     expect(page).toContain('p-4 text-slate-100 sm:p-8');
-    // the existing surfaces link BACK to the composer
-    const os = readFileSync(join(__dirname, '../src/app/os/page.tsx'), 'utf8');
-    expect(os).toContain('href="/os/composer"');
-    const orch = readFileSync(
-      join(__dirname, '../src/app/os/orchestration/page.tsx'), 'utf8');
-    expect(orch).toContain('href="/os/composer"');
   });
 });
