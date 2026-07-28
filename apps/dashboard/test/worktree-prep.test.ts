@@ -261,13 +261,17 @@ describe('bash scanner scripts - syntax and self-scan', () => {
     ).not.toThrow();
   });
 
+  // The two self-scans walk the whole tracked tree and take 5-12s on slow
+  // runners (CI, containers) - well past vitest's 5s default. The generous
+  // per-test timeout only removes that false-negative wall; the assertion
+  // (zero findings) is unchanged and the scan always runs to completion.
   it('secret_scan.sh finds zero findings against the tracked worktree root', () => {
     const out = execFileSync('bash', ['scripts/secret_scan.sh', REPO_ROOT], {
       cwd: REPO_ROOT,
       encoding: 'utf8',
     });
     expect(out).toMatch(/== secret scan: 0 finding\(s\) ==/);
-  });
+  }, 120_000);
 
   it('red_boundary_scan.sh finds zero findings against the tracked worktree root', () => {
     const out = execFileSync('bash', ['scripts/red_boundary_scan.sh', REPO_ROOT], {
@@ -275,5 +279,5 @@ describe('bash scanner scripts - syntax and self-scan', () => {
       encoding: 'utf8',
     });
     expect(out).toMatch(/== RED boundary scan: 0 finding\(s\) ==/);
-  });
+  }, 120_000);
 });
