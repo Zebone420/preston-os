@@ -22,6 +22,11 @@ const RUNTIME_FILES = [
   'src/os-runtime/dispatcher.ts',
   'src/os-runtime/bin.ts',
   'src/os-runtime/supabase-runtime.ts',
+  // Phase 7 composer boundary (interpret/confirm/persist): proposal-only
+  // modules; nothing here may ever grow a process-spawning surface.
+  'src/lib/ai-os/orchestration/composer.ts',
+  'src/lib/ai-os/orchestration/composer-persist.ts',
+  'src/app/os/composer/actions.ts',
 ];
 
 // Process-spawning surface: module names and call tokens. 'child' + '_process'
