@@ -42,6 +42,7 @@ export default async function OsControlCenter() {
         <nav className="flex items-center gap-3">
           <Link href="/" className="text-sm text-slate-300 underline">Dashboard</Link>
           <Link href="/os/orchestration" className="text-sm text-slate-300 underline">Orchestration</Link>
+          <Link href="/os/composer" className="text-sm text-slate-300 underline">Composer</Link>
           <Link href="/approvals" className="text-sm text-slate-300 underline">Approvals</Link>
         </nav>
       </header>
