@@ -371,7 +371,7 @@ describe('D2 local - form capacity matches parser capacity (D2-C2)', () => {
   });
 
   it('advisory validation flags self-references and missing rows', () => {
-    let rows = addRow(initialRows());
+    const rows = addRow(initialRows());
     rows[1] = { ...rows[1], depends: '2' }; // self
     expect(depIssues(rows)).toEqual(['task 2 cannot depend on itself']);
     rows[1] = { ...rows[1], depends: '5' }; // nonexistent
