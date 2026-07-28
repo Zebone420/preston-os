@@ -4,11 +4,13 @@ import { randomUUID } from 'node:crypto';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { logAudit } from '@/lib/audit';
+import { RUNTIME_ID_RE } from '@/lib/ai-os/commands';
 import { resolveOwner } from '@/lib/ai-os/owner-context';
 import { intakeCommand } from '@/lib/ai-os/orchestration/goal-intake';
 import { decomposeGoal, type TaskSpec } from '@/lib/ai-os/orchestration/decomposition';
 import { persistDecomposedGoal } from '@/lib/ai-os/orchestration/store';
 import type { GoalState } from '@/lib/ai-os/orchestration/model';
+import type { ComposerClient } from '@/lib/ai-os/orchestration/composer-persist';
 
 // Preston AI OS - Phase 7 goal submission. A Server Action is a public POST
 // entry point, so the owner is re-checked HERE. Authenticated intake ->
@@ -111,4 +113,64 @@ export async function submitMasterGoal(formData: FormData) {
   redirect('/os/orchestration?msg=' + encodeURIComponent(
     `goal submitted: ${d.jobs.length} jobs decomposed (simulation)`,
   ));
+}
+
+// Owner decision on a Phase-7 orchestration approval, THROUGH the one-time
+// owner-only RPC decide_orchestration_approval (migration 0010). This action
+// adds NO authority: the RPC internally re-enforces is_owner(), pending-only,
+// FOR UPDATE locking, real-clock expiry, and one-time nonce semantics, and
+// direct UPDATE on the table is revoked - the dashboard is a convenience
+// surface over the SAME single decision path used by the SQL drill method.
+// Recording a decision executes NOTHING; a gated job merely becomes eligible
+// for the (still simulation-only) driver.
+const DECIDE_ERROR_TAGS = [
+  'owner_required', 'outcome_invalid', 'nonce_required', 'approval_not_found',
+  'not_pending', 'already_decided', 'expired',
+] as const;
+
+export async function decideOrchestrationApproval(formData: FormData) {
+  const ctx = await resolveOwner();
+  if (!ctx) redirect('/os/orchestration?msg=denied');
+
+  const approvalId = str(formData, 'approval_id');
+  const outcomeRaw = str(formData, 'outcome');
+  const outcome =
+    outcomeRaw === 'approved' || outcomeRaw === 'rejected' ? outcomeRaw : null;
+  if (!outcome || !RUNTIME_ID_RE.test(approvalId)) {
+    redirect('/os/orchestration?msg=' + encodeURIComponent('approval decision rejected: invalid input'));
+  }
+
+  // Fresh one-time nonce per decision attempt; the DB's partial unique index
+  // on non-null nonces is the durable replay guard.
+  const nonce = `dash-${randomUUID()}`;
+  const client = ctx.client as ComposerClient;
+  let resultMsg: string;
+  let ok = false;
+  try {
+    const res = await client.rpc('decide_orchestration_approval', {
+      p_approval_id: approvalId,
+      p_outcome: outcome,
+      p_nonce: nonce,
+    });
+    if (res.error) {
+      const tag = DECIDE_ERROR_TAGS.find((t) => res.error!.message.includes(t));
+      resultMsg = 'approval decision refused: ' + (tag ?? 'decide_failed');
+    } else {
+      ok = true;
+      resultMsg = `approval ${outcome}: ${approvalId}`;
+    }
+  } catch {
+    resultMsg = 'approval decision refused: decide_failed';
+  }
+
+  await logAudit(
+    {
+      actor: 'orchestration', action: 'orchestration_approval_decision',
+      action_class: 'GREEN', environment: 'staging',
+      detail: { approval_id: approvalId, outcome, ok },
+    },
+    { supabase: ctx.audit },
+  );
+  revalidatePath('/os/orchestration');
+  redirect('/os/orchestration?msg=' + encodeURIComponent(resultMsg));
 }

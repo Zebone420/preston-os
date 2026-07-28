@@ -7,7 +7,7 @@ import {
 } from '@/lib/ai-os/orchestration/agent-contracts';
 import { COORDINATOR_LADDER } from '@/lib/ai-os/orchestration/coordinator';
 import { loadOrchestrationReadModel } from '@/lib/ai-os/orchestration/read-model';
-import { submitMasterGoal } from './actions';
+import { decideOrchestrationApproval, submitMasterGoal } from './actions';
 import { TaskRows } from './task-rows';
 
 // Preston AI OS - Phase 7 orchestration surface. Read-only, owner-gated.
@@ -226,10 +226,39 @@ export default async function OrchestrationPage({
         <section className="rounded-lg border border-slate-800 bg-slate-900 p-4">
           <h2 className="mb-2 font-medium">Open approvals + failures</h2>
           <div className="text-xs text-slate-400">Open approvals: {rm.summary.open_approvals}</div>
-          <ul className="mt-1 space-y-1 text-sm">
+          <ul className="mt-1 space-y-2 text-sm">
             {rm.approvals.rows.slice(0, 10).map((a) => (
-              <li key={s(a, 'approval_id')}>
-                [{s(a, 'risk_class')}] {s(a, 'action')} - {s(a, 'status')}
+              <li key={s(a, 'approval_id')} className="flex flex-wrap items-center gap-2">
+                <span>
+                  [{s(a, 'risk_class')}] {s(a, 'action')} - {s(a, 'status')}
+                </span>
+                {s(a, 'status') === 'pending' && (
+                  <span className="flex gap-1">
+                    {/* Decision goes through the one-time owner-only RPC
+                        (decide_orchestration_approval); recording a decision
+                        executes nothing. */}
+                    <form action={decideOrchestrationApproval}>
+                      <input type="hidden" name="approval_id" value={s(a, 'approval_id')} />
+                      <input type="hidden" name="outcome" value="approved" />
+                      <button
+                        aria-label={`Approve ${s(a, 'approval_id')}`}
+                        className="rounded bg-emerald-900 px-2 py-0.5 text-xs"
+                      >
+                        Approve
+                      </button>
+                    </form>
+                    <form action={decideOrchestrationApproval}>
+                      <input type="hidden" name="approval_id" value={s(a, 'approval_id')} />
+                      <input type="hidden" name="outcome" value="rejected" />
+                      <button
+                        aria-label={`Reject ${s(a, 'approval_id')}`}
+                        className="rounded bg-red-900 px-2 py-0.5 text-xs"
+                      >
+                        Reject
+                      </button>
+                    </form>
+                  </span>
+                )}
               </li>
             ))}
           </ul>
