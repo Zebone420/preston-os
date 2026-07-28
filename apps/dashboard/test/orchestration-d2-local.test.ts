@@ -35,6 +35,14 @@ vi.mock('next/navigation', () => ({
 
 import { submitMasterGoal } from '../src/app/os/orchestration/actions';
 import {
+  addRow,
+  depIssues,
+  initialRows,
+  KIND_OPTIONS,
+  MAX_TASK_ROWS,
+  removeRow,
+} from '../src/app/os/orchestration/task-rows';
+import {
   decomposeGoal,
   type TaskSpec,
 } from '../src/lib/ai-os/orchestration/decomposition';
@@ -269,39 +277,109 @@ describe('D2 local - form capacity matches parser capacity (D2-C2)', () => {
   // readTasks parses up to 6, making a 4-task goal unsubmittable. The UI
   // must keep rendering ALL six parser-supported rows via the single
   // task${i}_* field template.
-  it('page renders six task rows, controlled kind select, exact field names', async () => {
+  it('page delegates to TaskRows; component keeps the field + kind contract', async () => {
     const { readFileSync } = await import('node:fs');
     const { join } = await import('node:path');
-    const src = readFileSync(
+    const page = readFileSync(
       join(__dirname, '../src/app/os/orchestration/page.tsx'),
       'utf8',
     );
-    // 1. exactly six rows from the single template
-    expect(src).toContain('[1, 2, 3, 4, 5, 6].map((i) => (');
-    expect(src).not.toContain('{[1, 2, 3].map');
-    // 2+7. kind is a SELECT with the unchanged submitted field name; the
-    //      other fields keep their input names
-    expect(src).toContain('<select name={`task${i}_kind`}');
+    const comp = readFileSync(
+      join(__dirname, '../src/app/os/orchestration/task-rows.tsx'),
+      'utf8',
+    );
+    // page renders the dynamic component; no static row template remains
+    expect(page).toContain('<TaskRows />');
+    expect(page).not.toContain('task${i}_kind');
+    expect(page).not.toContain('{[1, 2, 3].map');
+    // component: sequential field names by VISIBLE position (contract)
+    expect(comp).toContain('name={`task${i + 1}_kind`}');
     for (const f of ['title', 'objective', 'depends']) {
-      expect(src).toContain('name={`task${i}_' + f + '`}');
+      expect(comp).toContain('name={`task${i + 1}_' + f + '`}');
     }
-    // 4. arbitrary kind text is no longer enterable via the form
-    expect(src).not.toContain('<input name={`task${i}_kind`}');
-    // 3. every parser-accepted kind appears with its exact submitted value
-    //    (JOB_KINDS order), plus the blank placeholder option
-    expect(src).toContain('<option value="">Select work type</option>');
-    for (const k of ['documentation', 'code', 'test', 'migration',
-      'audit', 'repair', 'recommendation', 'unknown']) {
-      expect(src).toContain(`<option value="${k}">`);
-    }
-    // safety presentation: gated kind labeled, note present; server stays
-    // authoritative (no client-side policy logic exists in the page)
-    expect(src).toContain('Migration - owner approval required');
-    expect(src).toContain(
+    // kind stays a controlled SELECT; arbitrary text not enterable
+    expect(comp).toContain('<select');
+    expect(comp).not.toContain('<input name={`task${i + 1}_kind`}');
+    // every parser-accepted kind with its exact submitted value + blank
+    const values = KIND_OPTIONS.map((o) => o.value);
+    expect(values).toEqual(['', 'documentation', 'code', 'test',
+      'migration', 'audit', 'repair', 'recommendation', 'unknown']);
+    expect(KIND_OPTIONS[0].label).toBe('Select work type');
+    expect(
+      KIND_OPTIONS.find((o) => o.value === 'migration')!.label,
+    ).toBe('Migration - owner approval required');
+    expect(comp).toContain(
       'Some work types may require owner approval before execution.',
     );
-    // 6. per-row accessible name for each kind select
-    expect(src).toContain('aria-label={`Task ${i} kind`}');
+    // accessibility: per-row names for every field + the row controls
+    expect(comp).toContain('aria-label={`Task ${i + 1} kind`}');
+    expect(comp).toContain('aria-label={`Task ${i + 1} title`}');
+    expect(comp).toContain('aria-label={`Task ${i + 1} objective`}');
+    expect(comp).toContain('aria-label={`Task ${i + 1} dependencies`}');
+    expect(comp).toContain('aria-label={`Remove task ${i + 1}`}');
+    expect(comp).toContain('aria-label="Add task"');
+    // cap enforced in the component render too (Add hidden at max)
+    expect(comp).toContain('rows.length < MAX_TASK_ROWS');
+  });
+
+  it('row state machine: start at one, add to six, never seven', () => {
+    let rows = initialRows();
+    expect(rows).toHaveLength(1);
+    for (let i = 2; i <= 6; i++) {
+      rows = addRow(rows);
+      expect(rows).toHaveLength(i);
+    }
+    expect(addRow(rows)).toHaveLength(6); // 7th refused
+    expect(MAX_TASK_ROWS).toBe(6);
+  });
+
+  it('row 1 is not removable; rows 2-6 are', () => {
+    let rows = initialRows();
+    rows = addRow(addRow(rows));
+    expect(removeRow(rows, 0).rows).toHaveLength(3); // refused, unchanged
+    expect(removeRow(rows, 0).rows).toBe(rows);
+    expect(removeRow(rows, 2).rows).toHaveLength(2);
+    expect(removeRow(rows, 1).rows).toHaveLength(2);
+  });
+
+  it('removal re-numbers rows and shifts dependency references down', () => {
+    // 4 rows; row3 depends on 1, row4 depends on 3 -> remove row 2:
+    // old row3 becomes row2 (deps "1" kept), old row4 becomes row3 and
+    // its "3" reference must follow the moved row down to "2".
+    let rows = initialRows();
+    rows = addRow(addRow(addRow(rows)));
+    rows = rows.map((r, i) => ({ ...r, title: `t${i + 1}` }));
+    rows[2] = { ...rows[2], depends: '1' };
+    rows[3] = { ...rows[3], depends: '3' };
+    const res = removeRow(rows, 1);
+    expect(res.rows).toHaveLength(3);
+    expect(res.rows.map((r) => r.title)).toEqual(['t1', 't3', 't4']);
+    expect(res.rows[1].depends).toBe('1');
+    expect(res.rows[2].depends).toBe('2');
+    expect(res.clearedFrom).toEqual([]);
+  });
+
+  it('removing a referenced row clears that dependency and reports it', () => {
+    let rows = initialRows();
+    rows = addRow(addRow(rows));
+    rows[2] = { ...rows[2], depends: '1,2' }; // row3 references row2
+    const res = removeRow(rows, 1); // remove row2
+    expect(res.rows).toHaveLength(2);
+    // the "2" reference is CLEARED, never re-pointed; "1" survives
+    expect(res.rows[1].depends).toBe('1');
+    expect(res.clearedFrom).toEqual([2]); // new row number that lost a dep
+  });
+
+  it('advisory validation flags self-references and missing rows', () => {
+    let rows = addRow(initialRows());
+    rows[1] = { ...rows[1], depends: '2' }; // self
+    expect(depIssues(rows)).toEqual(['task 2 cannot depend on itself']);
+    rows[1] = { ...rows[1], depends: '5' }; // nonexistent
+    expect(depIssues(rows)).toEqual([
+      'task 2 depends on row 5, which does not exist',
+    ]);
+    rows[1] = { ...rows[1], depends: '1' };
+    expect(depIssues(rows)).toEqual([]);
   });
 
   it('six-task submission flows through the parser (rows 4-6 live)', async () => {

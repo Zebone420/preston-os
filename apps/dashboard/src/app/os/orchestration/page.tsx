@@ -8,6 +8,7 @@ import {
 import { COORDINATOR_LADDER } from '@/lib/ai-os/orchestration/coordinator';
 import { loadOrchestrationReadModel } from '@/lib/ai-os/orchestration/read-model';
 import { submitMasterGoal } from './actions';
+import { TaskRows } from './task-rows';
 
 // Preston AI OS - Phase 7 orchestration surface. Read-only, owner-gated.
 // Shows the orchestration safety posture: agent capability contracts (default-
@@ -214,25 +215,7 @@ export default async function OrchestrationPage({
               <input name="title" placeholder="Goal title" className="w-full rounded bg-slate-800 p-1.5" />
               <input name="objective" placeholder="Objective (avoid gated verbs unless intended)" className="w-full rounded bg-slate-800 p-1.5" />
               <div className="text-xs text-slate-400">Tasks (kind|title|objective|depends by row #)</div>
-              <div className="text-xs text-slate-500">Some work types may require owner approval before execution.</div>
-              {[1, 2, 3, 4, 5, 6].map((i) => (
-                <div key={i} className="grid grid-cols-4 gap-1">
-                  <select name={`task${i}_kind`} aria-label={`Task ${i} kind`} defaultValue="" className="rounded bg-slate-800 p-1.5">
-                    <option value="">Select work type</option>
-                    <option value="documentation">Documentation</option>
-                    <option value="code">Code</option>
-                    <option value="test">Test</option>
-                    <option value="migration">Migration - owner approval required</option>
-                    <option value="audit">Audit</option>
-                    <option value="repair">Repair</option>
-                    <option value="recommendation">Recommendation</option>
-                    <option value="unknown">Unknown</option>
-                  </select>
-                  <input name={`task${i}_title`} placeholder="title" className="rounded bg-slate-800 p-1.5" />
-                  <input name={`task${i}_objective`} placeholder="objective" className="rounded bg-slate-800 p-1.5" />
-                  <input name={`task${i}_depends`} placeholder="deps e.g. 1" className="rounded bg-slate-800 p-1.5" />
-                </div>
-              ))}
+              <TaskRows />
               <button className="rounded bg-purple-900 px-3 py-1.5 text-sm">Submit goal (simulation)</button>
               <span className="ml-2 text-xs text-slate-500">decomposes + persists; runs only when the durable worker is deployed (owner gate)</span>
             </form>
