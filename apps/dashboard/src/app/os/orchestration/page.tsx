@@ -53,12 +53,6 @@ export default async function OrchestrationPage({
             SIMULATION-ONLY
           </span>
         </div>
-        <nav className="flex flex-wrap items-center gap-3 text-sm text-slate-300">
-          <Link href="/os" className="underline">Control Center</Link>
-          <Link href="/os/composer" className="underline">Composer</Link>
-          <Link href="/business" className="underline">Business</Link>
-          <Link href="/audit" className="underline">Audit</Link>
-        </nav>
       </header>
 
       {msg && (

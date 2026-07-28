@@ -1,4 +1,3 @@
-import Link from 'next/link';
 import { buildDailyBrief } from '@/lib/daily-brief';
 import { googleConfigStatus } from '@/lib/google';
 
@@ -21,20 +20,14 @@ export default async function BriefPage() {
     <main className="min-h-screen bg-slate-950 p-8 text-slate-100">
       <header className="mb-6 flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-2xl font-semibold">Daily Brief - Chief of Staff</h1>
-        <nav className="flex items-center gap-3">
-          <Link href="/" className="text-sm text-slate-300 underline">
-            Dashboard
-          </Link>
-          <Link href="/approvals" className="text-sm text-slate-300 underline">
-            Approval Center
-          </Link>
+        <div className="flex items-center gap-3">
           <span className="rounded bg-slate-800 px-2 py-1 text-xs text-slate-300">
             google: {googleStatus}
           </span>
           <span className="rounded bg-amber-900 px-2 py-1 text-xs">
             PHASE 3 - read-only, drafts only
           </span>
-        </nav>
+        </div>
       </header>
 
       <ul className="mb-4 space-y-1 rounded bg-slate-900 p-3 text-xs text-slate-400">

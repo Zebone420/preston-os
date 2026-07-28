@@ -297,22 +297,13 @@ export default async function ApprovalsPage({
     <main className="min-h-screen bg-slate-950 p-8 text-slate-100">
       <header className="mb-6 flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-2xl font-semibold">Approval Center</h1>
-        <nav className="flex items-center gap-3">
-          <Link href="/" className="text-sm text-slate-300 underline">
-            Dashboard
-          </Link>
-          <Link href="/business" className="text-sm text-slate-300 underline">
-            Business
-          </Link>
-          <Link href="/audit" className="text-sm text-slate-300 underline">
-            Audit View
-          </Link>
+        <div className="flex items-center gap-3">
           <span className="rounded bg-amber-900 px-2 py-1 text-xs">
             {supabase
               ? 'CONTROL PLANE - decisions only, no execution'
               : 'SETUP MODE - fail-closed, no execution'}
           </span>
-        </nav>
+        </div>
       </header>
 
       {banner && (

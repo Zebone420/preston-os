@@ -37,12 +37,6 @@ export default async function ComposerPage() {
             SIMULATION-ONLY
           </span>
         </div>
-        <nav className="flex flex-wrap items-center gap-3 text-sm text-slate-300">
-          <Link href="/os" className="underline">Control Center</Link>
-          <Link href="/os/orchestration" className="underline">Orchestration</Link>
-          <Link href="/approvals" className="underline">Approvals</Link>
-          <Link href="/audit" className="underline">Audit</Link>
-        </nav>
       </header>
 
       <section className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-slate-800 bg-slate-900 p-4 text-xs">

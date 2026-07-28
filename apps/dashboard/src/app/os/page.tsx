@@ -39,12 +39,6 @@ export default async function OsControlCenter() {
     <main className="min-h-screen bg-slate-950 p-8 text-slate-100">
       <header className="mb-6 flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-2xl font-semibold">Preston AI OS - Control Center</h1>
-        <nav className="flex items-center gap-3">
-          <Link href="/" className="text-sm text-slate-300 underline">Dashboard</Link>
-          <Link href="/os/orchestration" className="text-sm text-slate-300 underline">Orchestration</Link>
-          <Link href="/os/composer" className="text-sm text-slate-300 underline">Composer</Link>
-          <Link href="/approvals" className="text-sm text-slate-300 underline">Approvals</Link>
-        </nav>
       </header>
 
       <section className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-slate-800 bg-slate-900 p-4">

@@ -100,13 +100,22 @@ describe('after sign-out, protected /business routes redirect', () => {
 });
 
 describe('sign-out control - structural pins', () => {
-  it('the shared business shell renders a Sign out control', () => {
+  // The visible Sign out control moved from the business shell to the
+  // SHARED main navigation (rendered by the root layout on every
+  // authenticated page); the business shell intentionally renders none.
+  // Placement/uniqueness pins live in main-nav.test.ts.
+  it('the shared main navigation renders the Sign out control', () => {
+    const nav = readFileSync(
+      join(__dirname, '..', 'src/components/nav/nav-menu.tsx'),
+      'utf8',
+    );
+    expect(nav).toContain('Sign out');
+    expect(nav).toContain('action={signOutOwner}');
     const ui = readFileSync(
       join(__dirname, '..', 'src/components/business/ui.tsx'),
       'utf8',
     );
-    expect(ui).toContain('Sign out');
-    expect(ui).toContain('action={signOutOwner}');
+    expect(ui).not.toContain('signOutOwner');
   });
 
   it('the action ends the session then lands on /login', () => {

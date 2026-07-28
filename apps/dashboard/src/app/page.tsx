@@ -1,4 +1,3 @@
-import Link from 'next/link';
 import {
   getApprovalsCard,
   getLeadsCard,
@@ -53,22 +52,7 @@ export default async function Home() {
     <main className="min-h-screen bg-slate-950 p-8 text-slate-100">
       <header className="mb-6 flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-2xl font-semibold">Preston OS - Active Base</h1>
-        <nav className="flex items-center gap-3">
-          <Link href="/business" className="text-sm text-slate-300 underline">
-            Business
-          </Link>
-          <Link href="/audit" className="text-sm text-slate-300 underline">
-            Audit View
-          </Link>
-          <Link href="/approvals" className="text-sm text-slate-300 underline">
-            Approval Center
-          </Link>
-          <Link href="/brief" className="text-sm text-slate-300 underline">
-            Daily Brief
-          </Link>
-          <Link href="/remote" className="text-sm text-slate-300 underline">
-            Remote Control
-          </Link>
+        <div className="flex items-center gap-3">
           {setupMode() ? (
             <span className="rounded bg-amber-900 px-2 py-1 text-xs">
               SETUP MODE - Supabase env not configured
@@ -78,7 +62,7 @@ export default async function Home() {
               CONNECTED - staging
             </span>
           )}
-        </nav>
+        </div>
       </header>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {cards.map((c) => (

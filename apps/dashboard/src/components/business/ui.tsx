@@ -1,22 +1,12 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import { signOutOwner } from '@/app/business/actions';
 
 // Shared Business Command Center presentation pieces (server-safe,
 // no client JS). Follows the established dark-slate idiom. These
 // exist so the eight business surfaces stay visually consistent
-// without a design-system rewrite.
-
-export const BUSINESS_NAV = [
-  { href: '/business', label: 'Overview' },
-  { href: '/business/pipeline', label: 'Pipeline' },
-  { href: '/business/quotes', label: 'Quotes' },
-  { href: '/business/projects', label: 'Projects' },
-  { href: '/business/payments', label: 'Payments' },
-  { href: '/business/activity', label: 'Activity' },
-  { href: '/business/agents', label: 'Agents' },
-  { href: '/approvals', label: 'Approvals' },
-] as const;
+// without a design-system rewrite. Global navigation and sign-out
+// moved to the shared main navigation (components/nav) - this shell
+// intentionally renders NO nav and NO sign-out control.
 
 export function BusinessShell({
   title,
@@ -34,25 +24,6 @@ export function BusinessShell({
           <h1 className="text-2xl font-semibold">{title}</h1>
           <ModeBadge mode={mode} />
         </div>
-        <nav className="flex flex-wrap items-center gap-3">
-          {BUSINESS_NAV.map((n) => (
-            <Link
-              key={n.href}
-              href={n.href}
-              className="text-sm text-slate-300 underline"
-            >
-              {n.label}
-            </Link>
-          ))}
-          <Link href="/" className="text-sm text-slate-500 underline">
-            Home
-          </Link>
-          <form action={signOutOwner}>
-            <button className="text-sm text-slate-500 underline">
-              Sign out
-            </button>
-          </form>
-        </nav>
       </header>
       {children}
     </main>
