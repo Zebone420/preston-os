@@ -582,10 +582,21 @@ export async function completeSimulatedJob(
     .eq('id', jobId)
     .eq('status', 'leased')
     .eq('lease_token', token)
+    // Owner cancel is OBSERVED here, atomically (Phase 5J contract): a
+    // cancel may land while the job is leased (requestJobCancel flips only
+    // the flag, never status or lease), and the cycle reads os_jobs just
+    // once, so this CAS is the worker's last safe checkpoint. A cancelled
+    // job is not driven to the drill-terminal status that selection never
+    // re-picks; it stays leased until the existing expiry sweep requeues
+    // it, and selection then rejects it for cancellation. Fail closed.
+    .eq('cancel_requested', 'false')
     .select('id');
   if (res.error) return { ok: false, error: 'job completion failed: ' + res.error.message };
   if (!res.data || res.data.length === 0) {
-    return { ok: false, error: 'job not leased by this generation (fenced); nothing changed' };
+    return {
+      ok: false,
+      error: 'job not leased by this generation, or cancellation requested (fenced); nothing changed',
+    };
   }
   return { ok: true, id: jobId };
 }

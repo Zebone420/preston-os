@@ -148,9 +148,17 @@ export function decide(
 
 // Resolve the effective status, applying expiry. Fail-closed: an approval past
 // its window is treated as expired even if it was 'approved'.
+//
+// The clock is REQUIRED to prove an approval is still inside its window. An
+// absent or unparseable `now` cannot prove that, so it resolves to 'expired'
+// rather than passing the stored status through - the same posture the durable
+// Phase-7 path takes (execution_clock_invalid). `now` stays optional so
+// callers reading a terminal verdict need not supply one, but an omitted clock
+// can never widen what executes.
 export function resolveStatus(req: ApprovalRequest, now?: string): ApprovalStatus {
   if (req.status === 'rejected' || req.status === 'blocked') return req.status;
-  if (now && now >= req.expires_at) return 'expired';
+  if (!now || !Number.isFinite(Date.parse(now))) return 'expired';
+  if (now >= req.expires_at) return 'expired';
   return req.status;
 }
 

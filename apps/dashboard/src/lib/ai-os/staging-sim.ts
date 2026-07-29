@@ -46,7 +46,8 @@ export interface JobEvidence {
   jobId: string;
   outcome:
     | 'simulated'        // full chain: lease + attempt + checkpoint + completed
-    | 'requeued'         // simulation blocked -> attempt recorded, job requeued
+    | 'requeued'         // simulation blocked or evidence unwritten -> requeued
+    | 'completion_refused'// completion attempted, CAS refused (cancel/stale gen)
     | 'skipped_completed'// prior complete checkpoint -> idempotent completion
     | 'lease_unavailable'
     | 'lost_race'
@@ -181,19 +182,36 @@ async function runOneJob(
   // 5. Token-fenced completion CAS: simulated ok -> checkpointed (terminal for
   //    the staging drill; selection never re-picks it), blocked -> requeue with
   //    the attempt counted (selection rejects it once attempts are exhausted).
+  //    EVIDENCE IS PART OF THE COMPLETION CONTRACT: 'checkpointed' asserts a
+  //    checkpoint exists and is never re-selected, so a run whose checkpoint or
+  //    attempt write failed must NOT be marked terminal - it requeues (attempt
+  //    counted, bounded by max_attempts) so a later cycle can produce the
+  //    evidence this cycle exists to produce.
   const attempts = job.attempts + 1;
-  const fin = r.simulatedOk
+  const evidenceDurable = r.checkpointWritten && r.attemptWritten;
+  const mayComplete = r.simulatedOk && evidenceDurable;
+  const fin = mayComplete
     ? await completeSimulatedJob(client, job.id, token, attempts, now)
     : await requeueJob(client, job.id, token, attempts, now);
 
+  // The reported outcome must match what was actually PERSISTED. 'simulated'
+  // means the full chain landed, so it is claimed only when the terminal CAS
+  // succeeded; a refusal (owner cancel observed at the fence, or a stale
+  // generation) leaves the row untouched and is reported as such rather than
+  // as a simulation or as a requeue that never happened.
+  const outcome = mayComplete
+    ? (fin.ok ? 'simulated' as const : 'completion_refused' as const)
+    : 'requeued' as const;
   return {
     jobId: job.id,
-    outcome: r.simulatedOk ? 'simulated' : 'requeued',
+    outcome,
     leaseVia: acq.via,
     attemptWritten: r.attemptWritten,
     checkpointWritten: r.checkpointWritten,
-    completed: r.simulatedOk && fin.ok,
-    reason: fin.ok ? undefined : fin.error,
+    completed: mayComplete && fin.ok,
+    reason: fin.ok
+      ? (evidenceDurable ? undefined : 'evidence write failed; requeued for a later cycle')
+      : fin.error,
   };
 }
 

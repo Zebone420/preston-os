@@ -106,6 +106,41 @@ describe('Approval Center - fail-closed execution guard', () => {
     expect(d.reason).toContain('expired');
   });
 
+  // An execution clock is REQUIRED to prove an approval is still inside its
+  // window. Without one - or with an unparseable one - expiry cannot be
+  // evaluated, so the guard must block rather than let the stored status
+  // through (the durable Phase-7 path already fails closed the same way via
+  // execution_clock_invalid). The header comment claims fail-closed expiry;
+  // these pin it for the omitted/garbage-clock inputs the optional `now`
+  // parameter makes reachable.
+  it('omitted execution clock blocks execution (no fail-open expiry)', () => {
+    const req = makeRequest('draft_email', 'GREEN', { approve: true, ttlMinutes: 60 });
+    const d = evaluateExecution(req, { env: CLEAR });
+    expect(d.allowed).toBe(false);
+    expect(d.reason).toContain('expired');
+  });
+
+  it('unparseable execution clock blocks execution', () => {
+    const req = makeRequest('draft_email', 'GREEN', { approve: true, ttlMinutes: 60 });
+    const d = evaluateExecution(req, { env: CLEAR, now: 'not-a-timestamp' });
+    expect(d.allowed).toBe(false);
+    expect(d.reason).toContain('expired');
+  });
+
+  it('executeApproved with no clock produces no artifact', () => {
+    const req = makeRequest('draft_email', 'GREEN', { approve: true, ttlMinutes: 60 });
+    const out = executeApproved(req, { env: CLEAR });
+    expect(out.executed).toBe(false);
+    expect(out.result).toBeUndefined();
+  });
+
+  it('resolveStatus without a clock reports expired, never the stored status', () => {
+    const req = makeRequest('draft_email', 'GREEN', { approve: true, ttlMinutes: 60 });
+    expect(resolveStatus(req)).toBe('expired');
+    // A rejected/blocked verdict still wins - it is terminal regardless of time.
+    expect(resolveStatus(decide(req, { decision: 'rejected', now: NOW }))).toBe('rejected');
+  });
+
   it('RED action blocks execution even when approved', () => {
     const req = makeRequest('draft_email', 'RED', { approve: true });
     const d = evaluateExecution(req, { env: CLEAR, now: NOW });
