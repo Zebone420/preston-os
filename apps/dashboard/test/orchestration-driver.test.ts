@@ -461,3 +461,134 @@ describe('store-backed worktree lock - atomic, fenced, concurrent-safe', () => {
     expect(db.rowsOf('repository_worktrees')).toHaveLength(0);
   });
 });
+
+// --- owner stop honored MID-RUN (post-lock and post-adapter gates) ----------
+//
+// driverStep reads system_controls THREE times per run action: at the top of
+// the step (driver.ts gate 1), after acquiring the worktree lock (gate at
+// "audit #9", pre-claim), and after the adapter but BEFORE persisting the
+// result ("gate2"). Every pre-existing stop test flips controls BETWEEN
+// steps, so only gate 1 was ever exercised - coverage showed the gate bodies
+// (halt at post-lock; requeue + owner_stop_during_run /
+// controls_unreadable_during_run / :requeue_deferred at gate2) had zero
+// hits. These tests land the stop INSIDE the run window by flipping the
+// controls row after the Nth read, and pin the kill-switch contract: a
+// mid-run stop persists NO completion, appends NO evidence, and returns the
+// job to a re-runnable state owned by lease recovery when the requeue loses.
+
+function interceptControls(
+  db: ReturnType<typeof makeFakeDb>,
+  afterReads: number,
+  effect: () => void,
+) {
+  let reads = 0;
+  const orig = db.client.from.bind(db.client);
+  (db.client as { from: RuntimeClient['from'] }).from = (table: string) => {
+    if (table === 'system_controls') {
+      reads += 1;
+      if (reads > afterReads) effect();
+    }
+    return orig(table);
+  };
+}
+
+function jobRow(db: ReturnType<typeof makeFakeDb>, id: string) {
+  return db.rowsOf('goal_jobs').find((j) => j.id === id)!;
+}
+
+describe('owner stop honored MID-RUN (kill-switch inside a single step)', () => {
+  const stopRow = (db: ReturnType<typeof makeFakeDb>) =>
+    Object.assign(db.rowsOf('system_controls')[0], { owner_stop: true });
+
+  it('stop between lock acquisition and job claim: halts, nothing runs', async () => {
+    const db = makeFakeDb();
+    const depends = await seedGoal(db);
+    interceptControls(db, 1, () => stopRow(db)); // read 2 = post-lock gate
+    const r = await driverStep(db.client, 'goal-00000001', Date.parse(NOW) + 1000, depends, editLockCtx);
+    expect(r.halted).toBe(true);
+    expect(r.reason).toBe('owner_stop_or_paused');
+    // No job was claimed or completed; no attempt consumed; no evidence.
+    for (const j of db.rowsOf('goal_jobs')) {
+      expect(['in_progress', 'completed']).not.toContain(j.status);
+      expect(Number(j.attempts ?? 0)).toBe(0);
+      expect((j.evidence_refs as string[] | undefined) ?? []).toHaveLength(0);
+    }
+  });
+
+  it('stop after the adapter, before persist: NO completion, job requeued', async () => {
+    const db = makeFakeDb();
+    const depends = await seedGoal(db);
+    interceptControls(db, 2, () => stopRow(db)); // read 3 = gate2
+    const r = await driverStep(db.client, 'goal-00000001', Date.parse(NOW) + 1000, depends, editLockCtx);
+    expect(r.halted).toBe(true);
+    expect(r.reason).toBe('owner_stop_during_run');
+    const a = jobRow(db, 'job-0000-a');
+    // Result NOT persisted: the run's outcome is discarded, the job returns
+    // to ready with the lease cleared so it re-runs once the stop clears.
+    expect(a.status).toBe('ready');
+    expect(a.run_id).toBeNull();
+    expect(a.run_lease_expires_at).toBeNull();
+    expect(Number(a.attempts ?? 0)).toBe(0);
+    expect((a.evidence_refs as string[] | undefined) ?? []).toHaveLength(0);
+    expect(db.rowsOf('goal_jobs').some((j) => j.status === 'completed')).toBe(false);
+  });
+
+  it('unreadable control plane at the post-lock gate fails closed pre-claim', async () => {
+    const db = makeFakeDb();
+    const depends = await seedGoal(db);
+    interceptControls(db, 1, () => { db.rowsOf('system_controls').length = 0; });
+    const r = await driverStep(db.client, 'goal-00000001', Date.parse(NOW) + 1000, depends, editLockCtx);
+    expect(r.halted).toBe(true);
+    expect(r.reason).toBe('controls_unreadable');
+    for (const j of db.rowsOf('goal_jobs')) {
+      expect(['in_progress', 'completed']).not.toContain(j.status);
+      expect((j.evidence_refs as string[] | undefined) ?? []).toHaveLength(0);
+    }
+  });
+
+  it('pause is honored at gate2 exactly like owner_stop', async () => {
+    const db = makeFakeDb();
+    const depends = await seedGoal(db);
+    interceptControls(db, 2, () =>
+      Object.assign(db.rowsOf('system_controls')[0], { paused: true }));
+    const r = await driverStep(db.client, 'goal-00000001', Date.parse(NOW) + 1000, depends, editLockCtx);
+    expect(r.halted).toBe(true);
+    expect(r.reason).toBe('owner_stop_during_run');
+    expect(jobRow(db, 'job-0000-a').status).toBe('ready');
+  });
+
+  it('unreadable control plane mid-run fails closed, distinct reason', async () => {
+    const db = makeFakeDb();
+    const depends = await seedGoal(db);
+    // Emptying the singleton row makes readSystemControlsChecked readOk=false.
+    interceptControls(db, 2, () => { db.rowsOf('system_controls').length = 0; });
+    const r = await driverStep(db.client, 'goal-00000001', Date.parse(NOW) + 1000, depends, editLockCtx);
+    expect(r.halted).toBe(true);
+    expect(r.reason).toBe('controls_unreadable_during_run');
+    const a = jobRow(db, 'job-0000-a');
+    expect(a.status).toBe('ready');
+    expect((a.evidence_refs as string[] | undefined) ?? []).toHaveLength(0);
+  });
+
+  it('superseded run cannot requeue: stop + lost ownership defers to lease recovery', async () => {
+    const db = makeFakeDb();
+    const depends = await seedGoal(db);
+    interceptControls(db, 2, () => {
+      stopRow(db);
+      // Another incarnation stole the row between adapter and gate2: the
+      // owned requeue CAS must lose, and the halt reason must say the
+      // requeue was deferred (lease recovery will reclaim it later).
+      const a = db.rowsOf('goal_jobs').find((j) => j.status === 'in_progress');
+      if (a) a.run_id = 'stolen-by-recovery';
+    });
+    const r = await driverStep(db.client, 'goal-00000001', Date.parse(NOW) + 1000, depends, editLockCtx);
+    expect(r.halted).toBe(true);
+    expect(r.reason).toBe('owner_stop_during_run:requeue_deferred');
+    const a = jobRow(db, 'job-0000-a');
+    // The stolen row is untouched by OUR run: no terminal status, no
+    // evidence from the superseded incarnation.
+    expect(a.run_id).toBe('stolen-by-recovery');
+    expect(a.status).toBe('in_progress');
+    expect((a.evidence_refs as string[] | undefined) ?? []).toHaveLength(0);
+  });
+});
