@@ -99,6 +99,24 @@ function MenuTree() {
   const toggle = (label: string) =>
     setOpen((o) => ({ ...o, [label]: !o[label] }));
 
+  // The root layout persists across App Router soft navigations, so this
+  // component stays mounted and only usePathname changes. Re-expand the
+  // group that just became active (in-page cross-links, back/forward)
+  // via React's render-time "adjust state when props change" pattern
+  // (no effect: same-commit update, no collapsed flash). Runs only when
+  // the ACTIVE GROUP changes. Consequences, both deliberate: a manual
+  // collapse survives same-group navigation (startGroup unchanged), but
+  // navigating INTO a group the user had collapsed re-expands it - the
+  // active child must be visible to carry aria-current. Other open
+  // groups are never force-collapsed.
+  const [prevStartGroup, setPrevStartGroup] = useState(startGroup);
+  if (startGroup !== prevStartGroup) {
+    setPrevStartGroup(startGroup);
+    if (startGroup && !open[startGroup]) {
+      setOpen({ ...open, [startGroup]: true });
+    }
+  }
+
   return (
     <ul className="space-y-1">
       {NAV_TREE.map((entry) =>

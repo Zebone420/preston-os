@@ -150,6 +150,14 @@ describe('menu behavior contracts (structural pins)', () => {
     expect(navMenu).toContain("aria-current={active ? 'page' : undefined}");
   });
 
+  it('the active group resyncs on client-side route changes (layout persists)', () => {
+    // Behavioral coverage in nav-menu-route-sync.test.ts; this pins the
+    // mechanism: render-time state adjustment keyed on the active group
+    // (react-hooks/set-state-in-effect forbids the effect variant).
+    expect(navMenu).toContain('startGroup !== prevStartGroup');
+    expect(navMenu).toContain('setPrevStartGroup(startGroup)');
+  });
+
   it('desktop panel bottom-anchors Sign Out; mobile lists it last', () => {
     const aside = navMenu.slice(
       navMenu.indexOf('<aside'), navMenu.indexOf('</aside>'));
@@ -207,9 +215,15 @@ describe('authentication behavior preserved', () => {
     expect(layout).toContain('<MainNav />');
   });
 
-  it('nav hides on login/setup (server-side, before any render)', () => {
-    expect(mainNav).toContain('if (!supabase) return null');
-    expect(mainNav).toContain('if (error || !data?.user) return null');
+  it('nav renders only for the allowlisted OWNER (server-side, fail closed)', () => {
+    // Stronger than the original "any authenticated user" gate: MainNav
+    // must use the same owner predicate as every protected surface
+    // (resolveOwner -> isOwnerEmail), so an authenticated non-owner on
+    // /login sees no protected navigation. Behavioral coverage in
+    // main-nav-owner-gate.test.ts.
+    expect(mainNav).toContain('resolveOwner');
+    expect(mainNav).toContain('if (!owner) return null');
+    expect(mainNav).not.toContain('auth.getUser');
   });
 
   it('sign-out remains the one implementation, redirecting to /login', () => {

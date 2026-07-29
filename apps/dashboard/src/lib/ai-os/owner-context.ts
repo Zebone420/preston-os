@@ -1,3 +1,4 @@
+import { cache } from 'react';
 import { getServerSupabase } from '@/lib/supabase/server';
 import { isOwnerEmail } from '@/lib/owner-auth';
 import type { AuditSink } from '@/lib/audit';
@@ -15,19 +16,27 @@ export interface OwnerContext {
   audit: AuditSink;
 }
 
-export async function resolveOwner(): Promise<OwnerContext | null> {
-  const supabase = await getServerSupabase();
-  if (!supabase) return null; // setup mode: no auth env
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user?.email || !isOwnerEmail(user.email, process.env)) return null;
-  return {
-    ownerEmail: user.email,
-    client: supabase as unknown as RuntimeClient,
-    audit: supabase as unknown as AuditSink,
-  };
-}
+// cache(): per-request memoization within one React render pass, so the
+// root-layout MainNav and the page share a single supabase.auth.getUser
+// round-trip instead of issuing one each (Next 16 authentication guide,
+// DAL pattern). Route handlers and server actions are outside the React
+// component tree, where cache() simply does not memoize - every
+// control-plane caller still resolves the owner fresh per request.
+export const resolveOwner = cache(
+  async (): Promise<OwnerContext | null> => {
+    const supabase = await getServerSupabase();
+    if (!supabase) return null; // setup mode: no auth env
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user?.email || !isOwnerEmail(user.email, process.env)) return null;
+    return {
+      ownerEmail: user.email,
+      client: supabase as unknown as RuntimeClient,
+      audit: supabase as unknown as AuditSink,
+    };
+  },
+);
 
 // Common deps shape for the control-plane handlers, from an owner context.
 export function depsFrom(ctx: OwnerContext) {
