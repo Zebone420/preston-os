@@ -229,3 +229,9 @@ the mechanism actually enforcing the bound for this unit type). If a future
 gate changes either service's `Type=` away from `oneshot` (not proposed
 here), `RuntimeMaxSec` would then become the operative bound and this note
 would need to be revisited.
+
+UPDATE 2026-08-02: the ineffective `RuntimeMaxSec=300` line was REMOVED
+from all three oneshot units (commit 509a6b4; test pins its absence).
+At unit files from that commit onward, expect `RuntimeMaxSec=[infinity]`
+in `systemctl show` and NO journal warning. Hosts pinned to earlier
+commits (incl. c24a7e5) still show `[300s]` + the cosmetic warning.

@@ -77,8 +77,9 @@ Five routes under `apps/dashboard/src/app/api/os/`, each calling
   `preston-hermes-observe.timer` → `preston-hermes-observe.service`.
 - Each service is `Type=oneshot`, runs
   `/usr/bin/node dist/os-runtime/bin.js worker-loop --max 5` (worker) or
-  `hermes-loop --max 5` (Hermes), and carries `RuntimeMaxSec=300`,
-  `TimeoutStartSec=120`.
+  `hermes-loop --max 5` (Hermes), and carries `TimeoutStartSec=120`
+  (the enforced oneshot bound; the formerly-present ineffective
+  `RuntimeMaxSec=300` was removed 2026-08-02).
 - Least-privilege runtime identities: `User=preston-worker` /
   `Group=preston-worker` for the worker service, `User=preston-hermes` /
   `Group=preston-hermes` for Hermes — separate from each other and from the
