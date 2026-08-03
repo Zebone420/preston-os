@@ -26,8 +26,10 @@ Restart=no
 # Exit 75 (owner stop/pause halt) is the INTENDED operational halt state,
 # not a service failure. Unreadable-controls outages exit 70 and DO fail.
 SuccessExitStatus=75
+# Type=oneshot: TimeoutStartSec bounds the whole run (RuntimeMaxSec is
+# ineffective for oneshot on the host systemd and could never fire anyway
+# with a 120s start bound, so it is intentionally absent).
 TimeoutStartSec=120
-RuntimeMaxSec=300
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

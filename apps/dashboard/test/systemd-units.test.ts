@@ -72,13 +72,17 @@ describe('systemd services - hardening and identity separation', () => {
     /^NoNewPrivileges=true$/m,
     /^PrivateTmp=true$/m,
     /^ProtectHome=true$/m,
-    /^RuntimeMaxSec=300$/m,
     /^TimeoutStartSec=120$/m,
     /^LogsDirectory=preston$/m,
   ];
   it('all services keep the full hardening set', () => {
     for (const svc of [workerSvc, hermesSvc, orchSvc]) {
       for (const rx of REQUIRED) expect(svc).toMatch(rx);
+    }
+  });
+  it('no oneshot carries RuntimeMaxSec (ineffective for oneshot; TimeoutStartSec is the bound)', () => {
+    for (const svc of [workerSvc, hermesSvc, orchSvc]) {
+      expect(svc).not.toMatch(/^RuntimeMaxSec=/m);
     }
   });
   it('worker and hermes run as separate users with separate env files', () => {

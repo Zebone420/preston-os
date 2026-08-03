@@ -20,8 +20,10 @@ EnvironmentFile=/etc/preston/worker.env
 # timeout the run fails visibly and the timer simply retries later.
 ExecStart=/usr/bin/flock -w 90 /var/lib/preston/worker/.dispatch.lock /usr/bin/node dist/os-runtime/bin.js worker-loop --max 5
 Restart=no
+# Type=oneshot: TimeoutStartSec bounds the whole run (RuntimeMaxSec is
+# ineffective for oneshot on the host systemd and could never fire anyway
+# with a 120s start bound, so it is intentionally absent).
 TimeoutStartSec=120
-RuntimeMaxSec=300
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

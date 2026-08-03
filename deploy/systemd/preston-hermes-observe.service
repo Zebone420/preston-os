@@ -15,8 +15,10 @@ EnvironmentFile=/etc/preston/hermes.env
 # Requires hermes_mode=observe_only in system_controls (owner-set) to do work.
 ExecStart=/usr/bin/node dist/os-runtime/bin.js hermes-loop --max 5
 Restart=no
+# Type=oneshot: TimeoutStartSec bounds the whole run (RuntimeMaxSec is
+# ineffective for oneshot on the host systemd and could never fire anyway
+# with a 120s start bound, so it is intentionally absent).
 TimeoutStartSec=120
-RuntimeMaxSec=300
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
