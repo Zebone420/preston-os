@@ -28,21 +28,25 @@ function isUniqueViolation(msg: string): boolean {
   return /duplicate key|unique constraint|already exists/i.test(msg);
 }
 
+// keyColumn: the table's primary-key column. orchestration_approvals keys on
+// approval_id and has NO id column - selecting 'id' there makes PostgREST
+// reject the whole insert (Gate D drill defect, 2026-08-04).
 async function insertRow(
   client: RuntimeClient,
   table: string,
   row: Record<string, unknown>,
+  keyColumn = 'id',
 ): Promise<WriteOutcome> {
   try {
-    const res = await client.from(table).insert(row).select('id');
+    const res = await client.from(table).insert(row).select(keyColumn);
     if (res.error) {
       if (isUniqueViolation(res.error.message)) {
-        return { ok: true, duplicate: true, id: String(row.id ?? '') };
+        return { ok: true, duplicate: true, id: String(row[keyColumn] ?? '') };
       }
       return { ok: false, error: `${table} insert failed: ` + res.error.message };
     }
-    const id = res.data?.[0]?.['id'];
-    return { ok: true, id: id ? String(id) : String(row.id ?? '') };
+    const id = res.data?.[0]?.[keyColumn];
+    return { ok: true, id: id ? String(id) : String(row[keyColumn] ?? '') };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : `${table} insert failed` };
   }
@@ -273,7 +277,7 @@ export async function insertApproval(
     nonce: null,
     status: 'pending',
     expires_at: req.expires_at,
-  });
+  }, 'approval_id');
 }
 
 // Create a gated job's approval, deriving the authorization hash INTERNALLY
@@ -336,7 +340,7 @@ export async function insertJobApproval(
     status: 'pending',
     created_at: args.created_at,
     expires_at: args.expires_at,
-  });
+  }, 'approval_id');
 }
 
 // One-time pending -> terminal decision. CAS on status='pending' so a second

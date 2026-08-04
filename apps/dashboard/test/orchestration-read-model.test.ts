@@ -1,6 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import type { RuntimeClient } from '../src/lib/ai-os/store';
-import { loadOrchestrationReadModel } from '../src/lib/ai-os/orchestration/read-model';
+import {
+  isMigrationAbsentError,
+  loadOrchestrationReadModel,
+} from '../src/lib/ai-os/orchestration/read-model';
+
+// Gate D staging defect (2026-08-04): a missing-COLUMN error was relabeled
+// "migration 0010 not applied" by a bare /does not exist/ match, hiding a
+// real code/schema mismatch behind a benign-looking message.
+describe('isMigrationAbsentError - table absence only', () => {
+  it('matches table-level absence', () => {
+    expect(isMigrationAbsentError('relation "master_goals" does not exist')).toBe(true);
+    expect(isMigrationAbsentError("Could not find the table 'public.master_goals' in the schema cache")).toBe(true);
+    expect(isMigrationAbsentError('ERROR: 42P01: undefined table')).toBe(true);
+  });
+  it('does NOT match a missing column (real defect must surface)', () => {
+    expect(isMigrationAbsentError('column orchestration_approvals.id does not exist')).toBe(false);
+    expect(isMigrationAbsentError('column goal_jobs.bogus does not exist')).toBe(false);
+  });
+});
 
 const NOW = '2026-07-22T12:00:00.000Z';
 

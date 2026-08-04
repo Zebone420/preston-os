@@ -35,7 +35,22 @@ export function makeComposerFakeDb(opts: FakeDbOptions = {}) {
       return {
         insert(row: Record<string, unknown>) {
           return {
-            select() {
+            select(cols?: string) {
+              // PostgREST semantics: requesting a representation column the
+              // table does not have REJECTS THE WHOLE INSERT. Emulated after
+              // the Gate D drill defect (select('id') on
+              // orchestration_approvals, whose key is approval_id) passed
+              // the un-strict fake but failed on real staging.
+              if (cols && cols !== '*') {
+                for (const c of cols.split(',').map((s) => s.trim())) {
+                  if (!(c in row)) {
+                    return Promise.resolve({
+                      data: null,
+                      error: { message: `column ${table}.${c} does not exist` },
+                    });
+                  }
+                }
+              }
               const fail = opts.failInsert?.(table, row);
               if (fail) return Promise.resolve({ data: null, error: { message: fail } });
               const rows = rowsOf(table);
@@ -55,10 +70,7 @@ export function makeComposerFakeDb(opts: FakeDbOptions = {}) {
                 }
               }
               rows.push({ ...row });
-              return Promise.resolve({
-                data: [{ id: row[key] ?? 'x', approval_id: row.approval_id }],
-                error: null,
-              });
+              return Promise.resolve({ data: [{ ...row }], error: null });
             },
           };
         },
@@ -92,7 +104,7 @@ export function makeComposerFakeDb(opts: FakeDbOptions = {}) {
             eq(c: string, v: string) { return chain([...f, (r) => String(r[c]) === v]); },
             lte(c: string, v: string) { return chain([...f, (r) => String(r[c]) <= v]); },
             gt(c: string, v: string) { return chain([...f, (r) => String(r[c]) > v]); },
-            select() {
+            select(cols?: string) {
               if (table === 'goal_jobs' && patch.approval_id !== undefined) {
                 // FK discipline: the approval row must exist before linking.
                 if (!rowsOf('orchestration_approvals')
@@ -101,11 +113,19 @@ export function makeComposerFakeDb(opts: FakeDbOptions = {}) {
                 }
               }
               const m = rowsOf(table).filter((r) => f.every((g) => g(r)));
+              // Same PostgREST representation-column strictness as insert.
+              if (cols && cols !== '*' && m.length > 0) {
+                for (const c of cols.split(',').map((s) => s.trim())) {
+                  if (!m.some((r) => c in r) && !(c in patch)) {
+                    return Promise.resolve({
+                      data: null,
+                      error: { message: `column ${table}.${c} does not exist` },
+                    });
+                  }
+                }
+              }
               for (const r of m) Object.assign(r, patch);
-              return Promise.resolve({
-                data: m.map((r) => ({ id: r[pk(table)], approval_id: r.approval_id })),
-                error: null,
-              });
+              return Promise.resolve({ data: m.map((r) => ({ ...r })), error: null });
             },
           });
           return chain([]);

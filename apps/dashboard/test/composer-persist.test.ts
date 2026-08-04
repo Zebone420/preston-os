@@ -103,6 +103,48 @@ describe('composer persistence - creation', () => {
     expect(out.ok && out.created[0].approval_ids).toHaveLength(1);
   });
 
+  // Gate D staging defect (2026-08-04): insertRow selected 'id' on
+  // orchestration_approvals, whose key is approval_id and which has NO id
+  // column - PostgREST rejected the whole insert on the live DB while the
+  // then-unstrict fake passed. The fake is now representation-strict, and
+  // this test pins the exact selected column so a revert fails loudly.
+  it('approval insert selects approval_id, never a phantom id column', async () => {
+    const selected: string[] = [];
+    const recorder = {
+      from: (table: string) => ({
+        insert: (row: Record<string, unknown>) => ({
+          select: (cols?: string) => {
+            selected.push(`${table}:${cols ?? '*'}`);
+            if (cols && cols !== '*' && !(cols in row)) {
+              return Promise.resolve({
+                data: null,
+                error: { message: `column ${table}.${cols} does not exist` },
+              });
+            }
+            return Promise.resolve({ data: [{ ...row }], error: null });
+          },
+        }),
+      }),
+    };
+    const { insertJobApproval } = await import('../src/lib/ai-os/orchestration/store');
+    const res = await insertJobApproval(recorder as never, {
+      approval_id: 'apr-regression-0000000000000',
+      goal_id: deterministicUuid('reg:goal'),
+      job: {
+        id: deterministicUuid('reg:job'), kind: 'migration',
+        objective: 'draft a schema migration plan', title: 'Draft plan',
+        risk_class: 'RED', assigned_role: 'claude',
+      },
+      owner_identity: OWNER,
+      created_at: NOW,
+      expires_at: new Date(Date.parse(NOW) + APPROVAL_TTL_MS).toISOString(),
+    });
+    expect(res.ok).toBe(true);
+    expect(res.id).toBe('apr-regression-0000000000000');
+    expect(selected).toContain('orchestration_approvals:approval_id');
+    expect(selected.some((s) => s === 'orchestration_approvals:id')).toBe(false);
+  });
+
   it('binds created records to the proposal (deterministic ids from the request key)', async () => {
     const db = makeComposerFakeDb();
     const out = await confirmComposedRequest(db.client, confirmInput(SAFE_REQUEST));

@@ -27,7 +27,12 @@ export interface Bucket {
 // error). Shared with the dispatcher's orchestrate-once command so both
 // surfaces classify the not-yet-applied state identically.
 export function isMigrationAbsentError(msg: string): boolean {
-  return /does not exist|relation .* does not exist|undefined table|42P01/i.test(msg);
+  // TABLE-level absence only. A missing COLUMN ("column x.y does not
+  // exist") is a code/schema mismatch - a real defect that must surface
+  // as an error, never be masked as "migration not applied" (Gate D
+  // drill defect, 2026-08-04: a bare /does not exist/ match relabeled a
+  // column error as migration_0010_not_applied).
+  return /relation .* does not exist|could not find the table|undefined table|42P01/i.test(msg);
 }
 
 function classify(res: ListOutcome): Bucket {
