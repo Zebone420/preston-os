@@ -101,6 +101,46 @@ describe('composer actions - request entry and proposal state', () => {
     expect(db.rowsOf('master_goals')).toHaveLength(1);
   });
 
+  // Gate B drill finding (2026-08-03): the success notice claimed
+  // "Gated tasks await owner approval" even when zero tasks were gated.
+  // The notice must reflect whether approvals actually exist.
+  it('ungated confirm notice does not claim gated tasks (all-GREEN graph)', async () => {
+    const db = makeComposerFakeDb();
+    resolveOwnerMock.mockResolvedValue({ ownerEmail: OWNER, client: db.client, audit: {} });
+    const p = await composeProposalAction(INITIAL_COMPOSER_STATE, fd({ request: SAFE_REQUEST }));
+    if (!p.proposal) throw new Error('no proposal');
+    const done = await confirmProposalAction(INITIAL_COMPOSER_STATE, fd({
+      raw_request: p.raw_request,
+      request_key: p.request_key,
+      proposal_hash: p.proposal.proposal_hash,
+    }));
+    expect(done.step).toBe('created');
+    expect(done.created[0].approval_ids).toHaveLength(0);
+    expect(done.notice).toContain('no owner approval required');
+    expect(done.notice).not.toContain('await owner approval');
+  });
+
+  it('gated confirm notice still announces the pending approval', async () => {
+    const db = makeComposerFakeDb();
+    resolveOwnerMock.mockResolvedValue({ ownerEmail: OWNER, client: db.client, audit: {} });
+    const p = await composeProposalAction(INITIAL_COMPOSER_STATE, fd({
+      request:
+        'Create a staging-only goal to prepare the Phase 7 schema evidence. ' +
+        'Create tasks to draft a schema migration plan for owner review, and ' +
+        'summarize the plan in a local report.',
+    }));
+    if (!p.proposal) throw new Error('no proposal');
+    expect(p.proposal.approvals_required).toBeGreaterThan(0);
+    const done = await confirmProposalAction(INITIAL_COMPOSER_STATE, fd({
+      raw_request: p.raw_request,
+      request_key: p.request_key,
+      proposal_hash: p.proposal.proposal_hash,
+    }));
+    expect(done.step).toBe('created');
+    expect(done.created[0].approval_ids.length).toBeGreaterThan(0);
+    expect(done.notice).toContain('Gated tasks await owner approval');
+  });
+
   it('duplicate confirm (double-submit) does not duplicate records', async () => {
     const db = makeComposerFakeDb();
     resolveOwnerMock.mockResolvedValue({ ownerEmail: OWNER, client: db.client, audit: {} });

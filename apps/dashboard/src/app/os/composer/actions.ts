@@ -129,6 +129,8 @@ export async function confirmProposalAction(
     errors: [],
     notice: outcome.replayed
       ? 'Duplicate confirmation detected - existing records returned, nothing new created.'
-      : 'Goal graph created (simulation-only). Gated tasks await owner approval.',
+      : outcome.created.some((g) => g.approval_ids.length > 0)
+        ? 'Goal graph created (simulation-only). Gated tasks await owner approval.'
+        : 'Goal graph created (simulation-only). All tasks are auto-runnable - no owner approval required.',
   };
 }
