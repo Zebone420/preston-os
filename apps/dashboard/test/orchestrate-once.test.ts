@@ -412,6 +412,114 @@ describe('orchestrate-once - approval parking (owner-only unlock)', () => {
   });
 });
 
+describe('orchestrate-once - parked goals do not starve younger goals (Gate D A7)', () => {
+  // Live finding on the deployed staging host (2026-08-05): an older blocked
+  // goal whose only non-terminal job awaited a pending (expired-undecided)
+  // approval was selected on EVERY oneshot and ended the run, so a younger,
+  // genuinely-approved goal was never reached. The selector must skip
+  // provably-parked goals and drive the first goal that can progress -
+  // without touching the parked goal's rows or weakening approval
+  // enforcement.
+  it('skips the parked older goal, drives the younger approved goal, old rows untouched', async () => {
+    const db = makeFakeDb();
+    // OLD goal (oldest): gated migration job; parks on first drive.
+    await insertMasterGoal(db.client, goal());
+    const dOld = decomposeGoal(goal(), [{
+      local_id: 'b', kind: 'migration', title: 'apply 0011',
+      objective: 'migrate the database and deploy', depends_on_local: [],
+    }], (l) => `job-0000-${l}`, NOW);
+    if (!dOld.ok) throw new Error('decompose old');
+    for (const j of dOld.jobs) await insertGoalJob(db.client, j);
+    const r1 = await dispatch(db, { maxIterations: 10 });
+    expect(r1.summary.stoppedReason).toBe('awaiting_owner_approval');
+    const oldJob = db.rowsOf('goal_jobs').find((j) => j.id === 'job-0000-b')!;
+    expect(oldJob.status).toBe('awaiting_approval');
+    // Mirror the live shape: a linked approval record exists, stays pending,
+    // and its window has lapsed undecided. Nobody ever decides it.
+    oldJob.assigned_role = 'claude';
+    oldJob.approval_id = 'apr-00000001';
+    const oldApr = await insertJobApproval(db.client, {
+      approval_id: 'apr-00000001', goal_id: 'goal-00000001',
+      job: {
+        id: 'job-0000-b', kind: 'migration',
+        objective: 'migrate the database and deploy', title: 'apply 0011',
+        risk_class: 'RED', assigned_role: 'claude',
+      },
+      owner_identity: OWNER, created_at: NOW, expires_at: '2026-07-23T12:00:30.000Z',
+    });
+    expect(oldApr.ok).toBe(true);
+    const oldGoalRow = db.rowsOf('master_goals').find((g) => g.id === 'goal-00000001')!;
+    const oldIter = Number(oldGoalRow.iteration);
+    const oldStatus = String(oldGoalRow.status);
+
+    // FRESH goal: strictly younger, gated the same way.
+    const LATER = '2026-07-23T13:00:00.000Z';
+    const freshGoal = goal({
+      id: 'goal-00000002', correlation_id: 'corr-00000002',
+      created_at: LATER, updated_at: LATER,
+    });
+    await insertMasterGoal(db.client, freshGoal);
+    const dNew = decomposeGoal(freshGoal, [{
+      local_id: 'b', kind: 'migration', title: 'apply 0012',
+      objective: 'migrate the database and deploy', depends_on_local: [],
+    }], (l) => `job-0001-${l}`, LATER);
+    if (!dNew.ok) throw new Error('decompose fresh');
+    for (const j of dNew.jobs) await insertGoalJob(db.client, j);
+
+    // The parked head is skipped; the fresh goal is driven (and parks).
+    const r2 = await dispatch(db, { maxIterations: 10 });
+    expect(r2.exitCode).toBe(EXIT.ok);
+    expect(r2.summary.goal).toBe('goal-00000002');
+    expect(r2.summary.stoppedReason).toBe('awaiting_owner_approval');
+    expect(r2.summary.skippedParked).toEqual(['goal-00000001']);
+    const freshJob = db.rowsOf('goal_jobs').find((j) => j.id === 'job-0001-b')!;
+    expect(freshJob.status).toBe('awaiting_approval');
+
+    // BOTH parked and undecided: clean exit 0 naming every skipped goal.
+    const r3 = await dispatch(db, { maxIterations: 10 });
+    expect(r3.exitCode).toBe(EXIT.ok);
+    expect(r3.summary.stoppedReason).toBe('awaiting_owner_approval');
+    expect(r3.summary.skippedParked).toEqual(['goal-00000001', 'goal-00000002']);
+
+    // Genuine owner approval on the FRESH goal only.
+    freshJob.assigned_role = 'claude';
+    freshJob.approval_id = 'apr-00000002';
+    const created = await insertJobApproval(db.client, {
+      approval_id: 'apr-00000002', goal_id: 'goal-00000002',
+      job: {
+        id: 'job-0001-b', kind: 'migration',
+        objective: 'migrate the database and deploy', title: 'apply 0012',
+        risk_class: 'RED', assigned_role: 'claude',
+      },
+      owner_identity: OWNER, created_at: LATER, expires_at: '2026-07-23T20:00:00.000Z',
+    });
+    expect(created.ok).toBe(true);
+    Object.assign(
+      db.rowsOf('orchestration_approvals').find((a) => a.approval_id === 'apr-00000002')!,
+      { status: 'approved', decided_at: LATER, nonce: 'decide-2' },
+    );
+
+    // The approved younger goal completes; the starved head stays parked.
+    const r4 = await dispatch(db, { maxIterations: 10 });
+    expect(r4.summary.goal).toBe('goal-00000002');
+    expect(r4.summary.stoppedReason).toBe('completed');
+    expect(r4.summary.skippedParked).toEqual(['goal-00000001']);
+    expect(freshJob.status).toBe('completed');
+    expect(freshJob.executed).toBe(false);
+
+    // Old goal untouched: same status, still parked, approval still pending
+    // (never auto-expired, never auto-decided), no iteration burn, executed
+    // still false. Approval enforcement was not weakened to make this pass.
+    expect(oldJob.status).toBe('awaiting_approval');
+    expect(oldJob.executed).toBe(false);
+    expect(String(oldGoalRow.status)).toBe(oldStatus);
+    expect(Number(oldGoalRow.iteration)).toBe(oldIter);
+    const oldRecord = db.rowsOf('orchestration_approvals').find((a) => a.approval_id === 'apr-00000001')!;
+    expect(oldRecord.status).toBe('pending');
+    expect(oldRecord.decided_at ?? null).toBeNull();
+  });
+});
+
 describe('orchestrate-once - leases, locks, and recovery', () => {
   it('never disturbs a LIVE execution lease held by another run', async () => {
     const db = makeFakeDb();

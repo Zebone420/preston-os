@@ -260,7 +260,63 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
     return { exitCode: EXIT.ok, summary: { selected: null, stoppedReason: 'no_eligible_goal' } };
   }
   const selKey = (r: Record<string, unknown>) => `${String(r.created_at ?? '')}|${String(r.id)}`;
-  const selected = [...driveable].sort((a, b) => (selKey(a) < selKey(b) ? -1 : 1))[0];
+  const ordered = [...driveable].sort((a, b) => (selKey(a) < selKey(b) ? -1 : 1));
+
+  // Parked goals must not starve the queue (Gate D A7 live finding,
+  // 2026-08-05): the oldest driveable goal can be PERMANENTLY parked - every
+  // non-terminal job awaiting an owner approval that is still pending or has
+  // expired undecided. Selecting it and ENDING the run there monopolized
+  // every oneshot; a younger, fully-approved goal was never reached on the
+  // deployed host. Scan the merged (already bounded) window oldest-first
+  // instead: skip each provably-parked goal, drive the FIRST goal that can
+  // make progress. A goal is skipped only on POSITIVE evidence (jobs read
+  // OK, all non-terminal jobs awaiting_approval, no linked record even
+  // claiming 'approved'); every read failure still fails the whole run
+  // (fail-closed), and approval enforcement itself is untouched - the
+  // driver's authoritative verification remains the only unlock authority.
+  const skippedParked: string[] = [];
+  let selected: Record<string, unknown> | null = null;
+  for (const cand of ordered) {
+    const candId = String(cand.id);
+    const jobsRes = await listJobsForGoal(client, candId, JOB_READ_LIMIT);
+    if (!jobsRes.ok) {
+      log({ level: 'error', command, correlationId, event: 'orchestrate_once', goal: candId, error: 'jobs unreadable: ' + jobsRes.error });
+      return { exitCode: EXIT.error, summary: { error: 'jobs unreadable', goal: candId } };
+    }
+    if (jobsRes.rows.length > MAX_GOAL_JOBS) {
+      // More rows than the model/DB bound allows: completeness is unprovable
+      // (Codex CRITICAL #1). Refuse rather than risk finalizing a partial graph.
+      log({ level: 'error', command, correlationId, event: 'orchestrate_once', goal: candId, error: 'job read exceeded the model bound; completeness unprovable (fail-closed)' });
+      return { exitCode: EXIT.error, summary: { error: 'job graph overflow', goal: candId } };
+    }
+    const nonTerminal = jobsRes.rows.filter((j) => !TERMINAL_JOB_STATUSES.has(String(j.status)));
+    const allParked = nonTerminal.length > 0 &&
+      nonTerminal.every((j) => String(j.status) === 'awaiting_approval');
+    if (allParked) {
+      // If any linked record CLAIMS 'approved', drive - the driver's
+      // authoritative verification (hash/owner/scope/nonce/expiry) is the
+      // only unlock authority. Otherwise skip cleanly and keep scanning.
+      let anyClaimsApproved = false;
+      for (const j of nonTerminal) {
+        const approvalId = j.approval_id ? String(j.approval_id) : '';
+        if (!approvalId) continue; // parked with nothing decidable yet
+        const record = await readApprovalRecord(client, approvalId);
+        if (record && String(record.status) === 'approved') { anyClaimsApproved = true; break; }
+      }
+      if (!anyClaimsApproved) {
+        log({ level: 'info', command, correlationId, event: 'orchestrate_once', goal: candId, stoppedReason: 'awaiting_owner_approval', skipped: true });
+        skippedParked.push(candId);
+        continue;
+      }
+    }
+    selected = cand;
+    break;
+  }
+  if (selected === null) {
+    // Every candidate in the window is parked on an undecided owner approval.
+    log({ level: 'info', command, correlationId, event: 'orchestrate_once', stoppedReason: 'awaiting_owner_approval', skipped: true, skippedParked });
+    return { exitCode: EXIT.ok, summary: { goal: skippedParked[0], skippedParked, stoppedReason: 'awaiting_owner_approval', skipped: true } };
+  }
   const goalId = String(selected.id);
 
   // Dependency edges: driving without them could run jobs out of order. A
@@ -284,40 +340,6 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
   }
   const depends = (jobId: string) => depMap.get(jobId) ?? [];
 
-  // Parked fast path: when EVERY non-terminal job is awaiting an owner
-  // approval and no linked approval record even CLAIMS to be approved, driving
-  // would only burn one goal iteration per timer tick while the owner decides.
-  // Skip cleanly. If any record claims 'approved' (or a job has no linked
-  // record at all worth checking), drive - the driver's authoritative
-  // verification (hash/owner/scope/nonce/expiry) is the only unlock authority.
-  const jobsRes = await listJobsForGoal(client, goalId, JOB_READ_LIMIT);
-  if (!jobsRes.ok) {
-    log({ level: 'error', command, correlationId, event: 'orchestrate_once', goal: goalId, error: 'jobs unreadable: ' + jobsRes.error });
-    return { exitCode: EXIT.error, summary: { error: 'jobs unreadable', goal: goalId } };
-  }
-  if (jobsRes.rows.length > MAX_GOAL_JOBS) {
-    // More rows than the model/DB bound allows: completeness is unprovable
-    // (Codex CRITICAL #1). Refuse rather than risk finalizing a partial graph.
-    log({ level: 'error', command, correlationId, event: 'orchestrate_once', goal: goalId, error: 'job read exceeded the model bound; completeness unprovable (fail-closed)' });
-    return { exitCode: EXIT.error, summary: { error: 'job graph overflow', goal: goalId } };
-  }
-  const nonTerminal = jobsRes.rows.filter((j) => !TERMINAL_JOB_STATUSES.has(String(j.status)));
-  const allParked = nonTerminal.length > 0 &&
-    nonTerminal.every((j) => String(j.status) === 'awaiting_approval');
-  if (allParked) {
-    let anyClaimsApproved = false;
-    for (const j of nonTerminal) {
-      const approvalId = j.approval_id ? String(j.approval_id) : '';
-      if (!approvalId) continue; // parked with nothing decidable yet
-      const record = await readApprovalRecord(client, approvalId);
-      if (record && String(record.status) === 'approved') { anyClaimsApproved = true; break; }
-    }
-    if (!anyClaimsApproved) {
-      log({ level: 'info', command, correlationId, event: 'orchestrate_once', goal: goalId, stoppedReason: 'awaiting_owner_approval', skipped: true });
-      return { exitCode: EXIT.ok, summary: { goal: goalId, stoppedReason: 'awaiting_owner_approval', skipped: true } };
-    }
-  }
-
   // Drive one bounded pass. The per-invocation lock-token seed makes every
   // worktree ownership token unique to THIS invocation; run ids are minted by
   // the driver (crypto-random) unless a test injects a deterministic seam.
@@ -333,7 +355,7 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
     client, goalId, seams.clock, input.maxIterations ?? 5, depends, lockCtx,
     seams.newRunId,
   );
-  log({ level: 'info', command, correlationId, event: 'orchestrate_once', goal: goalId, cycles: r.cycles, halted: r.halted, reason: r.reason });
+  log({ level: 'info', command, correlationId, event: 'orchestrate_once', goal: goalId, cycles: r.cycles, halted: r.halted, reason: r.reason, ...(skippedParked.length ? { skippedParked } : {}) });
 
   if (r.halted) {
     if (r.reason.includes('owner_stop')) {
@@ -358,7 +380,7 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
     // invocation resumes from the durable state (restart-safe by design).
     return { exitCode: EXIT.ok, summary: { goal: goalId, cycles: r.cycles, stoppedReason: 'cycle_budget_exhausted', lastReason: r.reason } };
   }
-  return { exitCode: EXIT.ok, summary: { goal: goalId, cycles: r.cycles, stoppedReason: r.reason } };
+  return { exitCode: EXIT.ok, summary: { goal: goalId, cycles: r.cycles, stoppedReason: r.reason, ...(skippedParked.length ? { skippedParked } : {}) } };
 }
 
 export async function runDispatcher(input: DispatcherInput): Promise<DispatcherResult> {
