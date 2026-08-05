@@ -311,6 +311,18 @@ export default async function ApprovalsPage({
           {banner}
         </p>
       )}
+      {/* Gate D drill finding (2026-08-05): an owner looking for a Phase-7
+          orchestration approval landed here and decided a legacy row instead.
+          The two approval surfaces are distinct tables - say so up front. */}
+      <p className="mb-4 rounded bg-purple-950 p-3 text-xs text-purple-200">
+        Looking for a Phase 7 orchestration approval (apr-...)? Those are
+        decided on the{' '}
+        <Link href="/os/orchestration" className="underline">
+          OS Orchestration page
+        </Link>
+        , not here. This Approval Center covers business control-plane
+        approvals only.
+      </p>
       {linksError && (
         <p className="mb-4 rounded bg-red-950 p-2 text-xs text-red-300">
           Linked-entity context unavailable (approval_links read

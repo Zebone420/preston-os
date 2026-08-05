@@ -244,8 +244,9 @@ export function ComposerForm() {
               </div>
             ))}
             <p className="mt-2 text-xs text-slate-500">
-              Track lifecycle on the Orchestration page; decide approvals via
-              the owner approval surface.
+              Track lifecycle and decide apr-... approvals on the
+              Orchestration page (/os/orchestration) - NOT the Approval
+              Center, which covers business approvals only.
             </p>
           </section>
         )}
