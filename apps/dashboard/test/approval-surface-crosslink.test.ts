@@ -19,6 +19,25 @@ describe('approval surfaces stay cross-linked and disambiguated', () => {
     expect(page).toMatch(/business control-plane\s+approvals only/);
   });
 
+  // CL-3c live finding (2026-08-05): an expired approval still rendered as
+  // plain "pending" with Approve/Reject offered; the RPC refused the click
+  // ("approval decision refused: expired") but the surface promised a
+  // decision it could not record. Pin: the row computes expiry, withholds
+  // decision controls on expired rows, and fails closed on unparseable
+  // expiry timestamps.
+  it('the orchestration page withholds decision controls on expired approvals', () => {
+    const page = src('app/os/orchestration/page.tsx');
+    expect(page).toContain("a['decision_open'] !== true");
+    expect(page).toContain("=== 'pending' && !expired && (");
+    expect(page).toContain("(expired)");
+    expect(page).toMatch(/expired - decisions are refused/);
+  });
+
+  it('the read model computes decision_open fail-closed on expiry', () => {
+    const rmSrc = src('lib/ai-os/orchestration/read-model.ts');
+    expect(rmSrc).toMatch(/decision_open: Number\.isFinite\(exp\) && exp > nowMs/);
+  });
+
   it('the composer success card points at /os/orchestration, not a vague surface', () => {
     const form = src('app/os/composer/composer-form.tsx');
     expect(form).toContain('/os/orchestration');

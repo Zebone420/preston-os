@@ -221,12 +221,25 @@ export default async function OrchestrationPage({
           <h2 className="mb-2 font-medium">Open approvals + failures</h2>
           <div className="text-xs text-slate-400">Open approvals: {rm.summary.open_approvals}</div>
           <ul className="mt-1 space-y-2 text-sm">
-            {rm.approvals.rows.slice(0, 10).map((a) => (
+            {rm.approvals.rows.slice(0, 10).map((a) => {
+              // Decision-time policy refuses expired approvals (CL-3c, proven
+              // live 2026-08-05). The read model computes decision_open per
+              // row (fail-closed on unparseable expiry); the page withholds
+              // controls and says why instead of offering a button that must
+              // fail.
+              const expired = a['decision_open'] !== true;
+              return (
               <li key={s(a, 'approval_id')} className="flex flex-wrap items-center gap-2">
                 <span>
                   [{s(a, 'risk_class')}] {s(a, 'action')} - {s(a, 'status')}
+                  {s(a, 'status') === 'pending' && expired ? ' (expired)' : ''}
                 </span>
-                {s(a, 'status') === 'pending' && (
+                {s(a, 'status') === 'pending' && expired && (
+                  <span className="text-xs text-amber-400">
+                    expired - decisions are refused; a fresh approval is required
+                  </span>
+                )}
+                {s(a, 'status') === 'pending' && !expired && (
                   <span className="flex gap-1">
                     {/* Decision goes through the one-time owner-only RPC
                         (decide_orchestration_approval); recording a decision
@@ -254,7 +267,8 @@ export default async function OrchestrationPage({
                   </span>
                 )}
               </li>
-            ))}
+              );
+            })}
           </ul>
           <div className="mt-3 text-xs text-slate-400">Failed: {rm.summary.failed_jobs} | Dead-letter: {rm.summary.dead_lettered_jobs}</div>
           <ul className="mt-1 space-y-1 text-sm text-red-300">

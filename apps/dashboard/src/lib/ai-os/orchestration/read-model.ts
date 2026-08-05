@@ -71,10 +71,23 @@ const str = (r: Record<string, unknown>, k: string) => String(r[k] ?? '');
 export async function loadOrchestrationReadModel(
   client: RuntimeClient,
   goalLimit = 20,
+  nowMs: number = Date.now(),
 ): Promise<OrchestrationReadModel> {
   const goalsRes = await listGoals(client, goalLimit);
   const goals = classify(goalsRes);
-  const approvals = classify(await listOpenApprovals(client, 50));
+  // CL-3c live finding (2026-08-05): expired approvals keep status='pending'
+  // in the table - expiry is enforced at decision time, so the surface must
+  // not offer a decision it knows will be refused. Annotate each open row
+  // with decision_open; an unparseable expiry counts as expired (fail-closed,
+  // mirroring validateApprovalDecision's timestamp handling).
+  const approvalsRaw = classify(await listOpenApprovals(client, 50));
+  const approvals: Bucket = {
+    ...approvalsRaw,
+    rows: approvalsRaw.rows.map((r) => {
+      const exp = Date.parse(String(r['expires_at'] ?? ''));
+      return { ...r, decision_open: Number.isFinite(exp) && exp > nowMs };
+    }),
+  };
 
   // If the goals relation is absent, every Phase-7 table is; short-circuit.
   const applied = goals.state !== 'migration_absent';
