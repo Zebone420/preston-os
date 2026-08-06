@@ -33,6 +33,16 @@ describe('approval surfaces stay cross-linked and disambiguated', () => {
     expect(page).toMatch(/expired - decisions are refused/);
   });
 
+  // Wrong-row root cause (Gate D, 2026-08-05): two visually identical
+  // approval rows differed only in button aria-labels; the owner's decision
+  // landed on the wrong row twice across the drill family. Pin: every row
+  // renders its approval id and goal/job binding as VISIBLE text.
+  it('every approval row shows its id and goal/job binding visibly', () => {
+    const page = src('app/os/orchestration/page.tsx');
+    expect(page).toMatch(/\{s\(a, 'approval_id'\)\} \| goal \{s\(a, 'goal_id'\)/);
+    expect(page).toMatch(/job \{s\(a, 'job_id'\)/);
+  });
+
   it('the read model computes decision_open fail-closed on expiry', () => {
     const rmSrc = src('lib/ai-os/orchestration/read-model.ts');
     expect(rmSrc).toMatch(/decision_open: Number\.isFinite\(exp\) && exp > nowMs/);

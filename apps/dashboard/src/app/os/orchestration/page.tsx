@@ -234,6 +234,13 @@ export default async function OrchestrationPage({
                   [{s(a, 'risk_class')}] {s(a, 'action')} - {s(a, 'status')}
                   {s(a, 'status') === 'pending' && expired ? ' (expired)' : ''}
                 </span>
+                {/* Wrong-row root cause (Gate D, 2026-08-05): the approval id
+                    lived only in the button aria-label, so two visually
+                    identical rows were indistinguishable. Every row states
+                    its id and binding visibly. */}
+                <span className="font-mono text-xs text-slate-500">
+                  {s(a, 'approval_id')} | goal {s(a, 'goal_id').slice(0, 8)} | job {s(a, 'job_id').slice(0, 8)}
+                </span>
                 {s(a, 'status') === 'pending' && expired && (
                   <span className="text-xs text-amber-400">
                     expired - decisions are refused; a fresh approval is required
