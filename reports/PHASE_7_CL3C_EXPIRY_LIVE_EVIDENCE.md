@@ -44,6 +44,24 @@ controls, and explains the refusal. Pinned by 2 new static tests in
 approval-surface-crosslink.test.ts. tsc 0, eslint 0, 31 affected
 tests pass, next build 0, os-runtime build 0.
 
+## Second natural-expiry evidence + live display proof (2026-08-06)
+
+Agent-read /os/orchestration (authenticated tab, deployed e922db0):
+- apr-72218a1788f485fa5ad3c65c now renders "pending (expired)" with
+  decision controls WITHHELD, the amber "expired - decisions are
+  refused; a fresh approval is required" note, and its visible binding
+  (goal 379ecb65 | job 59ecdf0b) - the 24h TTL lapsed naturally and
+  fixes a0f0119 (decision_open) + 1a9b053 (visible binding) are proven
+  live.
+- The RED drill-b2-2 residue row (goal NULL) renders the same expired
+  treatment.
+- The decided apr-482003a569cae6a392e1bc50 no longer appears among open
+  approvals: a decided approval exposes NO decision control (replay
+  surface closure for the Gate D approve path).
+- Counts: goals 5 (Gate D goal displays completed), running 0, blocked
+  1, open approvals 2, failed 0, dead-letter 0; chips
+  execution:false / remote_runner:false / hermes_mode:observe_only.
+
 ## Disposition
 
 - apr-72218a1788f485fa5ad3c65c is PRESERVED as audit evidence -
