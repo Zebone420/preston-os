@@ -506,6 +506,84 @@ describe('orchestrate-once - approve-before-park ordering (Gate D A7 second find
   });
 });
 
+describe('orchestrate-once - execution-time expiry (CL-3c synthetic drill findings)', () => {
+  // Live drill finding (2026-08-06): synthetically tightening expires_at on
+  // an APPROVED record can never produce expired_at_execution - expires_at
+  // is hash-bound, so the tamper check fires first (action_hash_mismatch).
+  // That precedence is correct: a mutated validity window is tampering, not
+  // expiry. The canonical expired_at_execution therefore needs a record
+  // whose window lapsed WITHOUT mutation - minted, decided, and expired all
+  // with consistent hash-bound values.
+  async function seedGatedWithApproval(
+    db: ReturnType<typeof makeFakeDb>,
+    stamps: { created_at: string; decided_at: string; expires_at: string },
+  ) {
+    await insertMasterGoal(db.client, goal());
+    const d = decomposeGoal(goal(), [{
+      local_id: 'b', kind: 'migration', title: 'apply 0011',
+      objective: 'migrate the database and deploy', depends_on_local: [],
+    }], (l) => `job-0000-${l}`, NOW);
+    if (!d.ok) throw new Error('decompose');
+    for (const j of d.jobs) await insertGoalJob(db.client, j);
+    const jb = db.rowsOf('goal_jobs')[0];
+    jb.assigned_role = 'claude';
+    jb.approval_id = 'apr-00000001';
+    const created = await insertJobApproval(db.client, {
+      approval_id: 'apr-00000001', goal_id: 'goal-00000001',
+      job: {
+        id: 'job-0000-b', kind: 'migration',
+        objective: 'migrate the database and deploy', title: 'apply 0011',
+        risk_class: 'RED', assigned_role: 'claude',
+      },
+      owner_identity: OWNER,
+      created_at: stamps.created_at, expires_at: stamps.expires_at,
+    });
+    if (!created.ok) throw new Error('approval');
+    Object.assign(db.rowsOf('orchestration_approvals')[0], {
+      status: 'approved', decided_at: stamps.decided_at, nonce: 'decide-1',
+    });
+    return jb;
+  }
+
+  it('a lapsed unmutated window refuses expired_at_execution end to end', async () => {
+    const db = makeFakeDb();
+    // Hash minted WITH the lapsed window: decided before expiry, expiry
+    // before the execution clock (NOW). Hash matches; only time refuses.
+    const jb = await seedGatedWithApproval(db, {
+      created_at: '2026-07-23T09:00:00.000Z',
+      decided_at: '2026-07-23T10:00:00.000Z',
+      expires_at: '2026-07-23T11:00:00.000Z', // < NOW (12:00)
+    });
+    const r = await dispatch(db, { maxIterations: 10 });
+    expect(r.exitCode).toBe(EXIT.ok);
+    expect(r.summary.stoppedReason).toBe('awaiting_owner_approval');
+    expect(r.summary.unlockRefusals).toEqual([
+      { job_id: 'job-0000-b', reason: 'expired_at_execution' },
+    ]);
+    expect(jb.status).toBe('awaiting_approval');
+    expect(jb.requires_approval).toBe(true);
+    expect(jb.executed).toBe(false);
+  });
+
+  it('a post-decision tightened window breaks the hash binding first (live finding)', async () => {
+    const db = makeFakeDb();
+    const jb = await seedGatedWithApproval(db, {
+      created_at: NOW,
+      decided_at: NOW,
+      expires_at: '2026-07-23T20:00:00.000Z', // valid at mint + decision
+    });
+    // Synthetic tightening mutates a hash-bound field after decision.
+    db.rowsOf('orchestration_approvals')[0].expires_at = NOW;
+    const r = await dispatch(db, { maxIterations: 10 });
+    expect(r.summary.stoppedReason).toBe('awaiting_owner_approval');
+    expect(r.summary.unlockRefusals).toEqual([
+      { job_id: 'job-0000-b', reason: 'action_hash_mismatch' },
+    ]);
+    expect(jb.status).toBe('awaiting_approval');
+    expect(jb.executed).toBe(false);
+  });
+});
+
 describe('orchestrate-once - parked goals do not starve younger goals (Gate D A7)', () => {
   // Live finding on the deployed staging host (2026-08-05): an older blocked
   // goal whose only non-terminal job awaited a pending (expired-undecided)
