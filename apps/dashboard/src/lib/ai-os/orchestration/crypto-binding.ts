@@ -62,6 +62,20 @@ export function canonicalActionHash(e: ActionEnvelope): string {
 // the job's action, resource, owner, risk, or validity window differs at
 // execution from what the owner approved, the digest differs and execution is
 // refused. Deterministic derivation (kind + objective/title, goal_job:<id>).
+// Timestamps round-trip through Postgres timestamptz: minted as
+// `2026-08-06T00:40:56.506Z` but read back via PostgREST as
+// `2026-08-06T00:40:56.506+00:00`. Hashing the RAW string made every real-DB
+// driver verification fail action_hash_mismatch while string-preserving test
+// fakes passed (Gate D A7 live finding, 2026-08-06). Canonicalize both mint
+// and verify to the instant's toISOString() form: the bound VALUE is the
+// instant, not its representation. Mint-time inputs are already toISOString
+// output, so existing stored hashes remain valid. An unparseable timestamp
+// stays raw and the digest still refuses (fail-closed).
+const canonicalInstant = (s: string): string => {
+  const ms = Date.parse(s);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : s;
+};
+
 export function jobApprovalEnvelope(args: {
   approval_id: string;
   job_kind: string;
@@ -83,8 +97,8 @@ export function jobApprovalEnvelope(args: {
     environment: 'staging',
     owner_identity: args.owner_identity,
     risk_class: args.risk_class,
-    created_at: args.created_at,
-    expires_at: args.expires_at,
+    created_at: canonicalInstant(args.created_at),
+    expires_at: canonicalInstant(args.expires_at),
     job_kind: args.job_kind,
     job_objective: args.job_objective,
     job_title: args.job_title,

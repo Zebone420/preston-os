@@ -471,6 +471,29 @@ describe('orchestrate-once - approve-before-park ordering (Gate D A7 second find
     expect(jb.status).toBe('awaiting_approval'); // parked, never unlocked
     expect(jb.requires_approval).toBe(true);
     expect(jb.executed).toBe(false);
+    // The refusal is no longer silent (Gate D A7): the deterministic reason
+    // surfaces in the summary for the oneshot log.
+    expect(r.summary.unlockRefusals).toEqual([
+      { job_id: 'job-0000-b', reason: 'action_hash_mismatch' },
+    ]);
+  });
+
+  it('verification survives the Postgres timestamptz round-trip (live A7 bug)', async () => {
+    const db = makeFakeDb();
+    await seedApprovedPending(db);
+    const rec = db.rowsOf('orchestration_approvals')[0];
+    Object.assign(rec, { status: 'approved', decided_at: NOW, nonce: 'decide-1' });
+    // Simulate PostgREST reading timestamptz columns back: same instants,
+    // different representation (+00:00 offset instead of Z). The stored
+    // action_hash was minted from the Z-form strings.
+    rec.created_at = String(rec.created_at).replace('Z', '+00:00');
+    rec.expires_at = String(rec.expires_at).replace('Z', '+00:00');
+    rec.decided_at = String(rec.decided_at).replace('Z', '+00:00');
+    const r = await dispatch(db, { maxIterations: 10 });
+    expect(r.summary.stoppedReason).toBe('completed');
+    const jb = db.rowsOf('goal_jobs')[0];
+    expect(jb.status).toBe('completed');
+    expect(jb.executed).toBe(false);
   });
 
   it('an UNDECIDED pending gated job still parks exactly as before', async () => {

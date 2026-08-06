@@ -355,7 +355,7 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
     client, goalId, seams.clock, input.maxIterations ?? 5, depends, lockCtx,
     seams.newRunId,
   );
-  log({ level: 'info', command, correlationId, event: 'orchestrate_once', goal: goalId, cycles: r.cycles, halted: r.halted, reason: r.reason, ...(skippedParked.length ? { skippedParked } : {}) });
+  log({ level: 'info', command, correlationId, event: 'orchestrate_once', goal: goalId, cycles: r.cycles, halted: r.halted, reason: r.reason, ...(skippedParked.length ? { skippedParked } : {}), ...(r.unlockRefusals?.length ? { unlockRefusals: r.unlockRefusals } : {}) });
 
   if (r.halted) {
     if (r.reason.includes('owner_stop')) {
@@ -380,7 +380,7 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
     // invocation resumes from the durable state (restart-safe by design).
     return { exitCode: EXIT.ok, summary: { goal: goalId, cycles: r.cycles, stoppedReason: 'cycle_budget_exhausted', lastReason: r.reason } };
   }
-  return { exitCode: EXIT.ok, summary: { goal: goalId, cycles: r.cycles, stoppedReason: r.reason, ...(skippedParked.length ? { skippedParked } : {}) } };
+  return { exitCode: EXIT.ok, summary: { goal: goalId, cycles: r.cycles, stoppedReason: r.reason, ...(skippedParked.length ? { skippedParked } : {}), ...(r.unlockRefusals?.length ? { unlockRefusals: r.unlockRefusals } : {}) } };
 }
 
 export async function runDispatcher(input: DispatcherInput): Promise<DispatcherResult> {

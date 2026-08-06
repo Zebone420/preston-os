@@ -148,6 +148,10 @@ export interface DriverStepResult {
   actions: EngineAction[];
   persisted: number; // number of DB transitions applied
   lockRequired: boolean; // an edit job could not run: no lock context (#2)
+  // Populated when an approval-gated job's record was read but REFUSED by
+  // verifyAuthoritativeApproval. Observability only (Gate D A7: a silent
+  // refusal cost a full drill cycle) - never used for authorization.
+  unlockRefusals?: Array<{ job_id: string; reason: string }>;
 }
 
 // Advance one durable step. Halts fail-closed on owner_stop/execution-disabled
@@ -200,6 +204,7 @@ export async function driverStep(
   // semantics are IDENTICAL for both statuses; only the CAS from-status
   // differs. A pending gated job whose record fails verification still
   // parks exactly as before (fail-closed).
+  const unlockRefusals: Array<{ job_id: string; reason: string }> = [];
   for (const job of state.jobs) {
     if ((job.status !== 'awaiting_approval' && job.status !== 'pending') ||
         !job.requires_approval || !job.approval_id) continue;
@@ -239,8 +244,12 @@ export async function driverStep(
         risk_class: job.risk_class, assigned_role: job.assigned_role ?? null,
       }, nowIso, job.status === 'pending' ? 'pending' : 'awaiting_approval');
       if (t.ok) { job.requires_approval = false; job.status = 'ready'; }
+    } else {
+      // not authoritatively approved => stays gated (fail-closed). Surface
+      // the deterministic refusal reason so a refused unlock is DIAGNOSABLE
+      // from the oneshot log instead of silently re-parking (Gate D A7).
+      unlockRefusals.push({ job_id: job.id, reason: check.reason });
     }
-    // not authoritatively approved => stays awaiting_approval (fail-closed)
   }
 
   // Restart recovery (audit #4): a job persisted as in_progress across a step
@@ -274,7 +283,11 @@ export async function driverStep(
   );
   if (nonTerminalJobs.length > 0 &&
       nonTerminalJobs.every((j) => j.status === 'awaiting_approval')) {
-    return { halted: false, reason: 'awaiting_owner_approval', actions: [], persisted: 0, lockRequired: false };
+    return {
+      halted: false, reason: 'awaiting_owner_approval', actions: [], persisted: 0,
+      lockRequired: false,
+      ...(unlockRefusals.length ? { unlockRefusals } : {}),
+    };
   }
 
   // Hard-cap preflight (audit #12 MAJOR): never RESERVE past the durable cap.
@@ -431,7 +444,10 @@ export async function driverStep(
     const gt = await transitionGoal(client, goalId, state.goal.status, s.status, nowIso);
     if (!gt.ok) reason = `${s.reason}:goal_cas_unapplied`;
   }
-  return { halted: false, reason, actions: s.actions, persisted, lockRequired };
+  return {
+    halted: false, reason, actions: s.actions, persisted, lockRequired,
+    ...(unlockRefusals.length ? { unlockRefusals } : {}),
+  };
 }
 
 // Restart-safe drive: bounded loop over driverStep until done/halted. Reloads
@@ -445,12 +461,14 @@ export async function driveGoal(
   depends: (jobId: string) => string[] = () => [],
   lockCtx?: DriverLockContext,
   newRunId: () => string = () => randomUUID(),
-): Promise<{ cycles: number; halted: boolean; reason: string }> {
+): Promise<{ cycles: number; halted: boolean; reason: string; unlockRefusals?: Array<{ job_id: string; reason: string }> }> {
   let cycles = 0;
   let lastReason = 'noop';
+  let lastRefusals: Array<{ job_id: string; reason: string }> | undefined;
   while (cycles++ < Math.min(maxCycles, 5000)) {
     const r = await driverStep(client, goalId, now(), depends, lockCtx, newRunId);
     lastReason = r.reason;
+    lastRefusals = r.unlockRefusals;
     if (r.halted) return { cycles, halted: true, reason: r.reason };
     // Fail closed (audit #2): an edit job needed a lock but no lock context was
     // provided and nothing else progressed - do not spin; halt with a clear,
@@ -483,7 +501,12 @@ export async function driveGoal(
     }
     const blockedOnApproval = state.jobs.some((j) => j.status === 'awaiting_approval') &&
       state.jobs.every((j) => ['completed', 'cancelled', 'dead_lettered', 'awaiting_approval'].includes(j.status));
-    if (blockedOnApproval) return { cycles, halted: false, reason: 'awaiting_owner_approval' };
+    if (blockedOnApproval) {
+      return {
+        cycles, halted: false, reason: 'awaiting_owner_approval',
+        ...(lastRefusals?.length ? { unlockRefusals: lastRefusals } : {}),
+      };
+    }
   }
   return { cycles, halted: true, reason: lastReason };
 }
