@@ -74,21 +74,33 @@ describe('central navigation configuration', () => {
     }
   });
 
-  it('Work contains Goals, Composer, and Approvals (the routes that exist)', () => {
+  it('Work contains Orchestration, Composer, and Approvals', () => {
     const work = NAV_TREE.find(
       (e) => e.kind === 'group' && e.label === 'Work',
     );
     if (!work || work.kind !== 'group') throw new Error('Work group missing');
     const labels = work.items.map((i) => i.label);
-    expect(labels).toContain('Goals');
+    expect(labels).toContain('Orchestration');
     expect(labels).toContain('Composer');
     expect(labels).toContain('Approvals');
     expect(
-      work.items.find((i) => i.label === 'Goals')!.href,
+      work.items.find((i) => i.label === 'Orchestration')!.href,
     ).toBe('/os/orchestration');
     expect(
       work.items.find((i) => i.label === 'Composer')!.href,
     ).toBe('/os/composer');
+  });
+
+  it('an Orchestration-labeled link reaches /os/orchestration (owner req)', () => {
+    // 2026-08-06 phone finding: the orchestration surface must be
+    // findable by the literal label "Orchestration" in the shared menu
+    // (desktop panel and mobile dropdown both render NAV_TREE).
+    const items = NAV_TREE.flatMap((e) =>
+      e.kind === 'group' ? e.items : [e],
+    );
+    const orch = items.filter((i) => i.label === 'Orchestration');
+    expect(orch).toHaveLength(1);
+    expect(orch[0].href).toBe('/os/orchestration');
   });
 
   it('missing requested destinations are documented, not dead-linked', () => {

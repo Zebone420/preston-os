@@ -34,12 +34,12 @@ export const NAV_TREE: ReadonlyArray<NavEntry> = [
     kind: 'group',
     label: 'Work',
     items: [
-      // Goals = the Phase 7 master-goal orchestration surface. This is
-      // ALSO the requested "AI System > Orchestration" destination; it
-      // is mapped once, here, to keep Goals one click away and avoid a
-      // duplicate link (cross-reference documented in
-      // MISSING_DESTINATIONS).
-      { href: '/os/orchestration', label: 'Goals', match: 'prefix' },
+      // Orchestration = the Phase 7 master-goal orchestration surface
+      // (goals, jobs, approvals). Owner-requested label (2026-08-06):
+      // the link must be findable as "Orchestration" on phone. Mapped
+      // once, here, to keep it one click away and avoid a duplicate
+      // link (cross-reference documented in MISSING_DESTINATIONS).
+      { href: '/os/orchestration', label: 'Orchestration', match: 'prefix' },
       // Composer = the Goals/Tasks Request Composer (two-step NL
       // interpret -> owner confirm). Sits beside Goals: it is how new
       // goal graphs are requested.
@@ -85,7 +85,7 @@ export const NAV_TREE: ReadonlyArray<NavEntry> = [
       { href: '/os', label: 'OS Control', match: 'exact' },
       { href: '/audit', label: 'Logs', match: 'prefix' },
       { href: '/remote', label: 'Remote', match: 'prefix' },
-      // Orchestration: mapped once under Work > Goals (same page).
+      // Orchestration: mapped once under Work (same page).
     ],
   },
   // Settings: no route exists - omitted, see MISSING_DESTINATIONS.
@@ -126,7 +126,7 @@ export const MISSING_DESTINATIONS: ReadonlyArray<{
   },
   {
     requested: 'AI System > Orchestration', status: 'covered',
-    note: 'mapped once under Work > Goals (/os/orchestration)',
+    note: 'direct Orchestration link under Work (/os/orchestration)',
   },
   { requested: 'Settings', status: 'missing', note: 'no settings route' },
 ];
