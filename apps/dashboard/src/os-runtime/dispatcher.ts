@@ -16,6 +16,7 @@ import {
   type RuntimeClient,
 } from '../lib/ai-os/store';
 import {
+  checkClaimedApprovalUnlockable,
   driveGoal,
   JOB_READ_LIMIT,
   MAX_GOAL_JOBS,
@@ -26,7 +27,6 @@ import {
   listGoalsByStatus,
   listJobsForGoal,
   probeSimulationPinViolations,
-  readApprovalRecord,
 } from '../lib/ai-os/orchestration/store';
 import { isMigrationAbsentError } from '../lib/ai-os/orchestration/read-model';
 import { missingRuntimeEnv } from './supabase-runtime';
@@ -147,6 +147,12 @@ function hermesAgent(env: Record<string, string | undefined>, now: string): Agen
 // job-less goal would only burn its bounded iteration budget.
 const DRIVEABLE_GOAL_STATUSES = ['decomposed', 'running', 'blocked'] as const;
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'cancelled', 'dead_lettered']);
+// Park-scan refusal reasons that are ORDINARY parking (nothing decided yet,
+// or nothing decidable) rather than a decided-but-unverifiable record worth
+// surfacing in the tick log.
+const QUIET_PARK_REASONS = new Set([
+  'job_has_no_approval_id', 'no_approval_record', 'not_approved',
+]);
 const BASE_COMMIT_RE = /^[0-9a-f]{7,40}$/i;
 // Per-status selection window. Oldest-first per status, so the globally oldest
 // driveable goal is ALWAYS inside the merged window (no starvation).
@@ -275,6 +281,7 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
   // (fail-closed), and approval enforcement itself is untouched - the
   // driver's authoritative verification remains the only unlock authority.
   const skippedParked: string[] = [];
+  const unverifiableApprovals: Array<{ goal: string; job_id: string; reason: string }> = [];
   let selected: Record<string, unknown> | null = null;
   for (const cand of ordered) {
     const candId = String(cand.id);
@@ -293,17 +300,30 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
     const allParked = nonTerminal.length > 0 &&
       nonTerminal.every((j) => String(j.status) === 'awaiting_approval');
     if (allParked) {
-      // If any linked record CLAIMS 'approved', drive - the driver's
-      // authoritative verification (hash/owner/scope/nonce/expiry) is the
-      // only unlock authority. Otherwise skip cleanly and keep scanning.
-      let anyClaimsApproved = false;
+      // A record that merely CLAIMS 'approved' is not sufficient to spend
+      // the run on this goal: a decided-but-unverifiable approval (e.g.
+      // action_hash_mismatch or expired_at_execution residue) can never
+      // unlock, so selecting the goal would re-drive it on EVERY tick and
+      // starve younger goals behind it (live staging finding, 2026-08-06).
+      // Pre-check each claimed approval with the driver's own verification
+      // composition (checkClaimedApprovalUnlockable) and drive ONLY when
+      // some claimed approval authoritatively verifies. The driver remains
+      // the sole unlock authority: it re-verifies and CAS-clears the gate
+      // itself, so a scan-time pass that fails at drive time still parks
+      // fail-closed, and nothing here ever treats a refusal as approved.
+      let unlockable = false;
       for (const j of nonTerminal) {
-        const approvalId = j.approval_id ? String(j.approval_id) : '';
-        if (!approvalId) continue; // parked with nothing decidable yet
-        const record = await readApprovalRecord(client, approvalId);
-        if (record && String(record.status) === 'approved') { anyClaimsApproved = true; break; }
+        const check = await checkClaimedApprovalUnlockable(
+          client, cand, j, seams.clock(),
+        );
+        if (check.ok) { unlockable = true; break; }
+        if (!QUIET_PARK_REASONS.has(check.reason)) {
+          unverifiableApprovals.push({
+            goal: candId, job_id: String(j.id), reason: check.reason,
+          });
+        }
       }
-      if (!anyClaimsApproved) {
+      if (!unlockable) {
         log({ level: 'info', command, correlationId, event: 'orchestrate_once', goal: candId, stoppedReason: 'awaiting_owner_approval', skipped: true });
         skippedParked.push(candId);
         continue;
@@ -313,9 +333,10 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
     break;
   }
   if (selected === null) {
-    // Every candidate in the window is parked on an undecided owner approval.
-    log({ level: 'info', command, correlationId, event: 'orchestrate_once', stoppedReason: 'awaiting_owner_approval', skipped: true, skippedParked });
-    return { exitCode: EXIT.ok, summary: { goal: skippedParked[0], skippedParked, stoppedReason: 'awaiting_owner_approval', skipped: true } };
+    // Every candidate in the window is parked: undecided owner approvals
+    // and/or decided-but-unverifiable residue (reasons surfaced below).
+    log({ level: 'info', command, correlationId, event: 'orchestrate_once', stoppedReason: 'awaiting_owner_approval', skipped: true, skippedParked, ...(unverifiableApprovals.length ? { unverifiableApprovals } : {}) });
+    return { exitCode: EXIT.ok, summary: { goal: skippedParked[0], skippedParked, stoppedReason: 'awaiting_owner_approval', skipped: true, ...(unverifiableApprovals.length ? { unverifiableApprovals } : {}) } };
   }
   const goalId = String(selected.id);
 
@@ -355,7 +376,7 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
     client, goalId, seams.clock, input.maxIterations ?? 5, depends, lockCtx,
     seams.newRunId,
   );
-  log({ level: 'info', command, correlationId, event: 'orchestrate_once', goal: goalId, cycles: r.cycles, halted: r.halted, reason: r.reason, ...(skippedParked.length ? { skippedParked } : {}), ...(r.unlockRefusals?.length ? { unlockRefusals: r.unlockRefusals } : {}) });
+  log({ level: 'info', command, correlationId, event: 'orchestrate_once', goal: goalId, cycles: r.cycles, halted: r.halted, reason: r.reason, ...(skippedParked.length ? { skippedParked } : {}), ...(unverifiableApprovals.length ? { unverifiableApprovals } : {}), ...(r.unlockRefusals?.length ? { unlockRefusals: r.unlockRefusals } : {}) });
 
   if (r.halted) {
     if (r.reason.includes('owner_stop')) {
@@ -380,7 +401,7 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
     // invocation resumes from the durable state (restart-safe by design).
     return { exitCode: EXIT.ok, summary: { goal: goalId, cycles: r.cycles, stoppedReason: 'cycle_budget_exhausted', lastReason: r.reason } };
   }
-  return { exitCode: EXIT.ok, summary: { goal: goalId, cycles: r.cycles, stoppedReason: r.reason, ...(skippedParked.length ? { skippedParked } : {}), ...(r.unlockRefusals?.length ? { unlockRefusals: r.unlockRefusals } : {}) } };
+  return { exitCode: EXIT.ok, summary: { goal: goalId, cycles: r.cycles, stoppedReason: r.reason, ...(skippedParked.length ? { skippedParked } : {}), ...(unverifiableApprovals.length ? { unverifiableApprovals } : {}), ...(r.unlockRefusals?.length ? { unlockRefusals: r.unlockRefusals } : {}) } };
 }
 
 export async function runDispatcher(input: DispatcherInput): Promise<DispatcherResult> {

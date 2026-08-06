@@ -692,6 +692,154 @@ describe('orchestrate-once - parked goals do not starve younger goals (Gate D A7
   });
 });
 
+describe('orchestrate-once - decided-but-unverifiable approvals never monopolize ticks (remote-live activation finding)', () => {
+  // Live staging finding (2026-08-06, activation run): a residual goal
+  // carried a job whose approval record CLAIMED 'approved' but permanently
+  // failed authoritative verification (action_hash_mismatch residue from
+  // the Gate D defect drills). The claims-approved carve-out selected that
+  // goal on EVERY timer tick, drove one cycle, refused the unlock, and
+  // ended the run - so a younger phone-created goal was never reached and
+  // never even appeared in the tick log. Pin: such a head is SKIPPED (with
+  // its deterministic refusal reason surfaced) and younger goals drive.
+  // Approval verification itself is untouched: nothing here unlocks, and
+  // the residue rows are never mutated.
+
+  // Old gated goal parks on its first drive, then a forged record claiming
+  // 'approved' (hash binds nothing) is attached - the live residue shape.
+  async function seedParkedForgedHead(db: ReturnType<typeof makeFakeDb>) {
+    await insertMasterGoal(db.client, goal());
+    const dOld = decomposeGoal(goal(), [{
+      local_id: 'b', kind: 'migration', title: 'apply 0011',
+      objective: 'migrate the database and deploy', depends_on_local: [],
+    }], (l) => `job-0000-${l}`, NOW);
+    if (!dOld.ok) throw new Error('decompose old');
+    for (const j of dOld.jobs) await insertGoalJob(db.client, j);
+    const r1 = await dispatch(db, { maxIterations: 10 });
+    expect(r1.summary.stoppedReason).toBe('awaiting_owner_approval');
+    const oldJob = db.rowsOf('goal_jobs').find((j) => j.id === 'job-0000-b')!;
+    expect(oldJob.status).toBe('awaiting_approval');
+    oldJob.assigned_role = 'claude';
+    oldJob.approval_id = 'apr-forged';
+    db.rowsOf('orchestration_approvals').push({
+      approval_id: 'apr-forged', goal_id: 'goal-00000001', job_id: 'job-0000-b',
+      status: 'approved', owner_identity: OWNER, action_hash: 'wrong',
+      environment: 'staging', nonce: 'n', decided_at: NOW,
+      created_at: NOW, expires_at: '2026-07-23T20:00:00.000Z',
+    });
+    return oldJob;
+  }
+
+  function seedYoungerGreen(db: ReturnType<typeof makeFakeDb>) {
+    const LATER = '2026-07-23T13:00:00.000Z';
+    const freshGoal = goal({
+      id: 'goal-00000002', correlation_id: 'corr-00000002',
+      created_at: LATER, updated_at: LATER,
+    });
+    return insertMasterGoal(db.client, freshGoal).then(() => {
+      const dNew = decomposeGoal(freshGoal, [{
+        local_id: 'a', kind: 'code', title: 'a', objective: 'add x',
+        depends_on_local: [],
+      }], (l) => `job-0001-${l}`, LATER);
+      if (!dNew.ok) throw new Error('decompose fresh');
+      return Promise.all(dNew.jobs.map((j) => insertGoalJob(db.client, j)));
+    });
+  }
+
+  it('skips the hash-invalid claimed-approved head; the younger goal completes', async () => {
+    const db = makeFakeDb();
+    const oldJob = await seedParkedForgedHead(db);
+    const oldGoalRow = db.rowsOf('master_goals').find((g) => g.id === 'goal-00000001')!;
+    const oldIter = Number(oldGoalRow.iteration);
+    await seedYoungerGreen(db);
+
+    const r = await dispatch(db, { maxIterations: 10 });
+    expect(r.exitCode).toBe(EXIT.ok);
+    expect(r.summary.goal).toBe('goal-00000002');
+    expect(r.summary.stoppedReason).toBe('completed');
+    expect(r.summary.skippedParked).toEqual(['goal-00000001']);
+    // The head's refusal is surfaced deterministically, never silently.
+    expect(r.summary.unverifiableApprovals).toEqual([
+      { goal: 'goal-00000001', job_id: 'job-0000-b', reason: 'action_hash_mismatch' },
+    ]);
+    const freshJob = db.rowsOf('goal_jobs').find((j) => j.id === 'job-0001-a')!;
+    expect(freshJob.status).toBe('completed');
+    expect(freshJob.executed).toBe(false);
+    expect(db.rowsOf('master_goals').find((g) => g.id === 'goal-00000002')!.status).toBe('completed');
+    // The unverifiable head: untouched, still gated, never unlocked, no burn.
+    expect(oldJob.status).toBe('awaiting_approval');
+    expect(oldJob.requires_approval).toBe(true);
+    expect(oldJob.executed).toBe(false);
+    expect(Number(oldGoalRow.iteration)).toBe(oldIter);
+    expect(db.rowsOf('orchestration_approvals').find((a) => a.approval_id === 'apr-forged')!.action_hash).toBe('wrong');
+  });
+
+  it('a lapsed (expired_at_execution) approved head is skipped the same way', async () => {
+    const db = makeFakeDb();
+    await insertMasterGoal(db.client, goal());
+    const dOld = decomposeGoal(goal(), [{
+      local_id: 'b', kind: 'migration', title: 'apply 0011',
+      objective: 'migrate the database and deploy', depends_on_local: [],
+    }], (l) => `job-0000-${l}`, NOW);
+    if (!dOld.ok) throw new Error('decompose old');
+    for (const j of dOld.jobs) await insertGoalJob(db.client, j);
+    const r1 = await dispatch(db, { maxIterations: 10 });
+    expect(r1.summary.stoppedReason).toBe('awaiting_owner_approval');
+    const oldJob = db.rowsOf('goal_jobs').find((j) => j.id === 'job-0000-b')!;
+    // Genuinely minted, decided, and lapsed WITHOUT mutation: the hash
+    // binds; only the execution clock refuses (CL-3c canonical shape).
+    oldJob.assigned_role = 'claude';
+    oldJob.approval_id = 'apr-00000001';
+    const created = await insertJobApproval(db.client, {
+      approval_id: 'apr-00000001', goal_id: 'goal-00000001',
+      job: {
+        id: 'job-0000-b', kind: 'migration',
+        objective: 'migrate the database and deploy', title: 'apply 0011',
+        risk_class: 'RED', assigned_role: 'claude',
+      },
+      owner_identity: OWNER,
+      created_at: '2026-07-23T09:00:00.000Z',
+      expires_at: '2026-07-23T11:00:00.000Z', // < NOW (12:00)
+    });
+    expect(created.ok).toBe(true);
+    Object.assign(db.rowsOf('orchestration_approvals')[0], {
+      status: 'approved', decided_at: '2026-07-23T10:00:00.000Z',
+      nonce: 'decide-1',
+    });
+    await seedYoungerGreen(db);
+
+    const r = await dispatch(db, { maxIterations: 10 });
+    expect(r.summary.goal).toBe('goal-00000002');
+    expect(r.summary.stoppedReason).toBe('completed');
+    expect(r.summary.skippedParked).toEqual(['goal-00000001']);
+    expect(r.summary.unverifiableApprovals).toEqual([
+      { goal: 'goal-00000001', job_id: 'job-0000-b', reason: 'expired_at_execution' },
+    ]);
+    expect(oldJob.status).toBe('awaiting_approval');
+    expect(oldJob.executed).toBe(false);
+  });
+
+  it('alone in the queue, an unverifiable head exits clean all-parked, naming the reason', async () => {
+    const db = makeFakeDb();
+    const oldJob = await seedParkedForgedHead(db);
+    const oldGoalRow = db.rowsOf('master_goals')[0];
+    const oldIter = Number(oldGoalRow.iteration);
+    // Repeated timer ticks: skipped every time, no drive, no budget burn.
+    for (let i = 0; i < 3; i++) {
+      const r = await dispatch(db, { maxIterations: 10 });
+      expect(r.exitCode).toBe(EXIT.ok);
+      expect(r.summary.stoppedReason).toBe('awaiting_owner_approval');
+      expect(r.summary.skipped).toBe(true);
+      expect(r.summary.skippedParked).toEqual(['goal-00000001']);
+      expect(r.summary.unverifiableApprovals).toEqual([
+        { goal: 'goal-00000001', job_id: 'job-0000-b', reason: 'action_hash_mismatch' },
+      ]);
+    }
+    expect(Number(oldGoalRow.iteration)).toBe(oldIter);
+    expect(oldJob.status).toBe('awaiting_approval');
+    expect(oldJob.executed).toBe(false);
+  });
+});
+
 describe('orchestrate-once - leases, locks, and recovery', () => {
   it('never disturbs a LIVE execution lease held by another run', async () => {
     const db = makeFakeDb();

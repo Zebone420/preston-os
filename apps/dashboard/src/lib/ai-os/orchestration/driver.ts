@@ -142,6 +142,47 @@ export async function loadGoalState(
   return { goal, jobs, iteration: num(grow.iteration, 0), started_at: goal.created_at };
 }
 
+// Scan-time authoritative pre-check of a PARKED gated job's claimed
+// approval, for the dispatcher's goal selection. Rebuilds the job and the
+// expected canonical action envelope EXACTLY as driverStep does (same row
+// coercions via jobFromRow, same envelope fields, same clock semantics)
+// and applies the same verifyAuthoritativeApproval. Purpose: a record that
+// merely CLAIMS 'approved' but can never verify (e.g. action_hash_mismatch
+// or expired_at_execution residue) must not cause the selector to spend
+// every bounded run re-driving the same goal, starving younger goals
+// (live staging finding, 2026-08-06). This is NEVER an unlock authority:
+// the driver re-verifies and CAS-clears the gate itself on whichever goal
+// is selected, and a scan-time pass that fails at drive time still parks
+// fail-closed. Read failures surface as refusals (toward NOT driving).
+export async function checkClaimedApprovalUnlockable(
+  client: RuntimeClient,
+  goalRow: Record<string, unknown>,
+  jobRow: Record<string, unknown>,
+  nowMs: number,
+): Promise<{ ok: boolean; reason: string }> {
+  const job = jobFromRow(jobRow);
+  if (!job.approval_id) return { ok: false, reason: 'job_has_no_approval_id' };
+  const record = await readApprovalRecord(client, job.approval_id);
+  if (!record) return { ok: false, reason: 'no_approval_record' };
+  if (String(record.status) !== 'approved') return { ok: false, reason: 'not_approved' };
+  const owner = String(goalRow.requested_by ?? '');
+  const expectedHash = canonicalActionHash(jobApprovalEnvelope({
+    approval_id: job.approval_id,
+    job_kind: job.kind,
+    job_id: job.id,
+    job_objective: job.objective,
+    job_title: job.title,
+    risk_class: job.risk_class,
+    assigned_role: job.assigned_role ?? '',
+    owner_identity: owner,
+    created_at: String(record.created_at ?? ''),
+    expires_at: String(record.expires_at ?? ''),
+  }));
+  return verifyAuthoritativeApproval(record, job, {
+    owner_identity: owner, action_hash: expectedHash,
+  }, nowMs);
+}
+
 export interface DriverStepResult {
   halted: boolean;
   reason: string;
