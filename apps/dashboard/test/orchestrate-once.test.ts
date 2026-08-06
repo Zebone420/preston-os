@@ -412,6 +412,77 @@ describe('orchestrate-once - approval parking (owner-only unlock)', () => {
   });
 });
 
+describe('orchestrate-once - approve-before-park ordering (Gate D A7 second finding)', () => {
+  // Live finding (2026-08-06): the owner decided the approval BEFORE the
+  // gated job was ever driven. The unlock loop only looked at
+  // awaiting_approval jobs, so the first oneshot parked the pre-approved
+  // pending job and returned awaiting_owner_approval - a fully approved
+  // goal needed a second oneshot. Pin: one invocation completes it.
+  async function seedApprovedPending(db: ReturnType<typeof makeFakeDb>) {
+    await insertMasterGoal(db.client, goal());
+    const d = decomposeGoal(goal(), [{
+      local_id: 'b', kind: 'migration', title: 'apply 0011',
+      objective: 'migrate the database and deploy', depends_on_local: [],
+    }], (l) => `job-0000-${l}`, NOW);
+    if (!d.ok) throw new Error('decompose');
+    for (const j of d.jobs) await insertGoalJob(db.client, j);
+    // Approval minted and decided while the job is still PENDING (never driven).
+    const jb = db.rowsOf('goal_jobs')[0];
+    jb.assigned_role = 'claude';
+    jb.approval_id = 'apr-00000001';
+    const created = await insertJobApproval(db.client, {
+      approval_id: 'apr-00000001', goal_id: 'goal-00000001',
+      job: {
+        id: 'job-0000-b', kind: 'migration',
+        objective: 'migrate the database and deploy', title: 'apply 0011',
+        risk_class: 'RED', assigned_role: 'claude',
+      },
+      owner_identity: OWNER, created_at: NOW, expires_at: '2026-07-23T20:00:00.000Z',
+    });
+    if (!created.ok) throw new Error('approval');
+  }
+
+  it('a pre-approved pending gated job completes in ONE oneshot, executed=false', async () => {
+    const db = makeFakeDb();
+    await seedApprovedPending(db);
+    Object.assign(db.rowsOf('orchestration_approvals')[0], {
+      status: 'approved', decided_at: NOW, nonce: 'decide-1',
+    });
+    const r = await dispatch(db, { maxIterations: 10 });
+    expect(r.exitCode).toBe(EXIT.ok);
+    expect(r.summary.stoppedReason).toBe('completed');
+    const jb = db.rowsOf('goal_jobs')[0];
+    expect(jb.status).toBe('completed');
+    expect(jb.requires_approval).toBe(false);
+    expect(jb.executed).toBe(false);
+  });
+
+  it('a pre-approved-but-unverifiable pending job still parks (fail-closed)', async () => {
+    const db = makeFakeDb();
+    await seedApprovedPending(db);
+    Object.assign(db.rowsOf('orchestration_approvals')[0], {
+      status: 'approved', decided_at: NOW, nonce: 'decide-1',
+      action_hash: 'forged-wrong-hash',
+    });
+    const r = await dispatch(db, { maxIterations: 10 });
+    expect(r.exitCode).toBe(EXIT.ok);
+    expect(r.summary.stoppedReason).toBe('awaiting_owner_approval');
+    const jb = db.rowsOf('goal_jobs')[0];
+    expect(jb.status).toBe('awaiting_approval'); // parked, never unlocked
+    expect(jb.requires_approval).toBe(true);
+    expect(jb.executed).toBe(false);
+  });
+
+  it('an UNDECIDED pending gated job still parks exactly as before', async () => {
+    const db = makeFakeDb();
+    await seedApprovedPending(db); // record stays pending
+    const r = await dispatch(db, { maxIterations: 10 });
+    expect(r.summary.stoppedReason).toBe('awaiting_owner_approval');
+    expect(db.rowsOf('goal_jobs')[0].status).toBe('awaiting_approval');
+    expect(db.rowsOf('goal_jobs')[0].requires_approval).toBe(true);
+  });
+});
+
 describe('orchestrate-once - parked goals do not starve younger goals (Gate D A7)', () => {
   // Live finding on the deployed staging host (2026-08-05): an older blocked
   // goal whose only non-terminal job awaited a pending (expired-undecided)

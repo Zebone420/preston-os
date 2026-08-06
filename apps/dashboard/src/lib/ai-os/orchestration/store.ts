@@ -230,9 +230,14 @@ export function clearApprovalGate(
     objective: string; title: string; risk_class: string; assigned_role: string | null;
   },
   nowIso: string,
+  // Gate D A7 live finding (2026-08-06): an owner can decide the approval
+  // BEFORE the job is ever driven (approve-before-park), leaving the job
+  // 'pending' with a verified record. The CAS must clear from that status
+  // too; default preserves the original awaiting_approval shape.
+  fromStatus: 'awaiting_approval' | 'pending' = 'awaiting_approval',
 ): Promise<WriteOutcome> {
   return casStatus(
-    client, ORCH_TABLES.jobs, job.id, 'awaiting_approval',
+    client, ORCH_TABLES.jobs, job.id, fromStatus,
     { status: 'ready', requires_approval: false }, canTransitionJob, nowIso,
     [
       { col: 'approval_id', val: job.approval_id },

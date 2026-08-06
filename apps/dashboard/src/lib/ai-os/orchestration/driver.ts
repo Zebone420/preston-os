@@ -192,8 +192,17 @@ export async function driverStep(
   // or absent approval_id can never unlock execution - the record must be
   // approved, owner-bound, hash-bound, scope-bound, non-expired. This mutates
   // the in-memory state before the engine step and persists the clear.
+  // Includes 'pending' gated jobs (Gate D A7 live finding, 2026-08-06): the
+  // owner may decide the approval BEFORE the job is first driven. The old
+  // awaiting_approval-only condition skipped such a job, the engine then
+  // parked it, and driveGoal returned awaiting_owner_approval - so a fully
+  // approved goal needed a second oneshot to progress. Verification
+  // semantics are IDENTICAL for both statuses; only the CAS from-status
+  // differs. A pending gated job whose record fails verification still
+  // parks exactly as before (fail-closed).
   for (const job of state.jobs) {
-    if (job.status !== 'awaiting_approval' || !job.requires_approval || !job.approval_id) continue;
+    if ((job.status !== 'awaiting_approval' && job.status !== 'pending') ||
+        !job.requires_approval || !job.approval_id) continue;
     const record = await readApprovalRecord(client, job.approval_id);
     // Canonical SHA-256 authorization binding (audit #8): rebuild the SAME
     // action envelope the owner approved (from the job being executed + the
@@ -228,7 +237,7 @@ export async function driverStep(
         id: job.id, goal_id: job.goal_id, approval_id: job.approval_id,
         kind: job.kind, objective: job.objective, title: job.title,
         risk_class: job.risk_class, assigned_role: job.assigned_role ?? null,
-      }, nowIso);
+      }, nowIso, job.status === 'pending' ? 'pending' : 'awaiting_approval');
       if (t.ok) { job.requires_approval = false; job.status = 'ready'; }
     }
     // not authoritatively approved => stays awaiting_approval (fail-closed)
