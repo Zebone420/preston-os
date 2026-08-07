@@ -5,7 +5,7 @@ import {
   workerSimulateLoop,
   type WorkerOnceInput,
 } from '../lib/ai-os/worker-service';
-import { hermesHealth, hermesObserveLoop } from '../lib/ai-os/hermes-service';
+import { hermesHealth, hermesObserveLoop, hermesObserveOrchestration } from '../lib/ai-os/hermes-service';
 import type { ObserveCandidate } from '../lib/ai-os/orchestrator';
 import { buildHermesObserveBatch, runStagingWorkerCycle } from '../lib/ai-os/staging-sim';
 import type { AgentRecord } from '../lib/ai-os/types';
@@ -570,9 +570,18 @@ export async function runDispatcher(input: DispatcherInput): Promise<DispatcherR
       input.maxIterations ?? 5,
       now,
     );
+    // Phase 8: one bounded, idempotent orchestration STATUS observation per
+    // run (goals/approvals/failures aggregates -> orchestration_decisions).
+    // Read-only; approval_attention surfaces when an owner decision waits.
+    let orch: { status: string; approval_attention: boolean } | null = null;
+    try {
+      const o = await hermesObserveOrchestration(client, now);
+      orch = { status: o.status, approval_attention: o.approval_attention };
+    } catch { orch = null; }
     log({
       level: 'info', command, correlationId, event: 'hermes_loop',
       rounds: res.rounds, stoppedReason: res.stoppedReason, recorded: res.totalRecorded,
+      ...(orch ? { orchestration_status: orch.status, ...(orch.approval_attention ? { approval_attention: true } : {}) } : {}),
     });
     return {
       exitCode: res.stoppedReason === 'halted' ? EXIT.halted : EXIT.ok,
