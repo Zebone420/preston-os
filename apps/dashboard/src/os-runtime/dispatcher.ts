@@ -29,6 +29,8 @@ import {
   probeSimulationPinViolations,
 } from '../lib/ai-os/orchestration/store';
 import { isMigrationAbsentError } from '../lib/ai-os/orchestration/read-model';
+import { consumeRemoteIntakeOnce } from '../lib/ai-os/orchestration/remote-intake';
+import type { ComposerClient } from '../lib/ai-os/orchestration/composer-persist';
 import { resolveExecutionLevel } from '../lib/ai-os/execution-capability';
 import { buildRealExecutor } from './real-executor';
 import { missingRuntimeEnv } from './supabase-runtime';
@@ -249,6 +251,27 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
   if (pinProbe.rows.length > 0) {
     log({ level: 'error', command, correlationId, event: 'orchestrate_once', error: 'simulation pin violated somewhere in master_goals (fail-closed)' });
     return { exitCode: EXIT.error, summary: { error: 'simulation pin violated' } };
+  }
+
+  // Phase 8: consume REMOTE INTAKE requests (bounded, oldest-first) through
+  // the owner-equivalent composer pipeline BEFORE goal selection, so a
+  // phone/ChatGPT request submitted between ticks becomes a driveable goal
+  // on this same tick. Fail-open-to-skip: an unreadable/absent 0011 table
+  // or a per-row failure never blocks orchestration (each row is contained;
+  // rejected rows carry their reason for the remote status surface).
+  try {
+    // The runtime client is a real supabase-js client at runtime and thus
+    // carries .rpc(); the ComposerClient view exposes it to the composer's
+    // atomic submit_goal_decomposition path.
+    const intake = await consumeRemoteIntakeOnce(
+      client as unknown as ComposerClient, env,
+      new Date(seams.clock()).toISOString(),
+    );
+    if (intake.configured && (intake.consumed.length || intake.rejected.length || intake.errors.length)) {
+      log({ level: 'info', command, correlationId, event: 'remote_intake', consumed: intake.consumed, rejected: intake.rejected, ...(intake.errors.length ? { errors: intake.errors } : {}) });
+    }
+  } catch (e) {
+    log({ level: 'error', command, correlationId, event: 'remote_intake', error: e instanceof Error ? e.message.slice(0, 200) : 'intake failed' });
   }
 
   // Deterministic single-goal selection (fail-closed on every ambiguity).

@@ -54,11 +54,12 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // api/os/chatgpt is excluded alongside api/health: it is a server-to-server
-  // bearer-token intake route (Phase 5J) that self-authenticates inside the
-  // handler (CHATGPT_INTAKE_TOKEN, constant-time compared) - it carries no
-  // owner session cookie, so the cookie-session redirect must never intercept
-  // it (that would return an HTML redirect instead of the route's own
-  // fail-closed JSON 503/401 responses).
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/health|api/os/chatgpt).*)'],
+  // api/os/chatgpt and api/os/remote/* are excluded alongside api/health:
+  // they are server-to-server bearer-token routes (Phase 5J / Phase 8) that
+  // self-authenticate inside their handlers (constant-time token compare;
+  // the remote routes are ALSO re-authenticated by the 0011 DB gateway's
+  // stored token hash) - they carry no owner session cookie, so the
+  // cookie-session redirect must never intercept them (that would return an
+  // HTML redirect instead of the routes' own fail-closed JSON 503/401).
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/health|api/os/chatgpt|api/os/remote).*)'],
 };
