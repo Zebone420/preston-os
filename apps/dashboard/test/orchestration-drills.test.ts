@@ -123,7 +123,14 @@ describe('drill: retry budget then dead-letter', () => {
     let t = Date.parse(NOW);
     const r = await driveGoal(db.client, 'goal-00000001', () => (t += 1000), 50, depends);
     expect(db.rowsOf('goal_jobs').find((j) => j.id === 'job-0000-a')!.status).toBe('dead_lettered');
-    expect(r.halted || r.reason === 'completed').toBeTruthy();
+    // The engine's terminal verdict (stuck graph: job b's dependency can
+    // never complete) now exits the drive loop directly instead of spinning
+    // to the 50-cycle bound (2026-08-07 deadline-loop fix). The old pin
+    // accepted the halted-at-bound spin; the verdict itself is the contract.
+    expect(r.halted).toBe(false);
+    expect(r.reason).toBe('stuck_graph');
+    expect(r.cycles).toBeLessThanOrEqual(3);
+    expect(db.rowsOf('master_goals')[0].status).toBe('dead_lettered');
   });
 });
 

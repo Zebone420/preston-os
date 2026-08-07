@@ -193,6 +193,13 @@ export interface DriverStepResult {
   // verifyAuthoritativeApproval. Observability only (Gate D A7: a silent
   // refusal cost a full drill cycle) - never used for authorization.
   unlockRefusals?: Array<{ job_id: string; reason: string }>;
+  // Set when the ENGINE declared the goal done this step (all-terminal,
+  // cancelled, or dead-lettered by a budget cap). There is nothing further
+  // to schedule; driveGoal exits instead of re-stepping a terminal verdict
+  // (live staging finding 2026-08-07: a deadline-dead-lettered goal with
+  // non-terminal jobs was re-stepped to the harness cycle bound, burning
+  // one reserved iteration per cycle - observed cycles:11 / iteration 11).
+  done?: boolean;
 }
 
 // Advance one durable step. Halts fail-closed on owner_stop/execution-disabled
@@ -246,9 +253,40 @@ export async function driverStep(
   // differs. A pending gated job whose record fails verification still
   // parks exactly as before (fail-closed).
   const unlockRefusals: Array<{ job_id: string; reason: string }> = [];
+  // Owner-decision wall anchor (live staging finding 2026-08-07): the wall
+  // deadline (budget.max_wall_ms) bounds ACTIVE driving, but started_at is
+  // goal creation - so time parked awaiting the owner's decision consumed
+  // the budget, and an approval decided later than max_wall_ms after
+  // creation dead-lettered the goal at resume BEFORE the just-cleared job
+  // could be scheduled (attempts stayed 0; the engine's deadline check
+  // precedes scheduling). The owner wait is bounded by the approval's own
+  // expiry, not the wall budget: measure the deadline from the LATEST
+  // verified approval decision bound to this goal's jobs when one exists.
+  // decided_at is immutable post-decision (0010 one-time decide RPC), so
+  // the anchor is durable and restart-safe. Only records that pass (or
+  // previously passed) authoritative verification can anchor: a still-gated
+  // job contributes only on check.ok below, and an ungated job carrying an
+  // approval_id was cleared by this same authoritative gate - the SOLE
+  // writer of requires_approval=false. An unreadable record just leaves the
+  // tighter creation anchor (fail-closed: toward dead_letter, never toward
+  // execution).
+  let decisionAnchorMs = Number.NaN;
+  const anchorFrom = (record: Record<string, unknown> | undefined) => {
+    if (!record || String(record.status) !== 'approved') return;
+    const decided = Date.parse(String(record.decided_at ?? ''));
+    if (Number.isFinite(decided) &&
+        (!Number.isFinite(decisionAnchorMs) || decided > decisionAnchorMs)) {
+      decisionAnchorMs = decided;
+    }
+  };
   for (const job of state.jobs) {
-    if ((job.status !== 'awaiting_approval' && job.status !== 'pending') ||
-        !job.requires_approval || !job.approval_id) continue;
+    if (!job.approval_id) continue;
+    const gated = (job.status === 'awaiting_approval' || job.status === 'pending') &&
+      job.requires_approval;
+    if (!gated) {
+      if (!job.requires_approval) anchorFrom(await readApprovalRecord(client, job.approval_id));
+      continue;
+    }
     const record = await readApprovalRecord(client, job.approval_id);
     // Canonical SHA-256 authorization binding (audit #8): rebuild the SAME
     // action envelope the owner approved (from the job being executed + the
@@ -274,6 +312,7 @@ export async function driverStep(
       action_hash: expectedHash,
     }, nowMs);
     if (check.ok) {
+      anchorFrom(record); // authoritatively verified: its decision anchors the wall
       // Atomic, TOCTOU-safe clearance (audit #6/MAJOR): the CAS clears the gate
       // ONLY if EVERY bound action field still matches what was just verified,
       // and persists requires_approval=false together with the status change -
@@ -350,6 +389,17 @@ export async function driverStep(
     }
     if (!reserve.data || reserve.data.length === 0) {
       return { halted: true, reason: 'iteration_reserved_by_other', actions: [], persisted: 0, lockRequired: false };
+    }
+  }
+
+  // Apply the owner-decision anchor: the engine's wall deadline measures
+  // from state.started_at. Never move the anchor EARLIER than goal creation
+  // (an anchor can only extend the window; a missing/invalid one leaves the
+  // original creation-time deadline in force).
+  if (Number.isFinite(decisionAnchorMs)) {
+    const startedMs = Date.parse(state.started_at);
+    if (!Number.isFinite(startedMs) || decisionAnchorMs > startedMs) {
+      state.started_at = new Date(decisionAnchorMs).toISOString();
     }
   }
 
@@ -486,7 +536,7 @@ export async function driverStep(
     if (!gt.ok) reason = `${s.reason}:goal_cas_unapplied`;
   }
   return {
-    halted: false, reason, actions: s.actions, persisted, lockRequired,
+    halted: false, reason, actions: s.actions, persisted, lockRequired, done: s.done,
     ...(unlockRefusals.length ? { unlockRefusals } : {}),
   };
 }
@@ -545,6 +595,22 @@ export async function driveGoal(
     if (blockedOnApproval) {
       return {
         cycles, halted: false, reason: 'awaiting_owner_approval',
+        ...(lastRefusals?.length ? { unlockRefusals: lastRefusals } : {}),
+      };
+    }
+    // Terminal engine verdict on a goal whose JOBS are not all terminal
+    // (live staging finding 2026-08-07): the engine dead-letters the whole
+    // goal on a budget cap (deadline_exceeded / max_iterations) or reports a
+    // cancelled goal without touching the remaining job rows, so neither
+    // exit above ever fires - the old loop re-stepped the same terminal
+    // verdict to the harness cycle bound, burning one reserved iteration per
+    // cycle (observed live: cycles:11, iteration 11). driverStep already
+    // reflected the terminal status onto the goal row; stop here. Checked
+    // AFTER the all-terminal path so legacy terminal reasons
+    // (completed/failed/cancelled) are unchanged.
+    if (r.done) {
+      return {
+        cycles, halted: false, reason: r.reason,
         ...(lastRefusals?.length ? { unlockRefusals: lastRefusals } : {}),
       };
     }
