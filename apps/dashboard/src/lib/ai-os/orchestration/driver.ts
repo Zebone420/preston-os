@@ -47,6 +47,49 @@ export interface DriverLockContext {
   token: (jobId: string) => string;
 }
 
+// Phase 8: INJECTED real-execution seam. The driver must stay free of
+// process spawning (orchestration/* is structurally pinned spawn-free), so
+// bounded real execution is supplied as a callback by the dispatcher, which
+// composes the capability gate, the worktree provisioner, and the real agent
+// adapter. When absent - the default everywhere except an owner-activated
+// host - the driver runs the SIMULATION adapter exactly as in Phase 7.
+//
+// Contract: the executor runs the job's bounded work and returns a TERMINAL
+// result, or null to decline (not permitted / not eligible), in which case
+// the driver falls back to simulation. It must never bypass the approval
+// gate: it is called only AFTER the driver has cleared requires_approval and
+// claimed the job under this run's lease.
+export interface RealExecutionResult {
+  outcome: 'completed' | 'failed';
+  executed: boolean; // true only when a real bounded run actually happened
+  evidence_refs: string[];
+  failure_reason: string | null;
+  summary: string;
+}
+
+export type RealJobExecutor = (input: {
+  job: GoalJob;
+  goal: { requested_by: string; environment: string; simulation_only: boolean };
+  runId: string;
+  nowMs: number;
+  lock: WorktreeLockRef;
+  approvalRecord?: Record<string, unknown>;
+}) => Promise<RealExecutionResult | null>;
+
+// Structural type for the lock the driver already holds (avoids importing
+// the execution-side module into this pinned file).
+export interface WorktreeLockRef {
+  worktree_id: string;
+  job_id: string;
+  owner: string;
+  token: string;
+  fence: number;
+  base_commit: string;
+  branch: string;
+  allowed_paths: string[];
+  expires_at: string;
+}
+
 const EDIT_KINDS = new Set(['code', 'test', 'migration', 'repair', 'documentation']);
 // How long a job's in_progress execution lease is valid before restart recovery
 // may requeue it. Bounds orphan recovery latency; the deployment's oneshot runs
@@ -216,6 +259,9 @@ export async function driverStep(
   // (server-side); tests inject a deterministic-but-unique counter. Ownership is
   // NEVER derived from time or the worktree token (those can repeat).
   newRunId: () => string = () => randomUUID(),
+  // Phase 8: injected bounded-real-execution seam (see RealJobExecutor).
+  // Omitted => pure simulation, identical to Phase 7.
+  executeReal?: RealJobExecutor,
 ): Promise<DriverStepResult> {
   // Fail closed on a bad execution clock at the boundary (audit MINOR): a
   // non-finite nowMs would otherwise throw at new Date(nowMs).toISOString().
@@ -456,7 +502,45 @@ export async function driverStep(
         const mark = await transitionJob(client, job.id, job.status, 'in_progress',
           { run_id: runId, run_lease_expires_at: runLeaseIso }, nowIso);
         if (!mark.ok) continue;
-        const res = makeSimulationAdapter(job.assigned_role ?? 'claude').runJob(job, nowIso);
+        // Phase 8: attempt BOUNDED REAL execution through the injected seam
+        // (dispatcher-composed: capability gate + worktree provisioning +
+        // real agent adapter + post-run path audit). It is reached only
+        // here - after the authoritative approval gate cleared this job and
+        // after THIS run won the lease CAS - so real execution can never
+        // outrun an approval. A null return (not permitted / not eligible /
+        // declined) falls back to the Phase 7 simulation adapter unchanged.
+        // A throw is contained: it must not strand the claimed job, so it
+        // degrades to a failed result that the run-owned CAS persists.
+        let real: RealExecutionResult | null = null;
+        if (executeReal) {
+          try {
+            real = await executeReal({
+              job,
+              goal: {
+                requested_by: state.goal.requested_by,
+                environment: state.goal.environment,
+                simulation_only: state.goal.simulation_only,
+              },
+              runId,
+              nowMs,
+              lock: {
+                worktree_id: worktreeId, job_id: job.id,
+                owner: job.assigned_role ?? 'claude', token, fence,
+                base_commit: lockCtx?.base_commit ?? '',
+                branch: `wt/${job.id}`,
+                allowed_paths: lockCtx?.allowed_paths ?? [],
+                expires_at: new Date(nowMs + RUN_LEASE_MS).toISOString(),
+              },
+            });
+          } catch (e) {
+            real = {
+              outcome: 'failed', executed: false, evidence_refs: [],
+              failure_reason: 'real_executor_threw',
+              summary: e instanceof Error ? e.message.slice(0, 200) : 'error',
+            };
+          }
+        }
+        const res = real ?? makeSimulationAdapter(job.assigned_role ?? 'claude').runJob(job, nowIso);
         // Re-observe controls AFTER the adapter, BEFORE persisting the result
         // (audit #9): if the owner stopped mid-run, do NOT persist completion.
         // Requeue THIS run to ready (owned by run_id) so it re-runs once the
@@ -483,7 +567,11 @@ export async function driverStep(
         // concurrent evidence write (none exists by design). A DB-side jsonb
         // append RPC would be the belt-and-suspenders against a hypothetical
         // out-of-band direct UPDATE to the row.
-        const evidenceRef = `sim:goal:${goalId}:job:${job.id}:run:${runId}:attempt:${job.attempts + 1}:${to}`;
+        // A REAL run supplies its own evidence refs (they encode the real
+        // outcome and the executed flag); simulation keeps the sim: shape.
+        const evidenceRefs = real && real.evidence_refs.length > 0
+          ? real.evidence_refs
+          : [`sim:goal:${goalId}:job:${job.id}:run:${runId}:attempt:${job.attempts + 1}:${to}`];
         // Result persistence OWNED by run_id (audit BLOCKER): atomic on the job
         // row and conditioned on the SAME run_id, so a superseded, revived, or
         // recovered run - or an out-of-band cancellation (status no longer
@@ -492,7 +580,7 @@ export async function driverStep(
         const t = await transitionJobOwned(client, job.id, 'in_progress', to, runId, {
           attempts: job.attempts + 1,
           failure_reason: res.failure_reason,
-          evidence_refs: [...job.evidence_refs, evidenceRef],
+          evidence_refs: [...job.evidence_refs, ...evidenceRefs],
           run_id: null,
           run_lease_expires_at: null,
         }, nowIso);
@@ -552,12 +640,13 @@ export async function driveGoal(
   depends: (jobId: string) => string[] = () => [],
   lockCtx?: DriverLockContext,
   newRunId: () => string = () => randomUUID(),
+  executeReal?: RealJobExecutor,
 ): Promise<{ cycles: number; halted: boolean; reason: string; unlockRefusals?: Array<{ job_id: string; reason: string }> }> {
   let cycles = 0;
   let lastReason = 'noop';
   let lastRefusals: Array<{ job_id: string; reason: string }> | undefined;
   while (cycles++ < Math.min(maxCycles, 5000)) {
-    const r = await driverStep(client, goalId, now(), depends, lockCtx, newRunId);
+    const r = await driverStep(client, goalId, now(), depends, lockCtx, newRunId, executeReal);
     lastReason = r.reason;
     lastRefusals = r.unlockRefusals;
     if (r.halted) return { cycles, halted: true, reason: r.reason };

@@ -29,6 +29,8 @@ import {
   probeSimulationPinViolations,
 } from '../lib/ai-os/orchestration/store';
 import { isMigrationAbsentError } from '../lib/ai-os/orchestration/read-model';
+import { resolveExecutionLevel } from '../lib/ai-os/execution-capability';
+import { buildRealExecutor } from './real-executor';
 import { missingRuntimeEnv } from './supabase-runtime';
 
 // Preston AI OS - remote dispatcher core (Phase 4B.1). PURE + testable.
@@ -213,9 +215,23 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
     log({ level: 'info', command, correlationId, event: 'orchestrate_once', stoppedReason: 'halted' });
     return { exitCode: EXIT.halted, summary: { stoppedReason: 'halted' } };
   }
-  if (ctl.controls.execution_enabled || ctl.controls.remote_runner_enabled) {
-    log({ level: 'error', command, correlationId, event: 'orchestrate_once', error: 'unsafe posture: execution/remote runner enabled (simulation-only command refused)' });
-    return { exitCode: EXIT.config, summary: { error: 'unsafe controls posture' } };
+  // Phase 8 capability resolution. EXACTLY TWO legal postures:
+  //   SIMULATION - execution + remote runner both false (the Phase 7 pin).
+  //   BOUNDED_CODE_EXECUTION - both true AND the full env chain agrees
+  //     (ORCH_EXECUTION_LEVEL=bounded_code_execution, staging,
+  //      DISABLE_REMOTE_RUNNER=false). Real bounded work is then INJECTED
+  //     into the driver; external writes stay impossible (code ceiling).
+  // Any other combination is a mixed/unknown posture - refuse exit 78,
+  // preserving the Phase 7 fail-closed behavior for every state that is
+  // not an owner-installed bounded-execution posture.
+  const capability = resolveExecutionLevel({
+    env, controls: ctl.controls, controlsReadOk: ctl.readOk,
+  });
+  const enabledFlags = ctl.controls.execution_enabled ||
+    ctl.controls.remote_runner_enabled;
+  if (enabledFlags && !capability.realExecutionAllowed) {
+    log({ level: 'error', command, correlationId, event: 'orchestrate_once', error: 'unsafe posture: execution/remote runner enabled without a resolved bounded-execution capability (refused)', reasons: capability.reasons });
+    return { exitCode: EXIT.config, summary: { error: 'unsafe controls posture', reasons: capability.reasons } };
   }
 
   // GLOBAL simulation-pin probe (Codex final-review MAJOR #2): if ANY goal
@@ -370,13 +386,25 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
     allowed_paths: allowedPaths,
     token: (jobId: string) => `orch-${seed}-${jobId}`,
   };
+  // Phase 8: compose the bounded real executor ONLY under a fully-resolved
+  // BOUNDED_CODE_EXECUTION posture. buildRealExecutor itself re-checks the
+  // capability and returns null on any gap, and the executor re-resolves
+  // per job - so a mid-run owner downgrade (owner_stop, pause, flag flip)
+  // takes effect on the very next job without a restart.
+  const executeReal = capability.realExecutionAllowed
+    ? await buildRealExecutor({ client, env })
+    : null;
+  if (capability.realExecutionAllowed) {
+    log({ level: 'info', command, correlationId, event: 'capability', level_resolved: 'BOUNDED_CODE_EXECUTION', executor: executeReal ? 'composed' : 'declined_missing_host_config' });
+  }
+
   // An undefined newRunId falls through to driveGoal's own default: the
   // driver mints crypto-random run ids (node:crypto randomUUID).
   const r = await driveGoal(
     client, goalId, seams.clock, input.maxIterations ?? 5, depends, lockCtx,
-    seams.newRunId,
+    seams.newRunId, executeReal ?? undefined,
   );
-  log({ level: 'info', command, correlationId, event: 'orchestrate_once', goal: goalId, cycles: r.cycles, halted: r.halted, reason: r.reason, ...(skippedParked.length ? { skippedParked } : {}), ...(unverifiableApprovals.length ? { unverifiableApprovals } : {}), ...(r.unlockRefusals?.length ? { unlockRefusals: r.unlockRefusals } : {}) });
+  log({ level: 'info', command, correlationId, event: 'orchestrate_once', goal: goalId, cycles: r.cycles, halted: r.halted, reason: r.reason, ...(capability.realExecutionAllowed ? { execution_level: 'BOUNDED_CODE_EXECUTION' } : {}), ...(skippedParked.length ? { skippedParked } : {}), ...(unverifiableApprovals.length ? { unverifiableApprovals } : {}), ...(r.unlockRefusals?.length ? { unlockRefusals: r.unlockRefusals } : {}) });
 
   if (r.halted) {
     if (r.reason.includes('owner_stop')) {
