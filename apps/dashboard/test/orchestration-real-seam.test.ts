@@ -20,6 +20,7 @@ import {
 } from '../src/lib/ai-os/orchestration/store';
 import { decomposeGoal, type TaskSpec } from '../src/lib/ai-os/orchestration/decomposition';
 import { DEFAULT_BUDGET, type MasterGoal } from '../src/lib/ai-os/orchestration/model';
+import { checkRealJobContract } from '../src/lib/ai-os/real-claude-adapter';
 
 const NOW = '2026-08-07T03:00:00.000Z';
 
@@ -178,6 +179,38 @@ describe('driver real-execution seam', () => {
     expect(r.reason).toBe('awaiting_owner_approval');
     expect(exec).not.toHaveBeenCalled(); // approval boundary precedes the seam
     expect(db.rowsOf('goal_jobs')[0].status).toBe('awaiting_approval');
+  });
+
+  it('hands the executor the POST-claim job image that satisfies the real adapter contract (11R-04 live decline)', async () => {
+    // Live staging decline disp-133192 (2026-08-10): the driver CASed the
+    // job to in_progress + stamped run_id/lease in the DB, then passed the
+    // STALE pre-claim snapshot to the executor - checkRealJobContract read
+    // status:'ready', run_id:null and refused job_not_leased on every real
+    // run. This pin routes the captured driver hand-off through the REAL
+    // adapter contract so the two can never drift apart again.
+    const db = makeFakeDb();
+    await seedPlainGoal(db);
+    const captured: Parameters<RealJobExecutor>[0][] = [];
+    const exec: RealJobExecutor = vi.fn(async (input) => {
+      captured.push(input);
+      return realCompleted();
+    });
+    const r = await driveGoal(db.client, 'goal-seam-0001', clock(Date.parse(NOW)), 20, () => [], lockCtx, undefined, exec);
+    expect(r.reason).toBe('completed');
+    expect(captured).toHaveLength(1);
+    const i = captured[0];
+    expect(i.job.status).toBe('in_progress');
+    expect(i.job.run_id).toBe(i.runId);
+    expect(Date.parse(i.job.run_lease_expires_at ?? '')).toBeGreaterThan(i.nowMs);
+    const contract = checkRealJobContract({
+      job: i.job,
+      ownerIdentity: i.goal.requested_by,
+      goalEnvironment: i.goal.environment,
+      goalSimulationOnly: i.goal.simulation_only,
+      runId: i.runId,
+      nowMs: i.nowMs,
+    });
+    expect(contract).toEqual({ ok: true });
   });
 
   it('mid-run owner stop discards a REAL result exactly like a simulated one', async () => {

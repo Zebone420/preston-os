@@ -502,6 +502,17 @@ export async function driverStep(
         const mark = await transitionJob(client, job.id, job.status, 'in_progress',
           { run_id: runId, run_lease_expires_at: runLeaseIso }, nowIso);
         if (!mark.ok) continue;
+        // The claim just won: the adapter must see the POST-claim row image
+        // (status/run_id/lease are what the CAS persisted), not the stale
+        // pre-claim snapshot. 11R-04 live decline (2026-08-10):
+        // adapter_refused/job_not_leased on every real run because the
+        // in-memory job still read status:'ready', run_id:null.
+        const leasedJob = {
+          ...job,
+          status: 'in_progress' as const,
+          run_id: runId,
+          run_lease_expires_at: runLeaseIso,
+        };
         // Phase 8: attempt BOUNDED REAL execution through the injected seam
         // (dispatcher-composed: capability gate + worktree provisioning +
         // real agent adapter + post-run path audit). It is reached only
@@ -515,7 +526,7 @@ export async function driverStep(
         if (executeReal) {
           try {
             real = await executeReal({
-              job,
+              job: leasedJob,
               goal: {
                 requested_by: state.goal.requested_by,
                 environment: state.goal.environment,
