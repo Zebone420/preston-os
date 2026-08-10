@@ -257,7 +257,19 @@ export async function buildRealExecutor(
         allowedPaths: lock.allowed_paths,
         runner: gitRunner,
       });
-      const ids = { job_id: job.id, goal_id: job.goal_id, run_id: runId };
+      // Bounded, already-sanitized child output excerpts travel with the
+      // result log line (11R-09 live gap: exit_1 was visible but the
+      // child's stderr was not - two blind drill cycles).
+      const proc = (result as unknown as {
+        process?: { stderr_excerpt?: string; stdout_excerpt?: string };
+      }).process;
+      const bound = (s?: string) =>
+        s ? s.replace(/\s+/g, ' ').trim().slice(-300) : null;
+      const ids = {
+        job_id: job.id, goal_id: job.goal_id, run_id: runId,
+        stderr_excerpt: bound(proc?.stderr_excerpt),
+        stdout_excerpt: bound(proc?.stdout_excerpt),
+      };
       if (!audit.ok || !audit.audit) {
         return logResult({
           outcome: 'failed', executed: true,

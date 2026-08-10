@@ -374,7 +374,7 @@ describe('buildRealExecutor - decline observability', () => {
     const git = makeGitFake(' M apps/dashboard/docs-change.md\n');
     const claudeFails = async () => ({
       spawned: true, exit_code: 1, timed_out: false, truncated: false,
-      stdout: '', stderr: 'agent exited nonzero', error: null,
+      stdout: '', stderr: 'invalid bearer or similar agent error', error: null,
       duration_ms: 900,
     });
     const entries: Record<string, unknown>[] = [];
@@ -388,6 +388,9 @@ describe('buildRealExecutor - decline observability', () => {
     expect(results).toHaveLength(1);
     expect(results[0].outcome).toBe('failed');
     expect(typeof results[0].failure_reason).toBe('string');
+    // The child's sanitized stderr excerpt must travel with the log line
+    // (11R-09 gap: exit_1 with invisible stderr cost two drill cycles).
+    expect(String(results[0].stderr_excerpt)).toContain('invalid bearer');
   });
 });
 
