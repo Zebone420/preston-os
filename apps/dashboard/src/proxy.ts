@@ -54,12 +54,15 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // api/os/chatgpt and api/os/remote/* are excluded alongside api/health:
-  // they are server-to-server bearer-token routes (Phase 5J / Phase 8) that
-  // self-authenticate inside their handlers (constant-time token compare;
-  // the remote routes are ALSO re-authenticated by the 0011 DB gateway's
-  // stored token hash) - they carry no owner session cookie, so the
-  // cookie-session redirect must never intercept them (that would return an
-  // HTML redirect instead of the routes' own fail-closed JSON 503/401).
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/health|api/os/chatgpt|api/os/remote).*)'],
+  // api/os/chatgpt, api/os/remote/*, and api/os/ssot/* are excluded
+  // alongside api/health: they are server-to-server bearer-token routes
+  // (Phase 5J / Phase 8 / SSOT B3) that self-authenticate inside their
+  // handlers (constant-time token compare; the remote routes are ALSO
+  // re-authenticated by the 0011 DB gateway's stored token hash, and the
+  // ssot route delegates auth entirely to the 0012/0013 gateways) - they
+  // carry no owner session cookie, so the cookie-session redirect must
+  // never intercept them (that would return an HTML redirect instead of
+  // the routes' own fail-closed JSON 503/401). The ssot route is inert
+  // until SSOT_STATUS_ENABLED=true (an owner gate).
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/health|api/os/chatgpt|api/os/remote|api/os/ssot).*)'],
 };
