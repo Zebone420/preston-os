@@ -46,7 +46,7 @@ describe('migration 0011 - remote intake gateway pins', () => {
   });
 
   it('the token is compared as a sha256 hash and never stored raw', () => {
-    expect(sql.match(/digest\(coalesce\(p_token, ''\), 'sha256'\)/g)!.length).toBe(2);
+    expect(sql.match(/extensions\.digest\(coalesce\(p_token, ''\), 'sha256'\)/g)!.length).toBe(2);
     // No INSERT statement may reference the raw token (checked without the
     // s-flag for the es2017 test target: collapse newlines first).
     expect(sql.replace(/\s+/g, ' ')).not.toMatch(/insert[^;]*p_token/i);

@@ -96,7 +96,7 @@ begin
     return jsonb_build_object('ok', false, 'status', 'disabled');
   end if;
   if coalesce(v_cfg.token_hash, '') = '' or
-     encode(digest(coalesce(p_token, ''), 'sha256'), 'hex')
+     encode(extensions.digest(coalesce(p_token, ''), 'sha256'), 'hex')
        is distinct from v_cfg.token_hash then
     return jsonb_build_object('ok', false, 'status', 'forbidden');
   end if;
@@ -165,7 +165,7 @@ begin
     return jsonb_build_object('ok', false, 'status', 'disabled');
   end if;
   if coalesce(v_cfg.token_hash, '') = '' or
-     encode(digest(coalesce(p_token, ''), 'sha256'), 'hex')
+     encode(extensions.digest(coalesce(p_token, ''), 'sha256'), 'hex')
        is distinct from v_cfg.token_hash then
     return jsonb_build_object('ok', false, 'status', 'forbidden');
   end if;
