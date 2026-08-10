@@ -80,7 +80,12 @@ describe('hermesObserveOrchestration - read-only status bridge', () => {
     const rows = db.rowsOf('orchestration_decisions');
     expect(rows).toHaveLength(1);
     expect(String(rows[0].id)).toMatch(/^od-orchstatus-/);
-    expect(rows[0].decision).toBe('orchestration_status');
+    // 'observe' is one of the values the 0004 CHECK constraint allows; the
+    // original 'orchestration_status' value would be rejected by the live DB
+    // (fixed 2026-08-10; the cross-artifact pin lives in
+    // ssot-hermes-consumer.test.ts).
+    expect(rows[0].decision).toBe('observe');
+    expect((rows[0].reasons as string[])[0]).toBe('orchestration_status');
     expect((rows[0].reasons as string[]).join()).toContain('approval_attention');
     // Same minute bucket => PK dedup: idempotent success, no second row
     // (append-log contract: a unique violation reports ok).

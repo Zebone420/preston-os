@@ -6,7 +6,7 @@
 // never fabricates rows. Reuses the store read adapters (no duplicate queries).
 
 import type { RuntimeClient } from '../store';
-import { readSystemControlsChecked } from '../store';
+import { listOrchestrationDecisions, readSystemControlsChecked } from '../store';
 import {
   listGoals,
   listJobsForGoal,
@@ -171,6 +171,47 @@ export interface BridgeReadiness {
     | 'halted'
     | 'unsafe_controls'
     | 'simulation_ready';
+}
+
+// ---------------------------------------------------------------------------
+// Latest Hermes status observation (SSOT B1). hermesObserveOrchestration
+// records one 'observe' decision per minute bucket with an od-orchstatus- id
+// prefix; until this reader existed nothing consumed those rows. Bounded:
+// scans the newest `scan` decisions only, so the result is "latest within
+// the recent window" - absent is a normal state (hermes timer disabled),
+// never an error. Fail-closed: a read failure reports 'error', not empty.
+export interface HermesStatusView {
+  state: ReadState;
+  // Minute bucket parsed from the id (YYYYMMDDHHMM) - the observation time.
+  observed_bucket?: string;
+  hermes_mode?: string;
+  reasons?: string[];
+  note?: string;
+}
+
+const ORCHSTATUS_PREFIX = 'od-orchstatus-';
+
+export async function loadLatestHermesStatus(
+  client: RuntimeClient,
+  scan = 50,
+): Promise<HermesStatusView> {
+  const res = await listOrchestrationDecisions(client, scan);
+  if (res.error) {
+    if (isMigrationAbsentError(res.error)) {
+      return { state: 'migration_absent', note: 'orchestration_decisions relation absent' };
+    }
+    return { state: 'error', note: res.error };
+  }
+  // Rows arrive newest-first (created_at desc); the first prefix match is
+  // the latest status observation.
+  const row = res.rows.find((r) => String(r['id'] ?? '').startsWith(ORCHSTATUS_PREFIX));
+  if (!row) return { state: 'empty' };
+  return {
+    state: 'ok',
+    observed_bucket: String(row['id']).slice(ORCHSTATUS_PREFIX.length),
+    hermes_mode: String(row['hermes_mode'] ?? ''),
+    reasons: Array.isArray(row['reasons']) ? (row['reasons'] as unknown[]).map(String) : [],
+  };
 }
 
 export async function loadBridgeReadiness(client: RuntimeClient): Promise<BridgeReadiness> {

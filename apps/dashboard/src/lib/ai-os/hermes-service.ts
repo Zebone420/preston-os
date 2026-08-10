@@ -102,12 +102,19 @@ export async function hermesObserveOrchestration(
   out.approval_attention = ready.open_approvals > 0;
   // One decision row per minute bucket (PK idempotency): a repeatedly-fired
   // observer never floods the decisions log.
+  // decision MUST be a value allowed by the 0004 CHECK constraint
+  // (dispatch|propose|observe|reject|noop) - the live DB rejects anything
+  // else and the row silently never lands (found 2026-08-10 before first
+  // live fire; the fake DB enforces no CHECKs). The status observation is
+  // an 'observe' row; its identity lives in the od-orchstatus- id prefix
+  // and the leading 'orchestration_status' reason marker.
   const bucket = nowIso.slice(0, 16).replace(/[-:T]/g, '');
   const dec = await insertOrchestrationDecision(client, {
     id: `od-orchstatus-${bucket}`,
     hermes_mode: controls.hermes_mode,
-    decision: 'orchestration_status',
+    decision: 'observe',
     reasons: [
+      'orchestration_status',
       `status:${ready.status}`,
       `open_approvals:${ready.open_approvals}`,
       `failed:${ready.failed_jobs}`,

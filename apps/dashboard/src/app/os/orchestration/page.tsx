@@ -6,7 +6,10 @@ import {
   auditContracts,
 } from '@/lib/ai-os/orchestration/agent-contracts';
 import { COORDINATOR_LADDER } from '@/lib/ai-os/orchestration/coordinator';
-import { loadOrchestrationReadModel } from '@/lib/ai-os/orchestration/read-model';
+import {
+  loadLatestHermesStatus,
+  loadOrchestrationReadModel,
+} from '@/lib/ai-os/orchestration/read-model';
 import { decideOrchestrationApproval, submitMasterGoal } from './actions';
 import { TaskRows } from './task-rows';
 
@@ -40,6 +43,7 @@ export default async function OrchestrationPage({
   const controls = await readSystemControlsChecked(ctx.client);
   const contractViolations = auditContracts();
   const rm = await loadOrchestrationReadModel(ctx.client, 20);
+  const hermes = await loadLatestHermesStatus(ctx.client);
   const s = (r: Record<string, unknown>, k: string) => String(r[k] ?? '');
 
   return (
@@ -101,6 +105,17 @@ export default async function OrchestrationPage({
             controls unreadable - fail-closed defaults shown
           </span>
         )}
+        {/* First consumer of Hermes' recorded observations (SSOT B1). */}
+        <span className="rounded bg-slate-800 px-2 py-0.5 text-xs">
+          hermes last status:{' '}
+          {hermes.state === 'ok'
+            ? `${(hermes.reasons ?? []).filter((r) => r !== 'orchestration_status').join(' ')} @ ${hermes.observed_bucket}`
+            : hermes.state === 'empty'
+              ? 'none recorded (observe timer is an owner gate)'
+              : hermes.state === 'error'
+                ? `read error: ${hermes.note}`
+                : 'decisions table absent'}
+        </span>
       </section>
 
       <div className="grid gap-4 lg:grid-cols-2">

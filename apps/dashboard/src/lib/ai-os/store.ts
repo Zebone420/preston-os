@@ -765,6 +765,16 @@ export function insertOrchestrationDecision(client: RuntimeClient, row: { id: st
   return appendRow(client, RUNTIME_TABLES.orchestration, row, row.id);
 }
 
+// First reader of the decisions log (SSOT B1, 2026-08-10): until now every
+// row Hermes recorded was write-only. Bounded, newest-first, fail-closed to
+// an error string like every sibling read adapter.
+export function listOrchestrationDecisions(
+  client: RuntimeClient,
+  limit = 20,
+): Promise<{ rows: Record<string, unknown>[]; error?: string }> {
+  return listRows(client, RUNTIME_TABLES.orchestration, limit);
+}
+
 // --- agents ----------------------------------------------------------------
 
 export async function upsertAgent(
