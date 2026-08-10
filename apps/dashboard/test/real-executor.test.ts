@@ -12,9 +12,10 @@ import {
   GIT_EXECUTABLE_ENV,
 } from '../src/os-runtime/real-executor';
 import { EXECUTION_LEVEL_ENV } from '../src/lib/ai-os/execution-capability';
-import type {
-  ProvisionOutcome,
-  ProvisionSpec,
+import {
+  buildWorktreeAddArgs,
+  type ProvisionOutcome,
+  type ProvisionSpec,
 } from '../src/lib/ai-os/worktree-provision';
 import type { GoalJob } from '../src/lib/ai-os/orchestration/model';
 
@@ -347,7 +348,7 @@ describe('buildRealExecutor - decline observability', () => {
     expect(git.calls.length).toBe(0);
   });
 
-  it('a successful real run emits NO decline entries (observability only)', async () => {
+  it('a successful real run emits NO decline entries and ONE result entry', async () => {
     const db = makeFakeDb();
     const git = makeGitFake(' M apps/dashboard/docs-change.md\n');
     const entries: Record<string, unknown>[] = [];
@@ -358,6 +359,45 @@ describe('buildRealExecutor - decline observability', () => {
     const r = await exec!(execInput());
     expect(r!.outcome).toBe('completed');
     expect(r!.executed).toBe(true);
-    expect(entries.length).toBe(0);
+    expect(entries.filter((e) => e.event === 'real_executor_decline')).toHaveLength(0);
+    const results = entries.filter((e) => e.event === 'real_executor_result');
+    expect(results).toHaveLength(1);
+    expect(results[0].outcome).toBe('completed');
+    expect(results[0].job_id).toBe('job-real-0001');
+  });
+
+  it('a FAILED real run emits a result entry naming the failure (11R-06 gap)', async () => {
+    // The 11R-06 live gap: attempt #1 ran real, failed, and left no log
+    // line at all - the only symptom was the NEXT attempt's branch
+    // collision. Every real result now logs outcome + failure_reason.
+    const db = makeFakeDb();
+    const git = makeGitFake(' M apps/dashboard/docs-change.md\n');
+    const claudeFails = async () => ({
+      spawned: true, exit_code: 1, timed_out: false, truncated: false,
+      stdout: '', stderr: 'agent exited nonzero', error: null,
+      duration_ms: 900,
+    });
+    const entries: Record<string, unknown>[] = [];
+    const exec = await buildRealExecutor({
+      client: db.client, env: fullEnv, gitRunner: git.runner,
+      claudeRunner: claudeFails, log: (f) => entries.push(f), ...seams,
+    });
+    const r = await exec!(execInput());
+    expect(r!.outcome).toBe('failed');
+    const results = entries.filter((e) => e.event === 'real_executor_result');
+    expect(results).toHaveLength(1);
+    expect(results[0].outcome).toBe('failed');
+    expect(typeof results[0].failure_reason).toBe('string');
+  });
+});
+
+describe('worktree add argv - branch rebind (11R-06 root cause)', () => {
+  it('uses -B so a retry rebinds the job-reserved branch residue', () => {
+    const args = buildWorktreeAddArgs('/srv/preston-os', {
+      jobId: 'j1', worktreePath: '/srv/worktrees/wt-j1', branch: 'job/j1',
+    }, 'be8b251f3055fea8da7c4a9c94b6ce298311f582');
+    expect(args).toEqual(['-C', '/srv/preston-os', 'worktree', 'add',
+      '/srv/worktrees/wt-j1', '-B', 'job/j1',
+      'be8b251f3055fea8da7c4a9c94b6ce298311f582']);
   });
 });

@@ -85,8 +85,20 @@ export function planWorktree(
 export function buildWorktreeAddArgs(
   canonicalRepo: string, target: WorktreeTarget, baseCommit: string,
 ): string[] {
+  // -B (not -b): rebind the job's own reserved branch if it already
+  // exists. 11R-06 live root cause (2026-08-10): a failed first attempt
+  // leaves job/<id> behind - the service CANNOT delete branches (the
+  // packed-refs lock is owner-only by Gate G design) - so every retry
+  // of the same job collided with its own residue ("fatal: a branch
+  // named 'job/<id>' already exists", exit 255) and declined to
+  // simulation forever. The job/ namespace is service-reserved and the
+  // branch is scoped to THIS job id, so rebinding it to the current
+  // base commit is exactly the retry semantics the driver expects, and
+  // residue stays bounded at one branch per job. The worktree PATH
+  // still refuses to overwrite - that remains the guard against a true
+  // concurrent double-provision.
   return ['-C', canonicalRepo, 'worktree', 'add', target.worktreePath,
-    '-b', target.branch, baseCommit];
+    '-B', target.branch, baseCommit];
 }
 
 export function buildStatusArgs(worktreePath: string): string[] {

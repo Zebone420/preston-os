@@ -135,6 +135,22 @@ export async function buildRealExecutor(
   });
   const decline = (fields: Record<string, unknown>) =>
     deps.log?.({ event: 'real_executor_decline', ...fields });
+  // Real-result observability (11R-06 live gap, 2026-08-10): a real run
+  // that FAILED left no log line at all - only declines were logged - so
+  // a failed first attempt was invisible and its retry collision was the
+  // only symptom. Every real result now emits one bounded line; secrets
+  // never enter these fields (evidence refs + reason codes only).
+  const logResult = (
+    r: RealExecutionResult,
+    ids: { job_id: string; goal_id: string; run_id: string },
+  ): RealExecutionResult => {
+    deps.log?.({
+      event: 'real_executor_result', outcome: r.outcome,
+      executed: r.executed, failure_reason: r.failure_reason ?? null,
+      evidence_count: r.evidence_refs.length, ...ids,
+    });
+    return r;
+  };
   if (!level0.realExecutionAllowed) {
     decline({ stage: 'compose', reason: 'capability_not_resolved',
       reasons: level0.reasons });
@@ -241,8 +257,9 @@ export async function buildRealExecutor(
         allowedPaths: lock.allowed_paths,
         runner: gitRunner,
       });
+      const ids = { job_id: job.id, goal_id: job.goal_id, run_id: runId };
       if (!audit.ok || !audit.audit) {
-        return {
+        return logResult({
           outcome: 'failed', executed: true,
           evidence_refs: [
             ...result.evidence_refs,
@@ -250,10 +267,10 @@ export async function buildRealExecutor(
           ],
           failure_reason: 'worktree_audit_unreadable',
           summary: 'real run completed but confinement could not be proven',
-        };
+        }, ids);
       }
       if (!audit.audit.ok) {
-        return {
+        return logResult({
           outcome: 'failed', executed: true,
           evidence_refs: [
             ...result.evidence_refs,
@@ -263,13 +280,13 @@ export async function buildRealExecutor(
           failure_reason: 'path_violation',
           summary: 'real run touched paths outside the allowlist; ' +
             'edits discarded with the worktree',
-        };
+        }, ids);
       }
 
       const summaryNote = audit.audit.dirty
         ? `touched:${audit.audit.touched.length}`
         : 'clean';
-      return {
+      return logResult({
         outcome: result.outcome === 'completed' ? 'completed' : 'failed',
         executed: result.executed,
         evidence_refs: [
@@ -278,7 +295,7 @@ export async function buildRealExecutor(
         ],
         failure_reason: result.failure_reason,
         summary: result.summary,
-      };
+      }, ids);
     } finally {
       // Always remove the worktree: results live in evidence + job rows;
       // on violation this also discards the out-of-policy edits.
