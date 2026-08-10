@@ -226,6 +226,32 @@ describe('composer engine - interpretation', () => {
     expect(p.proposal_hash).toBe('5bd2ea4b');
   });
 
+  it('accepts a counted task sentence (11R-03 live rejection, 2026-08-10)', () => {
+    // The Stage 11R-03 phone request verbatim: "Create one task to..." was
+    // rejected goal_1_has_no_tasks because the task regex required the bare
+    // "create task(s)" form. The counted form must compose exactly one
+    // documentation task; the count word is accepted, never enforced.
+    const p = okOf(composeRequest(
+      'Create a goal to record the Stage 11R staging evidence note. ' +
+      'Create one task to document the drill marker ROPS-V1-STAGE11R ' +
+      '2026-08-10 in a new file apps/dashboard/DRILL_EVIDENCE_STAGE11R.md ' +
+      'containing a single short note about this staging documentation drill.'));
+    expect(p.goals).toHaveLength(1);
+    expect(p.goals[0].tasks).toHaveLength(1);
+    expect(p.goals[0].tasks[0].kind).toBe('documentation');
+    for (const form of ['a task', 'an extra-numbered task', '2 tasks']) {
+      const q = composeRequest(
+        `Create a goal to tidy notes. Create ${form} to summarize the notes.`);
+      if (form === 'an extra-numbered task') {
+        // Unknown filler words still fall through - only count words are
+        // accepted; anything else stays fail-closed unparsed.
+        expect(q.ok).toBe(false);
+      } else {
+        expect(okOf(q).goals[0].tasks.length).toBeGreaterThanOrEqual(1);
+      }
+    }
+  });
+
   it('classifies a migration task as gated (policy engine authority)', () => {
     const p = okOf(composeRequest(
       'Create a goal to prepare a schema note. ' +

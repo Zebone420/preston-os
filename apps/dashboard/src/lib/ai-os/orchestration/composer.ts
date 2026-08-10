@@ -216,7 +216,12 @@ export function composeRequest(raw: unknown): ComposeOutcome {
 
   const goalStart = /^(?:please\s+)?create\s+(?:an?\s+)?(?:[\w-]+[-\s])*?goal\s+(?:to|for|that)\s+(.+)$/i;
   const goalLabel = /^goal\s*:\s*(.+)$/i;
-  const taskListStart = /^(?:also\s+)?create\s+tasks?\s+(?:to|that)\s+(.+)$/i;
+  // Optional count word ("a task", "one task", "2 tasks") - Stage 11R-03
+  // live finding (2026-08-10): "Create one task to document..." fell
+  // through as unparsed_sentence, so the goal composed with zero tasks and
+  // was rejected goal_1_has_no_tasks. The count is accepted, not enforced:
+  // the enumeration still decides how many tasks exist.
+  const taskListStart = /^(?:also\s+)?create\s+(?:(?:a|an|one|two|three|\d+)\s+)?tasks?\s+(?:to|that)\s+(.+)$/i;
   const taskLabel = /^task(?:\s+(\d+))?\s*:\s*(.+)$/i;
   const bullet = /^(?:[-*]|\d+[.)])\s+(.+)$/;
 
