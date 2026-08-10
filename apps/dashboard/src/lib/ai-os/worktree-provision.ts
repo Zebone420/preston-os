@@ -218,10 +218,21 @@ export async function provisionWorktree(
   if (res.status !== 'ok' || res.exit_code !== 0) {
     return {
       ok: false, reason: 'worktree_add_failed',
-      detail: `${res.status}:${res.exit_code ?? 'null'}`,
+      detail: `${res.status}:${res.exit_code ?? 'null'}${stderrExcerpt(res.stderr)}`,
     };
   }
   return { ok: true, target: plan.target };
+}
+
+// A bounded, whitespace-collapsed tail of git's stderr for decline
+// observability. Provisioning commands are local-only fixed argv (no
+// network, scrubbed child env), so stderr carries fatal:/error: text and
+// paths - never credentials. 11R-05 live finding (2026-08-10): a bare
+// "ok:255" detail forced blind diagnosis of a service-only failure; the
+// exact git message must travel with the decline.
+function stderrExcerpt(stderr: string): string {
+  const s = String(stderr ?? '').replace(/\s+/g, ' ').trim();
+  return s ? `:${s.slice(-400)}` : '';
 }
 
 // Read the worktree's dirty state + enforce the path allowlist.
@@ -264,5 +275,8 @@ export async function releaseWorktree(
   });
   return res.status === 'ok' && res.exit_code === 0
     ? { ok: true }
-    : { ok: false, reason: 'worktree_remove_failed' };
+    : {
+        ok: false,
+        reason: `worktree_remove_failed:${res.status}:${res.exit_code ?? 'null'}${stderrExcerpt(res.stderr)}`,
+      };
 }

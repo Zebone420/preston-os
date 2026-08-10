@@ -296,9 +296,37 @@ describe('buildRealExecutor - decline observability', () => {
     expect(d).toBeDefined();
     expect(d!.event).toBe('real_executor_decline');
     expect(d!.stage).toBe('job');
-    expect(d!.detail).toBe('ok:128');
+    // detail carries git's stderr tail (11R-05 live finding: a bare
+    // "ok:255" forced blind diagnosis of a service-only failure).
+    expect(d!.detail).toBe('ok:128:exists');
     expect(d!.job_id).toBe('job-real-0001');
     expect(d!.goal_id).toBe('goal-real-0001');
+  });
+
+  it('provision decline detail bounds and collapses long stderr', async () => {
+    const db = makeFakeDb();
+    const noisy = 'fatal: something went wrong\n' + 'x'.repeat(2000);
+    const git = {
+      runner: async (s: ProvisionSpec): Promise<ProvisionOutcome> => {
+        if (s.args.includes('add')) {
+          return { status: 'ok', exit_code: 255, stdout: '', stderr: noisy };
+        }
+        return { status: 'ok', exit_code: 0, stdout: '', stderr: '' };
+      },
+    };
+    const entries: Record<string, unknown>[] = [];
+    const exec = await buildRealExecutor({
+      client: db.client, env: fullEnv, gitRunner: git.runner,
+      claudeRunner: claudeOk, log: (f) => entries.push(f), ...seams,
+    });
+    const r = await exec!(execInput());
+    expect(r).toBeNull();
+    const d = entries.find((e) => e.reason === 'worktree_add_failed');
+    expect(d).toBeDefined();
+    const detail = String(d!.detail);
+    expect(detail.startsWith('ok:255:')).toBe(true);
+    expect(detail.length).toBeLessThanOrEqual('ok:255:'.length + 400);
+    expect(detail).not.toContain('\n');
   });
 
   it('per-job capability downgrade logs capability_downgraded with job binding', async () => {
