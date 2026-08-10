@@ -34,8 +34,12 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-# Same token-store carve-out as the worker (shared identity/store).
-ReadWritePaths=/var/lib/preston/worker
+# Token-store carve-out (shared worker identity) PLUS the two paths the
+# bounded real executor's worktree lifecycle writes: the worktrees root
+# and the canonical repo's git METADATA. The canonical WORKING TREE
+# (/srv/preston-os) is deliberately NOT writable - ProtectSystem=strict
+# keeps it read-only inside this service, matching the Gate G boundary.
+ReadWritePaths=/var/lib/preston/worker /srv/worktrees /srv/preston-os/.git
 LogsDirectory=preston
 StandardOutput=append:/var/log/preston/orchestrator.log
 StandardError=append:/var/log/preston/orchestrator.log

@@ -102,6 +102,11 @@ export function makeGitProcessRunner(
 export interface RealExecutorDeps {
   client: RuntimeClient;
   env: Record<string, string | undefined>;
+  // Structured decline observability (Stage 11R-02): every silent
+  // null-return (decline -> simulation fallback) reports a static reason
+  // code through this sink. Reason codes only - never env values, paths
+  // from config, tokens, or process output.
+  log?: (fields: Record<string, unknown>) => void;
   // Test seams; production callers omit them.
   gitRunner?: ProvisionRunner;
   claudeRunner?: Parameters<typeof runRealClaudeJob>[0]['runner'];
@@ -128,15 +133,30 @@ export async function buildRealExecutor(
     controls: controls0.controls,
     controlsReadOk: controls0.readOk,
   });
-  if (!level0.realExecutionAllowed) return null;
+  const decline = (fields: Record<string, unknown>) =>
+    deps.log?.({ event: 'real_executor_decline', ...fields });
+  if (!level0.realExecutionAllowed) {
+    decline({ stage: 'compose', reason: 'capability_not_resolved',
+      reasons: level0.reasons });
+    return null;
+  }
 
   const gitExe = String(deps.env[GIT_EXECUTABLE_ENV] ?? '').trim();
   const canonicalRepo = String(deps.env[CANONICAL_REPO_ENV] ?? '').trim();
   const worktreesRoot = String(deps.env['ORCH_WORKTREES_ROOT'] ?? '').trim();
   const baseCommit = String(deps.env['ORCH_BASE_COMMIT'] ?? '').trim();
-  if (!gitExe || !isAbsolute(gitExe)) return null;
-  if (!canonicalRepo || !isAbsolute(canonicalRepo)) return null;
-  if (!worktreesRoot || !baseCommit) return null;
+  if (!gitExe || !isAbsolute(gitExe)) {
+    decline({ stage: 'compose', reason: 'git_executable_invalid' });
+    return null;
+  }
+  if (!canonicalRepo || !isAbsolute(canonicalRepo)) {
+    decline({ stage: 'compose', reason: 'canonical_repo_invalid' });
+    return null;
+  }
+  if (!worktreesRoot || !baseCommit) {
+    decline({ stage: 'compose', reason: 'worktrees_root_or_base_missing' });
+    return null;
+  }
 
   const gitRunner = deps.gitRunner ?? makeGitProcessRunner(deps.env);
 
@@ -150,7 +170,12 @@ export async function buildRealExecutor(
       controls: controls.controls,
       controlsReadOk: controls.readOk,
     });
-    if (!level.realExecutionAllowed) return null;
+    if (!level.realExecutionAllowed) {
+      decline({ stage: 'job', reason: 'capability_downgraded',
+        reasons: level.reasons, job_id: job.id, goal_id: job.goal_id,
+        run_id: runId });
+      return null;
+    }
 
     // Provision the real isolated worktree for THIS job.
     const prov = await provisionWorktree({
@@ -161,7 +186,12 @@ export async function buildRealExecutor(
       baseCommit,
       runner: gitRunner,
     });
-    if (!prov.ok) return null; // decline -> simulation (fail-closed fallback)
+    if (!prov.ok) { // decline -> simulation (fail-closed fallback)
+      decline({ stage: 'job', reason: prov.reason ?? 'provision_failed',
+        detail: prov.detail ?? null, job_id: job.id, goal_id: job.goal_id,
+        run_id: runId });
+      return null;
+    }
 
     try {
       // The approval record travels with the job when it was gated; the
@@ -197,6 +227,9 @@ export async function buildRealExecutor(
         // Adapter refused (posture/contract/confinement). Decline to
         // simulation rather than failing the job - the refusal reasons are
         // preconditions, not work outcomes.
+        decline({ stage: 'job', reason: 'adapter_refused',
+          outcome: result.outcome, failure_reason: result.failure_reason,
+          job_id: job.id, goal_id: job.goal_id, run_id: runId });
         return null;
       }
 

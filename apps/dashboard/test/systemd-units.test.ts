@@ -33,9 +33,18 @@ describe('systemd services - token store writable under ProtectSystem=strict', (
     expect(hermesSvc).toMatch(/^ReadWritePaths=\/var\/lib\/preston\/hermes$/m);
     expect(hermesSvc).not.toMatch(/ReadWritePaths=.*worker/);
   });
-  it('orchestrator shares the worker identity carve-out (same token store)', () => {
-    expect(orchSvc).toMatch(/^ReadWritePaths=\/var\/lib\/preston\/worker$/m);
+  it('orchestrator carve-out = token store + worktrees root + git METADATA only', () => {
+    // Exactly this one line, in this order (Stage 11R-02 root cause: the
+    // real executor's `git worktree add` died on EROFS because the strict
+    // sandbox sealed /srv/worktrees and /srv/preston-os/.git read-only).
+    expect(orchSvc).toMatch(
+      /^ReadWritePaths=\/var\/lib\/preston\/worker \/srv\/worktrees \/srv\/preston-os\/\.git$/m,
+    );
     expect(orchSvc).not.toMatch(/ReadWritePaths=.*hermes/);
+    // The canonical WORKING TREE must never be writable: /srv/preston-os may
+    // appear only as the /srv/preston-os/.git entry, never bare or broader.
+    expect(orchSvc).not.toMatch(/ReadWritePaths=[^\n]*\/srv\/preston-os(?!\/\.git)/m);
+    expect(orchSvc).not.toMatch(/ReadWritePaths=[^\n]*\/srv(?:\s|$)/m);
   });
   it('strict protection stays on in all (the carve-out must not widen)', () => {
     for (const svc of [workerSvc, hermesSvc, orchSvc]) {

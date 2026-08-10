@@ -264,3 +264,72 @@ describe('buildRealExecutor - the real bounded run', () => {
     expect(git.calls.some((a) => a.includes('remove'))).toBe(true);
   });
 });
+
+// Stage 11R-02 regression: every decline-to-simulation must surface a
+// structured reason (silent null returns cost a live drill to diagnose).
+describe('buildRealExecutor - decline observability', () => {
+  it('compose-stage decline logs capability_not_resolved with reasons', async () => {
+    const db = makeFakeDb();
+    const entries: Record<string, unknown>[] = [];
+    const exec = await buildRealExecutor({
+      client: db.client, env: {}, log: (f) => entries.push(f),
+    });
+    expect(exec).toBeNull();
+    expect(entries.length).toBe(1);
+    expect(entries[0].event).toBe('real_executor_decline');
+    expect(entries[0].stage).toBe('compose');
+    expect(entries[0].reason).toBe('capability_not_resolved');
+    expect(Array.isArray(entries[0].reasons)).toBe(true);
+  });
+
+  it('provision failure logs the exact provision reason (worktree_add_failed)', async () => {
+    const db = makeFakeDb();
+    const git = makeGitFake('', { addFails: true });
+    const entries: Record<string, unknown>[] = [];
+    const exec = await buildRealExecutor({
+      client: db.client, env: fullEnv, gitRunner: git.runner,
+      claudeRunner: claudeOk, log: (f) => entries.push(f), ...seams,
+    });
+    const r = await exec!(execInput());
+    expect(r).toBeNull(); // decline -> simulation, unchanged semantics
+    const d = entries.find((e) => e.reason === 'worktree_add_failed');
+    expect(d).toBeDefined();
+    expect(d!.event).toBe('real_executor_decline');
+    expect(d!.stage).toBe('job');
+    expect(d!.detail).toBe('ok:128');
+    expect(d!.job_id).toBe('job-real-0001');
+    expect(d!.goal_id).toBe('goal-real-0001');
+  });
+
+  it('per-job capability downgrade logs capability_downgraded with job binding', async () => {
+    const db = makeFakeDb();
+    const git = makeGitFake('');
+    const entries: Record<string, unknown>[] = [];
+    const exec = await buildRealExecutor({
+      client: db.client, env: fullEnv, gitRunner: git.runner,
+      claudeRunner: claudeOk, log: (f) => entries.push(f), ...seams,
+    });
+    Object.assign(db.rowsOf('system_controls')[0], { owner_stop: true });
+    const r = await exec!(execInput());
+    expect(r).toBeNull();
+    const d = entries.find((e) => e.reason === 'capability_downgraded');
+    expect(d).toBeDefined();
+    expect(d!.stage).toBe('job');
+    expect(d!.job_id).toBe('job-real-0001');
+    expect(git.calls.length).toBe(0);
+  });
+
+  it('a successful real run emits NO decline entries (observability only)', async () => {
+    const db = makeFakeDb();
+    const git = makeGitFake(' M apps/dashboard/docs-change.md\n');
+    const entries: Record<string, unknown>[] = [];
+    const exec = await buildRealExecutor({
+      client: db.client, env: fullEnv, gitRunner: git.runner,
+      claudeRunner: claudeOk, log: (f) => entries.push(f), ...seams,
+    });
+    const r = await exec!(execInput());
+    expect(r!.outcome).toBe('completed');
+    expect(r!.executed).toBe(true);
+    expect(entries.length).toBe(0);
+  });
+});

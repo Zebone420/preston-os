@@ -415,7 +415,12 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
   // per job - so a mid-run owner downgrade (owner_stop, pause, flag flip)
   // takes effect on the very next job without a restart.
   const executeReal = capability.realExecutionAllowed
-    ? await buildRealExecutor({ client, env })
+    ? await buildRealExecutor({
+      client, env,
+      // Stage 11R-02: surface every decline-to-simulation with its static
+      // reason code in the orchestrator log (no env values, no secrets).
+      log: (fields) => log({ level: 'info', command, correlationId, ...fields }),
+    })
     : null;
   if (capability.realExecutionAllowed) {
     log({ level: 'info', command, correlationId, event: 'capability', level_resolved: 'BOUNDED_CODE_EXECUTION', executor: executeReal ? 'composed' : 'declined_missing_host_config' });
