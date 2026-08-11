@@ -222,16 +222,33 @@ export async function provisionWorktree(
   const plan = planWorktree(i.jobId, i.worktreesRoot);
   if (!plan.ok) return { ok: false, reason: plan.reason };
 
-  const res = await i.runner({
+  const addSpec = () => ({
     executable: i.gitExecutable,
     args: buildWorktreeAddArgs(i.canonicalRepo, plan.target, i.baseCommit),
     timeout_ms: i.timeoutMs ?? PROVISION_TIMEOUT_MS,
   });
+  let res = await i.runner(addSpec());
   if (res.status !== 'ok' || res.exit_code !== 0) {
-    return {
-      ok: false, reason: 'worktree_add_failed',
-      detail: `${res.status}:${res.exit_code ?? 'null'}${stderrExcerpt(res.stderr)}`,
-    };
+    // Orphan recovery (11R-16 live finding, 2026-08-11): a run killed by
+    // the unit's start bound never reaches releaseWorktree, leaving THIS
+    // job's registered worktree behind; the retry then failed "already
+    // exists" and declined to simulation. The target path is strictly
+    // job-scoped (wt-<jobId>), so removing it and retrying ONCE is the
+    // crash-recovery the driver expects. A true concurrent
+    // double-provision is still excluded upstream: the lease CAS admits
+    // one live run per job and dispatch ticks are flock-serialized.
+    await i.runner({
+      executable: i.gitExecutable,
+      args: buildWorktreeRemoveArgs(i.canonicalRepo, plan.target.worktreePath),
+      timeout_ms: i.timeoutMs ?? PROVISION_TIMEOUT_MS,
+    });
+    res = await i.runner(addSpec());
+    if (res.status !== 'ok' || res.exit_code !== 0) {
+      return {
+        ok: false, reason: 'worktree_add_failed',
+        detail: `${res.status}:${res.exit_code ?? 'null'}${stderrExcerpt(res.stderr)}`,
+      };
+    }
   }
   return { ok: true, target: plan.target };
 }

@@ -81,13 +81,19 @@ describe('systemd services - hardening and identity separation', () => {
     /^NoNewPrivileges=true$/m,
     /^PrivateTmp=true$/m,
     /^ProtectHome=true$/m,
-    /^TimeoutStartSec=120$/m,
+    /^TimeoutStartSec=\d+$/m,
     /^LogsDirectory=preston$/m,
   ];
   it('all services keep the full hardening set', () => {
     for (const svc of [workerSvc, hermesSvc, orchSvc]) {
       for (const rx of REQUIRED) expect(svc).toMatch(rx);
     }
+  });
+  it('start bounds: sim/observe stay tight; orchestrator covers real runs (11R-16)', () => {
+    expect(workerSvc).toMatch(/^TimeoutStartSec=120$/m);
+    expect(hermesSvc).toMatch(/^TimeoutStartSec=120$/m);
+    // 3600s = 3 attempts x 15min adapter tree-kill bound, hard ceiling kept.
+    expect(orchSvc).toMatch(/^TimeoutStartSec=3600$/m);
   });
   it('no oneshot carries RuntimeMaxSec (ineffective for oneshot; TimeoutStartSec is the bound)', () => {
     for (const svc of [workerSvc, hermesSvc, orchSvc]) {

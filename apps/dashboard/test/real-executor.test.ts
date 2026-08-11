@@ -14,6 +14,7 @@ import {
 import { EXECUTION_LEVEL_ENV } from '../src/lib/ai-os/execution-capability';
 import {
   buildWorktreeAddArgs,
+  provisionWorktree,
   type ProvisionOutcome,
   type ProvisionSpec,
 } from '../src/lib/ai-os/worktree-provision';
@@ -139,6 +140,60 @@ describe('buildRealExecutor - composition gate', () => {
     const env = { ...fullEnv };
     delete env[GIT_EXECUTABLE_ENV];
     expect(await buildRealExecutor({ client: db.client, env })).toBeNull();
+  });
+});
+
+describe('provisionWorktree - killed-run orphan recovery (11R-16)', () => {
+  const seq = (calls: string[][]) => calls.map((a) =>
+    a.includes('add') ? 'add' : a.includes('remove') ? 'remove' : '?');
+
+  it('an existing job-scoped worktree is removed and the add retried ONCE', async () => {
+    const calls: string[][] = [];
+    let adds = 0;
+    const runner = async (s: ProvisionSpec): Promise<ProvisionOutcome> => {
+      calls.push(s.args);
+      if (s.args.includes('add')) {
+        adds += 1;
+        if (adds === 1) {
+          return { status: 'ok', exit_code: 255, stdout: '',
+            stderr: "fatal: '/srv/worktrees/wt-x' already exists" };
+        }
+        return { status: 'ok', exit_code: 0, stdout: '', stderr: '' };
+      }
+      return { status: 'ok', exit_code: 0, stdout: '', stderr: '' };
+    };
+    const r = await provisionWorktree({
+      gitExecutable: '/usr/bin/git', canonicalRepo: '/srv/preston-os',
+      worktreesRoot: '/srv/worktrees',
+      jobId: '2b7a2f5e-1111-4222-8333-944444444444',
+      baseCommit: BASE, runner,
+    });
+    expect(r.ok).toBe(true);
+    expect(seq(calls)).toEqual(['add', 'remove', 'add']);
+  });
+
+  it('does NOT loop: a second add failure declines worktree_add_failed', async () => {
+    const calls: string[][] = [];
+    const runner = async (s: ProvisionSpec): Promise<ProvisionOutcome> => {
+      calls.push(s.args);
+      if (s.args.includes('add')) {
+        return { status: 'ok', exit_code: 255, stdout: '',
+          stderr: 'fatal: still blocked' };
+      }
+      return { status: 'ok', exit_code: 0, stdout: '', stderr: '' };
+    };
+    const r = await provisionWorktree({
+      gitExecutable: '/usr/bin/git', canonicalRepo: '/srv/preston-os',
+      worktreesRoot: '/srv/worktrees',
+      jobId: '2b7a2f5e-1111-4222-8333-944444444444',
+      baseCommit: BASE, runner,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toBe('worktree_add_failed');
+      expect(r.detail).toContain('still blocked');
+    }
+    expect(seq(calls)).toEqual(['add', 'remove', 'add']);
   });
 });
 

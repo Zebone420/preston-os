@@ -27,9 +27,15 @@ Restart=no
 # not a service failure. Unreadable-controls outages exit 70 and DO fail.
 SuccessExitStatus=75
 # Type=oneshot: TimeoutStartSec bounds the whole run (RuntimeMaxSec is
-# ineffective for oneshot on the host systemd and could never fire anyway
-# with a 120s start bound, so it is intentionally absent).
-TimeoutStartSec=120
+# ineffective for oneshot on the host systemd, so it is intentionally
+# absent). 11R-16 live finding (2026-08-11): the previous 120s bound
+# KILLED the first genuine bounded real execution mid-run (real agent
+# runs legitimately take minutes; only sim runs finish in seconds),
+# orphaning the job lease and worktree. 3600s covers the worst case
+# (up to 3 sequential attempts x the adapter's 15-minute per-attempt
+# process-tree-kill timeout) while keeping a hard runaway ceiling; the
+# adapter timeout remains the fine-grained per-attempt bound.
+TimeoutStartSec=3600
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
