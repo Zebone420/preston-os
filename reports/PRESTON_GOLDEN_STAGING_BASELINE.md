@@ -86,15 +86,16 @@ anon table privileges 0 (was 23), anon sequence ACLs 0, RLS coverage
 unchanged (0 tables without RLS), gateway EXECUTE path live-proven
 post-sweep (bad-token 401 forbidden on both remote routes).
 
-## Open owner actions to fully seal the baseline (all bounded)
+## Baseline seal status (2026-08-11)
 
-1. Align ORCH_BASE_COMMIT (sudo): set worker.env
-   ORCH_BASE_COMMIT=b4f1b71f9fd92125e89741e46275acef409e8675 (optional;
-   correctness-safe as-is).
-2. Clean host tree (sudo): restore the root-owned route.ts leftover -
-   `sudo git -C /srv/preston-os checkout -- apps/dashboard/src/app/
-   api/os/remote/goal/route.ts` (or chown grann then checkout).
+1. ORCH_BASE_COMMIT: DONE - aligned to b4f1b71 full hash
+   (owner-verified grep count 1).
+2. Host tree: DONE - root-owned route.ts leftover chowned + restored;
+   git status clean (owner-verified, agent re-verified).
 3. Firewall: OWNER RULING 2026-08-11 - all current TCP/22 /32 rules
    stay in place deliberately (multi-location access need); cleanup
    reclassified as deferred housekeeping, NOT a blocker. Posture
    remains drop-by-default + key-auth-only.
+Baseline is SEALED. Remaining deferred (non-blocking): off-host
+backup copy, firewall tidy, driver lock-skip observability (P1),
+route env-allowlist (P1).
