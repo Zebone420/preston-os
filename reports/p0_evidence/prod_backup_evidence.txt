@@ -1,0 +1,7 @@
+PROD DAY-ONE BACKUP EVIDENCE (20260811_024725)
+file: C:\dev\backups\preston-os-prod-2026-08-11.dump
+size_bytes: 474298
+sha256: F205989A49CE34F87C2525CF3827DE2981D4122230DEFDDFE5425520DB88C87D
+pg_restore_table_data_entries: 83
+method: pg_dump -Fc via session pooler :5432, interactive password
+off-host copy: OWED (LA-10 discipline) - owner copies to second location
