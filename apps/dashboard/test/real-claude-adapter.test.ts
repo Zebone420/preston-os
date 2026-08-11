@@ -843,6 +843,26 @@ describe('real claude adapter - node process runner (local node only)', () => {
     expect(mapProcessOutcome(o).executed).toBe(true);
   }, 30_000);
 
+  it('fingerprints the SERVICE-CHILD spawn context: env NAMES + HOME path, never values (11R-14)', async () => {
+    const fpRunner = makeNodeProcessRunner({
+      PATH: process.env.PATH,
+      HOME: '/var/lib/preston/worker',
+      XDG_CONFIG_HOME: '/etc/preston/xdg',
+      SUPABASE_RUNTIME_KEY: 'must-never-pass',
+    });
+    const o = await fpRunner({
+      executable: process.execPath,
+      args: ['-e', 'process.exit(0)'],
+      cwd: process.cwd(), timeout_ms: 30_000, max_output_bytes: 10_000,
+    });
+    expect(o.child_home).toBe('/var/lib/preston/worker');
+    expect(o.child_env_keys).toContain('HOME');
+    expect(o.child_env_keys).toContain('XDG_CONFIG_HOME');
+    expect(o.child_env_keys).not.toContain('SUPABASE_RUNTIME_KEY');
+    // Names only - the outcome must never carry an env VALUE field.
+    expect(JSON.stringify(o.child_env_keys)).not.toContain('must-never-pass');
+  }, 30_000);
+
   it('records a nonzero exit deterministically', async () => {
     const o = await runner({
       executable: process.execPath,

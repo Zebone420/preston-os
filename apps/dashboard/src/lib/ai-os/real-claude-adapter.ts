@@ -478,6 +478,11 @@ export interface ProcessOutcome {
   exit_code: number | null;
   timed_out: boolean;
   truncated: boolean;
+  // Spawn-context fingerprint (11R-14 diagnosis, 2026-08-11): variable
+  // NAMES and the resolved HOME path only - never values, never secrets.
+  // Optional so injected test fakes stay valid.
+  child_env_keys?: string[];
+  child_home?: string | null;
   stdout: string;
   stderr: string;
   error: string | null; // sanitized
@@ -553,6 +558,11 @@ export function makeNodeProcessRunner(
         resolveOutcome({ ...o, duration_ms: Date.now() - started });
       };
 
+      const childEnv = sanitizeChildEnv(env);
+      const fingerprint = {
+        child_env_keys: Object.keys(childEnv),
+        child_home: childEnv.HOME ?? null,
+      };
       let child: ChildProcess;
       try {
         child = spawn(spec.executable, spec.args, {
@@ -561,12 +571,12 @@ export function makeNodeProcessRunner(
           windowsHide: true,
           detached: process.platform !== 'win32',
           stdio: ['ignore', 'pipe', 'pipe'],
-          env: sanitizeChildEnv(env) as NodeJS.ProcessEnv,
+          env: childEnv as NodeJS.ProcessEnv,
         });
       } catch (e) {
         finish({
           spawned: false, exit_code: null, timed_out: false, truncated: false,
-          stdout: '', stderr: '',
+          stdout: '', stderr: '', ...fingerprint,
           error: sanitizeProcessText(e instanceof Error ? e.message : 'spawn'),
         });
         return;
@@ -605,7 +615,7 @@ export function makeNodeProcessRunner(
       child.on('error', (e) => {
         finish({
           spawned: false, exit_code: null, timed_out: timedOut,
-          truncated,
+          truncated, ...fingerprint,
           stdout: Buffer.concat(out).toString('utf8'),
           stderr: Buffer.concat(err).toString('utf8'),
           error: sanitizeProcessText(e.message),
@@ -615,6 +625,7 @@ export function makeNodeProcessRunner(
       child.on('close', (code) => {
         finish({
           spawned: true, exit_code: code, timed_out: timedOut, truncated,
+          ...fingerprint,
           stdout: Buffer.concat(out).toString('utf8'),
           stderr: Buffer.concat(err).toString('utf8'),
           error: null,
@@ -637,6 +648,8 @@ export interface RealProcessEvidence {
   stderr_bytes: number;
   stdout_excerpt: string; // bounded + redacted
   stderr_excerpt: string; // bounded + redacted
+  child_env_keys?: string[]; // names only, never values
+  child_home?: string | null; // resolved path only, non-secret
 }
 
 export interface RealAdapterResult {
@@ -693,6 +706,8 @@ function processEvidence(o: ProcessOutcome): RealProcessEvidence {
     stderr_bytes: Buffer.byteLength(o.stderr, 'utf8'),
     stdout_excerpt: sanitizeProcessText(o.stdout),
     stderr_excerpt: sanitizeProcessText(o.stderr),
+    child_env_keys: o.child_env_keys,
+    child_home: o.child_home,
   };
 }
 

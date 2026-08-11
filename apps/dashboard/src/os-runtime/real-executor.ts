@@ -261,7 +261,10 @@ export async function buildRealExecutor(
       // result log line (11R-09 live gap: exit_1 was visible but the
       // child's stderr was not - two blind drill cycles).
       const proc = (result as unknown as {
-        process?: { stderr_excerpt?: string; stdout_excerpt?: string };
+        process?: {
+          stderr_excerpt?: string; stdout_excerpt?: string;
+          child_env_keys?: string[]; child_home?: string | null;
+        };
       }).process;
       const bound = (s?: string) =>
         s ? s.replace(/\s+/g, ' ').trim().slice(-300) : null;
@@ -269,6 +272,9 @@ export async function buildRealExecutor(
         job_id: job.id, goal_id: job.goal_id, run_id: runId,
         stderr_excerpt: bound(proc?.stderr_excerpt),
         stdout_excerpt: bound(proc?.stdout_excerpt),
+        // Spawn-context fingerprint (11R-14): names + HOME path, no values.
+        child_env_keys: proc?.child_env_keys ?? null,
+        child_home: proc?.child_home ?? null,
       };
       if (!audit.ok || !audit.audit) {
         return logResult({
