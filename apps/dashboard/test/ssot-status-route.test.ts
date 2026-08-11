@@ -46,7 +46,17 @@ describe('GET /api/os/ssot/status - header-only fail-closed gates', () => {
     expect((await ssotGet(req())).status).toBe(503);
   });
 
-  it('503 unconfigured outside staging', async () => {
+  it('503 unconfigured outside the env allowlist (P1: staging|production)', async () => {
+    process.env['SSOT_STATUS_ENABLED'] = 'true';
+    for (const bad of ['test_dev', '', 'Production', 'prod']) {
+      process.env['SUPABASE_RUNTIME_ENV'] = bad;
+      const res = await ssotGet(req({ auth: 'Bearer some-actor-token' }));
+      expect(res.status).toBe(503);
+      expect((await res.json()).status).toBe('unconfigured');
+    }
+  });
+
+  it('production passes the env gate (P1) and still fails closed at the next gate', async () => {
     process.env['SSOT_STATUS_ENABLED'] = 'true';
     process.env['SUPABASE_RUNTIME_ENV'] = 'production';
     const res = await ssotGet(req({ auth: 'Bearer some-actor-token' }));

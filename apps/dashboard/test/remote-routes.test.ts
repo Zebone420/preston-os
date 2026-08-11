@@ -63,10 +63,26 @@ describe('POST /api/os/remote/goal - header-only fail-closed gates', () => {
     expect((await res.json()).status).toBe('disabled');
   });
 
-  it('503 unconfigured outside staging', async () => {
+  it('503 unconfigured outside the env allowlist (P1: staging|production)', async () => {
+    process.env['REMOTE_INTAKE_ENABLED'] = 'true';
+    for (const bad of ['test_dev', '', 'Production', 'prod']) {
+      process.env['SUPABASE_RUNTIME_ENV'] = bad;
+      const res = await goalPost(goalReq({ auth: `Bearer ${TOKEN}` }));
+      expect(res.status).toBe(503);
+      expect((await res.json()).status).toBe('unconfigured');
+    }
+    delete process.env['SUPABASE_RUNTIME_ENV'];
+    expect((await goalPost(goalReq({ auth: `Bearer ${TOKEN}` }))).status).toBe(503);
+  });
+
+  it('production passes the env gate (P1) and still fails closed at the next gate', async () => {
     process.env['REMOTE_INTAKE_ENABLED'] = 'true';
     process.env['SUPABASE_RUNTIME_ENV'] = 'production';
-    expect((await goalPost(goalReq({ auth: `Bearer ${TOKEN}` }))).status).toBe(503);
+    // Clears env gates, then 503 'unconfigured' from the ABSENT Supabase
+    // env - proving the request reached the delegation step, no network.
+    const res = await goalPost(goalReq({ auth: `Bearer ${TOKEN}` }));
+    expect(res.status).toBe(503);
+    expect((await res.json()).status).toBe('unconfigured');
   });
 
   it('413 on missing or oversize Content-Length BEFORE reading the body', async () => {

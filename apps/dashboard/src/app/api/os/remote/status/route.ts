@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
+import { remoteSurfaceEnvAllowed } from '@/lib/ai-os/remote-surface-env';
 import { constantTimeEqual } from '@/lib/ai-os/telegram-security';
 import { getServerSupabase } from '@/lib/supabase/server';
 
 // Preston AI OS - Phase 8 Remote Operations V1: remote STATUS retrieval.
 // DISABLED by default. Bearer-token authenticated (constant-time),
-// cookie-less, staging-only. Read-only: forwards to the 0011 SECURITY
+// cookie-less, env-allowlisted (P1 gate). Read-only: forwards to the 0011 SECURITY
 // DEFINER read gateway, which re-authenticates the token and returns a
 // BOUNDED projection of one request's goals, jobs, evidence refs, and open
 // approvals - enough for a remote caller (phone/ChatGPT) to follow progress
@@ -19,7 +20,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ ok: false, status: 'disabled' }, { status: 503 });
   }
   const token = env['REMOTE_INTAKE_TOKEN'];
-  if (!token || env['SUPABASE_RUNTIME_ENV'] !== 'staging') {
+  if (!token || !remoteSurfaceEnvAllowed(env['SUPABASE_RUNTIME_ENV'])) {
     return NextResponse.json({ ok: false, status: 'unconfigured' }, { status: 503 });
   }
 

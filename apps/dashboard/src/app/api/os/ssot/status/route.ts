@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
+import { remoteSurfaceEnvAllowed } from '@/lib/ai-os/remote-surface-env';
 import { getServerSupabase } from '@/lib/supabase/server';
 
 // Preston AI OS - Central SSOT B3: canonical status read surface.
 // DISABLED by default (SSOT_STATUS_ENABLED must be exactly 'true').
-// Cookie-less, staging-only, read-only. Unlike /api/os/remote/status there
+// Cookie-less, env-allowlisted (P1 gate), read-only. Unlike
+// /api/os/remote/status there
 // is NO env token to compare against: identity is PER-ACTOR, held only as
 // sha256 hashes in actor_registry (migration 0012), so authentication is
 // fully delegated to the 0013 SECURITY DEFINER gateway, which resolves the
@@ -19,7 +21,7 @@ export async function GET(request: Request) {
   if (env['SSOT_STATUS_ENABLED'] !== 'true') {
     return NextResponse.json({ ok: false, status: 'disabled' }, { status: 503 });
   }
-  if (env['SUPABASE_RUNTIME_ENV'] !== 'staging') {
+  if (!remoteSurfaceEnvAllowed(env['SUPABASE_RUNTIME_ENV'])) {
     return NextResponse.json({ ok: false, status: 'unconfigured' }, { status: 503 });
   }
 

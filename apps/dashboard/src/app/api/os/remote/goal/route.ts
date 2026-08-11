@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
+import { remoteSurfaceEnvAllowed } from '@/lib/ai-os/remote-surface-env';
 import { getServerSupabase } from '@/lib/supabase/server';
 
 // Preston AI OS - Phase 8 Remote Operations V1: remote GOAL submission.
 // DISABLED by default. Server-to-server, cookie-less (proxy exclusion),
-// staging-only, size-capped header-first.
+// env-allowlisted (staging/production per the P1 gate), size-capped
+// header-first.
 //
 // AUTHENTICATION IS FULLY DELEGATED to the SECURITY DEFINER gateway
 // (submit_remote_intake): since 0014 it authenticates the presented
@@ -40,7 +42,7 @@ export async function POST(request: Request) {
   if (env['REMOTE_INTAKE_ENABLED'] !== 'true') {
     return NextResponse.json({ ok: false, status: 'disabled' }, { status: 503 });
   }
-  if (env['SUPABASE_RUNTIME_ENV'] !== 'staging') {
+  if (!remoteSurfaceEnvAllowed(env['SUPABASE_RUNTIME_ENV'])) {
     return NextResponse.json({ ok: false, status: 'unconfigured' }, { status: 503 });
   }
 
