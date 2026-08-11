@@ -1,4 +1,4 @@
-# PRESTON AI OS - GOLDEN STAGING BASELINE
+﻿# PRESTON AI OS - GOLDEN STAGING BASELINE
 
 Single source of truth for the proven staging system. Supersedes ad-hoc
 state notes. Date: 2026-08-11 UTC.
@@ -94,5 +94,7 @@ post-sweep (bad-token 401 forbidden on both remote routes).
 2. Clean host tree (sudo): restore the root-owned route.ts leftover -
    `sudo git -C /srv/preston-os checkout -- apps/dashboard/src/app/
    api/os/remote/goal/route.ts` (or chown grann then checkout).
-3. Firewall: remove temp ZPC26 rule 174.216.209.19/32 TCP22 AFTER all
-   host work; review 174.244.146.219 provenance (see baseline note).
+3. Firewall: OWNER RULING 2026-08-11 - all current TCP/22 /32 rules
+   stay in place deliberately (multi-location access need); cleanup
+   reclassified as deferred housekeeping, NOT a blocker. Posture
+   remains drop-by-default + key-auth-only.
