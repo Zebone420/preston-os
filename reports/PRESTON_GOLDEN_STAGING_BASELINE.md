@@ -69,6 +69,23 @@ state notes. Date: 2026-08-11 UTC.
 - Docs: PRESTON_AI_OS_FINAL_GO_LIVE_REPORT.md,
   REMOTE_OPERATIONS_V1_STAGE_11R_CLOSURE_EVIDENCE.md.
 
+## Backup of record (pre-P0, post-0015)
+
+- File: C:\dev\backups\preston-os-staging-2026-08-11.dump
+- Size: 575,399 bytes; pg_restore TABLE DATA entries: 83
+- SHA-256: 9e338eb559b12adf064c9a9d07c6add7e6046f7c0695f87fdfbd8209db59f12a
+- Method: pg_dump -Fc via session pooler :5432, interactive password.
+- Covers the full post-0015 schema (49 public tables + auth-readable).
+- Supersedes the 2026-07-27 dump as the staging restore point.
+- OFF-HOST COPY still owed (LA-10 discipline): owner copies the file
+  to a second physical location when convenient.
+
+## Migration 0015 applied to staging (2026-08-11)
+
+anon table privileges 0 (was 23), anon sequence ACLs 0, RLS coverage
+unchanged (0 tables without RLS), gateway EXECUTE path live-proven
+post-sweep (bad-token 401 forbidden on both remote routes).
+
 ## Open owner actions to fully seal the baseline (all bounded)
 
 1. Align ORCH_BASE_COMMIT (sudo): set worker.env
