@@ -20,7 +20,9 @@
 param(
   [Parameter(Mandatory=$true)][string]$ProdHost,
   [Parameter(Mandatory=$true)][string]$ProdUser,
-  [int]$Port = 5432
+  [int]$Port = 5432,
+  # Dry run: DUMMY tokens, SQL written to a preview file, psql NOT called.
+  [switch]$GenerateOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -49,26 +51,37 @@ $actors = @(
 )
 
 Write-Host ''
-Write-Host '=== FRESH PROD TOKENS - store each in 1Password NOW (shown once) ===' -ForegroundColor Yellow
+if (-not $GenerateOnly) {
+  Write-Host '=== FRESH PROD TOKENS - store each in 1Password NOW (shown once) ===' -ForegroundColor Yellow
+}
 $sql = @()
 $sql += '\set ON_ERROR_STOP on'
 foreach ($a in $actors) {
-  $t = New-Token
-  Write-Host ("  PROD-{0}: {1}" -f $a.id, $t)
+  if ($GenerateOnly) { $t = 'dry-run-token-' + $a.id } else { $t = New-Token }
+  if (-not $GenerateOnly) { Write-Host ('  PROD-' + $a.id + ': ' + $t) }
   $h = Sha256Hex $t
   $sql += ("insert into actor_registry (actor_id, display_name, actor_role, token_hash, enabled) " +
-    "values ('{0}', '{1}', '{2}', '{3}', {4}) " +
-    "on conflict (actor_id) do update set token_hash = excluded.token_hash, enabled = excluded.enabled;" `
-    -f $a.id, $a.name, $a.role, $h, $a.enabled)
+    "values ('$($a.id)', '$($a.name)', '$($a.role)', '$h', $($a.enabled)) " +
+    "on conflict (actor_id) do update set token_hash = excluded.token_hash, enabled = excluded.enabled;")
 }
-$global = New-Token
-Write-Host ("  PROD-remote-intake-global (also goes in Vercel REMOTE_INTAKE_TOKEN): {0}" -f $global)
+if ($GenerateOnly) { $global = 'dry-run-token-global' } else { $global = New-Token }
+if (-not $GenerateOnly) {
+  Write-Host ('  PROD-remote-intake-global (also goes in Vercel REMOTE_INTAKE_TOKEN): ' + $global)
+}
 $gh = Sha256Hex $global
-$sql += ("insert into remote_intake_config (id, token_hash, enabled) values ('global', '{0}', true) " +
-  "on conflict (id) do update set token_hash = excluded.token_hash, enabled = true;" -f $gh)
+$sql += ("insert into remote_intake_config (id, token_hash, enabled) values ('global', '$gh', true) " +
+  "on conflict (id) do update set token_hash = excluded.token_hash, enabled = true;")
 $sql += "select actor_id, actor_role, enabled, length(token_hash) as hash_len, left(token_hash, 8) as hash_prefix from actor_registry order by actor_id;"
 $sql += "select id, enabled, length(token_hash) as hash_len, left(token_hash, 8) as hash_prefix from remote_intake_config;"
 
+if ($GenerateOnly) {
+  $preview = Join-Path $evDir '_provision_preview.gen.sql'
+  $sql -join "`r`n" | Out-File -Encoding ascii $preview
+  Write-Host "DRY RUN: generated SQL (dummy tokens) written to $preview - psql NOT called."
+  if (($sql -join ' ') -match '\{[0-9]\}') { throw 'Literal {n} placeholder found in generated SQL.' }
+  Write-Host 'Placeholder check: PASS (no literal {n} remains).' -ForegroundColor Green
+  return
+}
 $f = Join-Path $env:TEMP 'p1_provision.gen.sql'
 $sql -join "`r`n" | Out-File -Encoding ascii $f
 Write-Host ''
