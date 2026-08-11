@@ -35,7 +35,11 @@ Known-applied staging chain: 0001,0002,0003,0004,0005,0006,0008(*),
 Apply from repo tip (b4f1b71 or later), each file fully, in order:
 
    0001 -> 0002 -> 0003 -> 0004 -> 0005 -> 0006 -> [0008 per P0-0]
-   -> 0009 -> 0010 -> 0011 -> 0012 -> 0013 -> 0014
+   -> 0009 -> 0010 -> 0011 -> 0012 -> 0013 -> 0014 -> 0015
+
+(0015 = anon table-privilege revoke sweep from the final audit; also
+apply it to STAGING once, so the P0-0 parity check and the anon-zero
+verification hold in both environments.)
 
 After EACH file: it must end "Success". After ALL files, run the
 parity check: the same information_schema listing as P0-0 must match
