@@ -1,16 +1,22 @@
 import { NextResponse } from 'next/server';
-import { constantTimeEqual } from '@/lib/ai-os/telegram-security';
 import { getServerSupabase } from '@/lib/supabase/server';
 
 // Preston AI OS - Phase 8 Remote Operations V1: remote GOAL submission.
-// DISABLED by default. Server-to-server: bearer-token authenticated
-// (constant-time), cookie-less (proxy exclusion), staging-only, size-capped
-// header-first - the same fail-closed shape as /api/os/chatgpt.
+// DISABLED by default. Server-to-server, cookie-less (proxy exclusion),
+// staging-only, size-capped header-first.
+//
+// AUTHENTICATION IS FULLY DELEGATED to the SECURITY DEFINER gateway
+// (submit_remote_intake): since 0014 it authenticates the presented
+// bearer against the legacy global token hash OR an enabled
+// actor_registry row (resolve_ssot_actor), stamping actor_id on actor
+// submissions. The web tier holds NO token material and performs NO
+// comparison - an S4 live defect (2026-08-11) showed the previous
+// web-tier equality gate against REMOTE_INTAKE_TOKEN silently blocked
+// every valid actor token before it could reach the gateway. Same
+// delegate-to-DB shape as /api/os/ssot/status.
 //
 // This route performs REQUEST RECORDING ONLY. It cannot write the goal
-// graph: it forwards to the 0011 SECURITY DEFINER gateway
-// (submit_remote_intake), which authenticates the token AGAIN against a
-// stored sha256 hash, applies backpressure, and inserts ONE bounded request
+// graph: the gateway applies backpressure and inserts ONE bounded request
 // row. The staging host runtime consumes rows through the owner-equivalent
 // composer pipeline (validation, risk policy, approval gating) on its next
 // tick. No shell, no git, no enqueue, no execution field, no approval is
@@ -34,8 +40,7 @@ export async function POST(request: Request) {
   if (env['REMOTE_INTAKE_ENABLED'] !== 'true') {
     return NextResponse.json({ ok: false, status: 'disabled' }, { status: 503 });
   }
-  const token = env['REMOTE_INTAKE_TOKEN'];
-  if (!token || env['SUPABASE_RUNTIME_ENV'] !== 'staging') {
+  if (env['SUPABASE_RUNTIME_ENV'] !== 'staging') {
     return NextResponse.json({ ok: false, status: 'unconfigured' }, { status: 503 });
   }
 
@@ -45,9 +50,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, status: 'too_large' }, { status: 413 });
   }
 
+  // Presence-only gate: a missing/empty bearer never reaches the DB. The
+  // VALUE is verified exclusively by the gateway (hash compare, both legs).
   const authHeader = request.headers.get('authorization') ?? '';
   const presented = authHeader.startsWith('Bearer ') ? authHeader.slice('Bearer '.length) : '';
-  if (!presented || !constantTimeEqual(presented, token)) {
+  if (!presented) {
     return NextResponse.json({ ok: false, status: 'forbidden' }, { status: 401 });
   }
 

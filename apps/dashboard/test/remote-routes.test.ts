@@ -63,13 +63,10 @@ describe('POST /api/os/remote/goal - header-only fail-closed gates', () => {
     expect((await res.json()).status).toBe('disabled');
   });
 
-  it('503 unconfigured without a token or outside staging', async () => {
+  it('503 unconfigured outside staging', async () => {
     process.env['REMOTE_INTAKE_ENABLED'] = 'true';
-    process.env['SUPABASE_RUNTIME_ENV'] = 'staging';
-    expect((await goalPost(goalReq())).status).toBe(503);
-    process.env['REMOTE_INTAKE_TOKEN'] = TOKEN;
     process.env['SUPABASE_RUNTIME_ENV'] = 'production';
-    expect((await goalPost(goalReq())).status).toBe(503);
+    expect((await goalPost(goalReq({ auth: `Bearer ${TOKEN}` }))).status).toBe(503);
   });
 
   it('413 on missing or oversize Content-Length BEFORE reading the body', async () => {
@@ -78,10 +75,28 @@ describe('POST /api/os/remote/goal - header-only fail-closed gates', () => {
     expect((await goalPost(goalReq({ length: '999999', auth: `Bearer ${TOKEN}` }))).status).toBe(413);
   });
 
-  it('401 on absent or wrong bearer token', async () => {
+  it('401 only on an ABSENT/EMPTY bearer; token VALUES are never judged in the web tier', async () => {
+    // S4 live defect (2026-08-11): the old web-tier equality gate against
+    // REMOTE_INTAKE_TOKEN blocked valid ACTOR tokens before the gateway
+    // could authenticate them. Authentication is delegated: any presented
+    // token must pass the web gate and reach the RPC (here: 503
+    // unconfigured because no Supabase env exists - proving the request
+    // got PAST authentication and to the delegation step).
     enable();
-    expect((await goalPost(goalReq())).status).toBe(401);
-    expect((await goalPost(goalReq({ auth: 'Bearer wrong' }))).status).toBe(401);
+    expect((await goalPost(goalReq())).status).toBe(401); // no header
+    expect((await goalPost(goalReq({ auth: 'Bearer ' }))).status).toBe(401); // empty
+    const delegated = await goalPost(goalReq({ auth: 'Bearer some-actor-token' }));
+    expect(delegated.status).toBe(503);
+    expect((await delegated.json()).status).toBe('unconfigured');
+  });
+
+  it('web tier holds NO token material: route source has no env-token compare (S4 pin)', async () => {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(
+      'src/app/api/os/remote/goal/route.ts', 'utf8');
+    expect(src).not.toContain("env['REMOTE_INTAKE_TOKEN']"); // no env token read
+    expect(src).not.toContain('constantTimeEqual'); // no web-tier compare
+    expect(src).toContain('submit_remote_intake'); // delegation target
   });
 
   it('400 on malformed JSON after the gates', async () => {
