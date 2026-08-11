@@ -43,6 +43,12 @@ export interface RemoteIntakeRow {
 export interface IntakeConsumeResult {
   configured: boolean;
   available: boolean; // false when 0011 is not applied / table unreadable
+  // Rows the poll actually saw (Stage 11R-10 live defect, 2026-08-11): a
+  // pending row whose status UPDATE (mark) fails produced NO consumed, NO
+  // rejected, NO error - an accepted request could sit invisible forever
+  // while clogging the bounded poll window. selected + mark_failed errors
+  // make every selected row account for itself in the tick log.
+  selected: number;
   consumed: Array<{ request_id: string; goal_ids: string[] }>;
   rejected: Array<{ request_id: string; reason: string }>;
   errors: string[];
@@ -66,7 +72,8 @@ export async function consumeRemoteIntakeOnce(
   maxRequests: number = REMOTE_INTAKE_MAX_PER_TICK,
 ): Promise<IntakeConsumeResult> {
   const out: IntakeConsumeResult = {
-    configured: false, available: false, consumed: [], rejected: [], errors: [],
+    configured: false, available: false, selected: 0,
+    consumed: [], rejected: [], errors: [],
   };
   const expectedOwner = String(env[REMOTE_INTAKE_OWNER_ENV] ?? '')
     .trim().toLowerCase();
@@ -91,6 +98,7 @@ export async function consumeRemoteIntakeOnce(
     return out;
   }
   out.available = true;
+  out.selected = rows.length;
 
   for (const raw of rows) {
     const requestId = String(raw.request_id ?? '');
@@ -114,12 +122,17 @@ export async function consumeRemoteIntakeOnce(
       }
     };
 
+    // Every selected row must account for itself: a failed mark is loud.
+    const markFailed = (target: string) =>
+      out.errors.push(bounded(`mark_failed:${target}:${requestId}`, 120));
+
     // Owner binding precedes EVERYTHING else about the row.
     if (rowOwner !== expectedOwner) {
       const ok = await mark('rejected', {
         reject_reason: 'owner_identity_mismatch', consumed_at: nowIso,
       });
       if (ok) out.rejected.push({ request_id: requestId, reason: 'owner_identity_mismatch' });
+      else markFailed('rejected');
       continue;
     }
     if (!usableRequestKey(requestId)) {
@@ -127,6 +140,7 @@ export async function consumeRemoteIntakeOnce(
         reject_reason: 'request_id_shape', consumed_at: nowIso,
       });
       if (ok) out.rejected.push({ request_id: requestId, reason: 'request_id_shape' });
+      else markFailed('rejected');
       continue;
     }
 
@@ -140,6 +154,7 @@ export async function consumeRemoteIntakeOnce(
         reject_reason: reason, consumed_at: nowIso,
       });
       if (ok) out.rejected.push({ request_id: requestId, reason });
+      else markFailed('rejected');
       continue;
     }
 
@@ -160,6 +175,7 @@ export async function consumeRemoteIntakeOnce(
         reject_reason: reason, consumed_at: nowIso,
       });
       if (ok) out.rejected.push({ request_id: requestId, reason });
+      else markFailed('rejected');
       continue;
     }
 
@@ -169,7 +185,10 @@ export async function consumeRemoteIntakeOnce(
     });
     if (ok) out.consumed.push({ request_id: requestId, goal_ids: goalIds });
     // A lost CAS here means a concurrent tick already recorded the SAME
-    // deterministic outcome (idempotent replay) - nothing to repair.
+    // deterministic outcome (idempotent replay); ticks are flock-serialized
+    // on the host, so in practice a failed consumed-mark is a real defect -
+    // surface it.
+    else markFailed('consumed');
   }
   return out;
 }

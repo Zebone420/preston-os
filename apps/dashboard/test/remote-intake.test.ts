@@ -111,6 +111,30 @@ describe('remote-intake consumption', () => {
     expect(db.rowsOf('master_goals')).toHaveLength(1); // no duplicate
   });
 
+  it('SURFACES a row whose status mark fails (11R-10 silent-clog regression)', async () => {
+    // Live defect 2026-08-11: an accepted pending row whose UPDATE failed
+    // produced no consumed/rejected/error at all - invisible forever while
+    // occupying the bounded poll window. Every selected row must account
+    // for itself.
+    const db = makeComposerFakeDb();
+    db.rowsOf(REMOTE_INTAKE_TABLE).push(pendingRow({ request_id: 'req-remote-stuck' }));
+    const client = { ...db.client, from: (t: string) => {
+      const real = db.client.from(t);
+      if (t !== REMOTE_INTAKE_TABLE) return real;
+      return { ...real, update: () => ({
+        eq: () => ({ eq: () => ({ select: async () => (
+          { error: { message: 'permission denied' }, data: null }
+        ) }) }),
+      }) };
+    } };
+    const r = await consumeRemoteIntakeOnce(client as typeof db.client, ENV, NOW);
+    expect(r.selected).toBe(1);
+    expect(r.consumed).toHaveLength(0);
+    expect(r.rejected).toHaveLength(0);
+    expect(r.errors.some((e) => e.startsWith('mark_failed:consumed:req-remote-stuck'))).toBe(true);
+    expect(db.rowsOf(REMOTE_INTAKE_TABLE)[0].status).toBe('pending');
+  });
+
   it('bounded: processes oldest-first up to the per-tick cap', async () => {
     const db = makeComposerFakeDb();
     for (let i = 1; i <= 5; i++) {

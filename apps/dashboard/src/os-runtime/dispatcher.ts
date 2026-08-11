@@ -267,8 +267,8 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
       client as unknown as ComposerClient, env,
       new Date(seams.clock()).toISOString(),
     );
-    if (intake.configured && (intake.consumed.length || intake.rejected.length || intake.errors.length)) {
-      log({ level: 'info', command, correlationId, event: 'remote_intake', consumed: intake.consumed, rejected: intake.rejected, ...(intake.errors.length ? { errors: intake.errors } : {}) });
+    if (intake.configured && (intake.selected || intake.consumed.length || intake.rejected.length || intake.errors.length)) {
+      log({ level: 'info', command, correlationId, event: 'remote_intake', selected: intake.selected, consumed: intake.consumed, rejected: intake.rejected, ...(intake.errors.length ? { errors: intake.errors } : {}) });
     }
   } catch (e) {
     log({ level: 'error', command, correlationId, event: 'remote_intake', error: e instanceof Error ? e.message.slice(0, 200) : 'intake failed' });
