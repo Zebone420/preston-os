@@ -22,7 +22,10 @@ param(
   [Parameter(Mandatory=$true)][string]$ProdUser,
   [int]$Port = 5432,
   # Dry run: DUMMY tokens, SQL written to a preview file, psql NOT called.
-  [switch]$GenerateOnly
+  [switch]$GenerateOnly,
+  # Recovery: rotate ONLY this actor's token (no other actor row, no
+  # remote_intake_config touched). Safe re-key of a single identity.
+  [string]$OnlyActor = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -50,6 +53,14 @@ $actors = @(
   @{ id = 'hermes-1';       role = 'hermes';       name = 'Hermes';        enabled = 'false' }
 )
 
+$rotateConfig = $true
+if ($OnlyActor -ne '') {
+  $actors = @($actors | Where-Object { $_.id -eq $OnlyActor })
+  if (-not $actors) { throw "Unknown actor id: $OnlyActor" }
+  $rotateConfig = $false   # single-actor rotation never re-keys the global intake token
+  Write-Host ("SINGLE-ACTOR ROTATION: only {0} will be re-keyed; no other row touched." -f $OnlyActor) -ForegroundColor Yellow
+}
+
 Write-Host ''
 if (-not $GenerateOnly) {
   Write-Host '=== FRESH PROD TOKENS - store each in 1Password NOW (shown once) ===' -ForegroundColor Yellow
@@ -64,13 +75,15 @@ foreach ($a in $actors) {
     "values ('$($a.id)', '$($a.name)', '$($a.role)', '$h', $($a.enabled)) " +
     "on conflict (actor_id) do update set token_hash = excluded.token_hash, enabled = excluded.enabled;")
 }
-if ($GenerateOnly) { $global = 'dry-run-token-global' } else { $global = New-Token }
-if (-not $GenerateOnly) {
-  Write-Host ('  PROD-remote-intake-global (also goes in Vercel REMOTE_INTAKE_TOKEN): ' + $global)
+if ($rotateConfig) {
+  if ($GenerateOnly) { $global = 'dry-run-token-global' } else { $global = New-Token }
+  if (-not $GenerateOnly) {
+    Write-Host ('  PROD-remote-intake-global (also goes in Vercel REMOTE_INTAKE_TOKEN): ' + $global)
+  }
+  $gh = Sha256Hex $global
+  $sql += ("insert into remote_intake_config (id, token_hash, enabled) values ('global', '$gh', true) " +
+    "on conflict (id) do update set token_hash = excluded.token_hash, enabled = true;")
 }
-$gh = Sha256Hex $global
-$sql += ("insert into remote_intake_config (id, token_hash, enabled) values ('global', '$gh', true) " +
-  "on conflict (id) do update set token_hash = excluded.token_hash, enabled = true;")
 $sql += "select actor_id, actor_role, enabled, length(token_hash) as hash_len, left(token_hash, 8) as hash_prefix from actor_registry order by actor_id;"
 $sql += "select id, enabled, length(token_hash) as hash_len, left(token_hash, 8) as hash_prefix from remote_intake_config;"
 
