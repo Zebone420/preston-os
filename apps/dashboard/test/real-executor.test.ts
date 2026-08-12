@@ -459,3 +459,92 @@ describe('worktree add argv - branch rebind (11R-06 root cause)', () => {
       'be8b251f3055fea8da7c4a9c94b6ce298311f582']);
   });
 });
+
+// P2/Codex gate: provider dispatch by assigned_role. Each adapter self-gates
+// on its own env/executable; the executor picks by role.
+describe('buildRealExecutor - provider dispatch (claude vs codex)', () => {
+  const codexOk = async () => ({
+    spawned: true, exit_code: 0, timed_out: false, truncated: false,
+    stdout: '{"result":"codex done"}', stderr: '', error: null, duration_ms: 1100,
+  });
+  // Host configured for BOTH providers (real drill posture).
+  const bothEnv: Record<string, string> = {
+    ...fullEnv,
+    ORCH_REAL_CODEX_ENABLED: 'true',
+    ORCH_CODEX_EXECUTABLE: '/usr/local/bin/codex',
+  };
+  const codexJob = () => job({
+    id: 'job-real-0001', assigned_role: 'codex', kind: 'documentation',
+  });
+
+  it('a codex job routes to the CODEX runner, not the claude runner', async () => {
+    const db = makeFakeDb();
+    const git = makeGitFake(' M apps/dashboard/docs-change.md\n');
+    const claude = vi.fn(claudeOk);
+    const codex = vi.fn(codexOk);
+    const exec = await buildRealExecutor({
+      client: db.client, env: bothEnv, gitRunner: git.runner,
+      claudeRunner: claude, codexRunner: codex, ...seams,
+    });
+    const r = await exec!(execInput(codexJob()));
+    expect(r!.outcome).toBe('completed');
+    expect(r!.executed).toBe(true);
+    expect(codex).toHaveBeenCalledTimes(1);
+    expect(claude).not.toHaveBeenCalled();
+    // worktree cleaned up on the codex path too
+    expect(git.calls.some((a) => a.includes('remove'))).toBe(true);
+  });
+
+  it('a claude job still routes to the CLAUDE runner (regression)', async () => {
+    const db = makeFakeDb();
+    const git = makeGitFake(' M apps/dashboard/docs-change.md\n');
+    const claude = vi.fn(claudeOk);
+    const codex = vi.fn(codexOk);
+    const exec = await buildRealExecutor({
+      client: db.client, env: bothEnv, gitRunner: git.runner,
+      claudeRunner: claude, codexRunner: codex, ...seams,
+    });
+    const r = await exec!(execInput(job()));
+    expect(r!.outcome).toBe('completed');
+    expect(claude).toHaveBeenCalledTimes(1);
+    expect(codex).not.toHaveBeenCalled();
+  });
+
+  it('codex job with the codex gate ABSENT declines to simulation (null)', async () => {
+    // Only Claude is configured (fullEnv has no codex vars). A codex job's
+    // probe returns unavailable -> adapter refuses -> executor declines.
+    const db = makeFakeDb();
+    const git = makeGitFake(' M apps/dashboard/docs-change.md\n');
+    const codex = vi.fn(codexOk);
+    const entries: Record<string, unknown>[] = [];
+    const exec = await buildRealExecutor({
+      client: db.client, env: fullEnv, gitRunner: git.runner,
+      claudeRunner: claudeOk, codexRunner: codex, log: (f) => entries.push(f),
+      ...seams,
+    });
+    const r = await exec!(execInput(codexJob()));
+    expect(r).toBeNull(); // decline -> simulation (prior behavior preserved)
+    // The runner is invoked but self-refuses on the disabled probe BEFORE
+    // spawning; the decline is surfaced with the adapter_refused reason.
+    const d = entries.find((e) => e.reason === 'adapter_refused');
+    expect(d).toBeDefined();
+    // worktree still cleaned up
+    expect(git.calls.some((a) => a.includes('remove'))).toBe(true);
+  });
+
+  it('codex path enforces the SAME post-run path allowlist (violation fails)', async () => {
+    const db = makeFakeDb();
+    const git = makeGitFake([
+      ' M apps/dashboard/legit.ts',
+      ' M packages/guards/src/index.ts', // outside allowlist
+    ].join('\n') + '\n');
+    const exec = await buildRealExecutor({
+      client: db.client, env: bothEnv, gitRunner: git.runner,
+      claudeRunner: claudeOk, codexRunner: codexOk, ...seams,
+    });
+    const r = await exec!(execInput(codexJob()));
+    expect(r!.outcome).toBe('failed');
+    expect(r!.failure_reason).toBe('path_violation');
+    expect(git.calls.some((a) => a.includes('remove'))).toBe(true);
+  });
+});

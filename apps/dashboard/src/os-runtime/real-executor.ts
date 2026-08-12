@@ -19,10 +19,13 @@
 // on a path violation the removal also discards the offending edits
 // (git worktree remove --force), so nothing outside policy survives.
 //
-// Codex note: this composer is Claude-only in V1 (ORCH_CLAUDE_EXECUTABLE).
-// The adapter's job contract already refuses non-claude assigned roles, so
-// codex-assigned jobs decline to simulation until a codex executable gate
-// is separately owner-activated.
+// Provider dispatch (P2/Codex gate): the executor selects the adapter by
+// job.assigned_role - runRealClaudeJob for 'claude', runRealCodexJob for
+// 'codex'. Each adapter has its OWN owner env gate + executable
+// (ORCH_REAL_CLAUDE_ENABLED/ORCH_CLAUDE_EXECUTABLE vs
+// ORCH_REAL_CODEX_ENABLED/ORCH_CODEX_EXECUTABLE); with the codex gate absent,
+// a codex job's probe returns 'unavailable' and it declines to simulation -
+// exactly the prior behavior. Any other role has no real adapter and declines.
 
 import { spawn } from 'node:child_process';
 import { isAbsolute } from 'node:path';
@@ -43,6 +46,7 @@ import {
   runRealClaudeJob,
   sanitizeChildEnv,
 } from '../lib/ai-os/real-claude-adapter';
+import { runRealCodexJob } from '../lib/ai-os/real-codex-adapter';
 import type {
   RealExecutionResult,
   RealJobExecutor,
@@ -110,6 +114,7 @@ export interface RealExecutorDeps {
   // Test seams; production callers omit them.
   gitRunner?: ProvisionRunner;
   claudeRunner?: Parameters<typeof runRealClaudeJob>[0]['runner'];
+  codexRunner?: Parameters<typeof runRealCodexJob>[0]['runner'];
   fileExists?: (p: string) => boolean;
   realpath?: (p: string) => string;
 }
@@ -216,7 +221,10 @@ export async function buildRealExecutor(
         ? await readApprovalRecord(deps.client, job.approval_id)
         : undefined;
 
-      const result = await runRealClaudeJob({
+      // The driver's structural lock ref widens to the adapter's full
+      // WorktreeLock shape here; repo is fixed and acquired_at is this
+      // run's clock (identity/fence/expiry are what confinement checks).
+      const adapterInput = {
         env: deps.env,
         controls,
         goal,
@@ -224,9 +232,6 @@ export async function buildRealExecutor(
         approvalRecord,
         runId,
         nowMs,
-        // The driver's structural lock ref widens to the adapter's full
-        // WorktreeLock shape here; repo is fixed and acquired_at is this
-        // run's clock (identity/fence/expiry are what confinement checks).
         lock: {
           ...lock,
           repo: 'preston-os',
@@ -234,10 +239,14 @@ export async function buildRealExecutor(
         },
         worktreePath: prov.target.worktreePath,
         treeDirty: false,
-        runner: deps.claudeRunner,
         fileExists: deps.fileExists,
         realpath: deps.realpath,
-      });
+      };
+      // Provider dispatch by assigned_role. Each adapter self-gates on its
+      // own env/executable; an unconfigured provider declines to simulation.
+      const result = job.assigned_role === 'codex'
+        ? await runRealCodexJob({ ...adapterInput, runner: deps.codexRunner })
+        : await runRealClaudeJob({ ...adapterInput, runner: deps.claudeRunner });
 
       if (result.outcome === 'unavailable' || result.outcome === 'blocked') {
         // Adapter refused (posture/contract/confinement). Decline to
