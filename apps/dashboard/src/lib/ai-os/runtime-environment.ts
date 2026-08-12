@@ -36,7 +36,9 @@ export function deploymentEnvironment(
   return strictRuntimeEnvironment(env) ?? 'staging';
 }
 
-// Known staging project ref: a PRODUCTION deployment must never point at
-// the staging database (mirror of the long-standing staging-side
-// production-URL denylist). Refs appear in public URLs; not a secret.
+// Known project refs: each deployment must never point at the OTHER
+// environment's database (symmetric cross-env URL denylist; adversarial
+// review of 89f49a6, findings 1+2). Refs appear in public URLs; not
+// secrets. Compare case-insensitively - hostnames are case-insensitive.
 export const STAGING_PROJECT_REF = 'vcqtlmlaxxankxyezlul';
+export const PRODUCTION_PROJECT_REF = 'hiqsymsiwonmvrbbqhhe';

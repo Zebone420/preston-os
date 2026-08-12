@@ -152,7 +152,10 @@ export function auditContracts(): string[] {
         bad.push(`${c.role}:claims_prohibited:${cap}`);
       }
     }
-    if (c.environment_scope !== deploymentEnvironment()) bad.push(`${c.role}:env_not_staging`);
+    // Compare against the SAME module-load value the contracts were built
+    // with (review finding 3): frozen-vs-fresh diverged if process.env
+    // changed after import, flagging every contract spuriously.
+    if (c.environment_scope !== DEPLOYMENT_ENV) bad.push(`${c.role}:env_not_staging`);
     if (c.network_scope !== 'none') bad.push(`${c.role}:has_network`);
   }
   return bad;

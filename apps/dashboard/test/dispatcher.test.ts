@@ -84,6 +84,26 @@ describe('dispatcher - runtime packaging entry (pure)', () => {
     expect(r.exitCode).toBe(EXIT.config);
   });
 
+  it('P2 cross-env URL denylist: production deployment refuses the staging ref case-insensitively', async () => {
+    for (const host of ['vcqtlmlaxxankxyezlul', 'VCQTLMLAXXANKXYEZLUL']) {
+      const env = { ...RUNTIME_ENV, SUPABASE_RUNTIME_ENV: 'production', SUPABASE_URL: `https://${host}.supabase.co` };
+      const r = await runDispatcher({ command: 'db-health', client: fakeClient({ hermes_mode: 'disabled' }), env, now: NOW, correlationId: 'c', log: noop });
+      expect(r.exitCode).toBe(EXIT.config);
+    }
+  });
+
+  it('P2 cross-env URL denylist: staging deployment refuses the production ref', async () => {
+    const env = { ...RUNTIME_ENV, SUPABASE_URL: 'https://HIQSYMSIWONMVRBBQHHE.supabase.co' };
+    const r = await runDispatcher({ command: 'db-health', client: fakeClient({ hermes_mode: 'disabled' }), env, now: NOW, correlationId: 'c', log: noop });
+    expect(r.exitCode).toBe(EXIT.config);
+  });
+
+  it('P2: production deployment with a production URL clears the gate', async () => {
+    const env = { ...RUNTIME_ENV, SUPABASE_RUNTIME_ENV: 'production', SUPABASE_URL: 'https://hiqsymsiwonmvrbbqhhe.supabase.co' };
+    const r = await runDispatcher({ command: 'db-health', client: fakeClient({ hermes_mode: 'disabled' }), env, now: NOW, correlationId: 'c', log: noop });
+    expect(r.exitCode).toBe(EXIT.ok);
+  });
+
   it('db-health fails when the control plane returns zero readable rows (RLS denial)', async () => {
     const r = await runDispatcher({ command: 'db-health', client: fakeClient(null), env: RUNTIME_ENV, now: NOW, correlationId: 'c', log: noop });
     expect(r.exitCode).toBe(EXIT.error); // rows 0 => not healthy

@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { redactSecrets } from '../lib/ai-os/memory';
 import {
-  deploymentEnvironment, strictRuntimeEnvironment, STAGING_PROJECT_REF,
+  deploymentEnvironment, strictRuntimeEnvironment,
+  PRODUCTION_PROJECT_REF, STAGING_PROJECT_REF,
 } from '../lib/ai-os/runtime-environment';
 import {
   workerHealth,
@@ -124,8 +125,9 @@ function stagingGate(
     log({ level: 'error', command, correlationId, event: 'staging_gate', error: 'SUPABASE_RUNTIME_ENV must be staging or production (fail-closed)' });
     return { exitCode: EXIT.config, summary: { error: 'not marked staging' } };
   }
-  const url = String(env['SUPABASE_URL'] ?? '');
-  if (runtimeEnv === 'staging' && /\bprod(uction)?\b/i.test(url)) {
+  const url = String(env['SUPABASE_URL'] ?? '').toLowerCase();
+  if (runtimeEnv === 'staging' &&
+      (/\bprod(uction)?\b/.test(url) || url.includes(PRODUCTION_PROJECT_REF))) {
     log({ level: 'error', command, correlationId, event: 'staging_gate', error: 'production target refused' });
     return { exitCode: EXIT.config, summary: { error: 'production target refused' } };
   }
