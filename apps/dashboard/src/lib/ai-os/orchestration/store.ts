@@ -8,6 +8,7 @@
 // error. This module persists STATE only; it executes nothing.
 
 import type { QueryResult, RuntimeClient, WriteOutcome } from '../store';
+import { deploymentEnvironment } from '../runtime-environment';
 import { validateMasterGoal, validateGoalJob } from './model';
 import type { GoalJob, GoalState, MasterGoal } from './model';
 import {
@@ -67,7 +68,7 @@ export async function insertMasterGoal(
     source: goal.source,
     requested_by: goal.requested_by,
     status: goal.status,
-    environment: 'staging', // forced
+    environment: deploymentEnvironment(), // forced to THIS deployment's env
     budget: goal.budget,
     correlation_id: goal.correlation_id,
     simulation_only: true, // forced
@@ -270,7 +271,7 @@ export async function insertApproval(
     goal_id: null,
     job_id: null,
     action: req.action,
-    environment: 'staging',
+    environment: deploymentEnvironment(),
     affected_resource: req.affected_resource,
     reason: req.reason,
     risk_class: req.risk_class,
@@ -332,7 +333,7 @@ export async function insertJobApproval(
     goal_id: args.goal_id,
     job_id: args.job.id,
     action: envelope.action,
-    environment: 'staging',
+    environment: deploymentEnvironment(),
     affected_resource: envelope.affected_resource,
     reason: args.reason ?? '',
     risk_class: args.job.risk_class,
@@ -407,7 +408,7 @@ export function verifyAuthoritativeApproval(
   if (String(record.action_hash) !== expected.action_hash) return { ok: false, reason: 'action_hash_mismatch' };
   if (String(record.job_id) !== job.id) return { ok: false, reason: 'job_scope_mismatch' };
   if (String(record.goal_id) !== job.goal_id) return { ok: false, reason: 'goal_scope_mismatch' };
-  if (String(record.environment) !== 'staging') return { ok: false, reason: 'environment_mismatch' };
+  if (String(record.environment) !== deploymentEnvironment()) return { ok: false, reason: 'environment_mismatch' };
   if (!record.nonce) return { ok: false, reason: 'nonce_missing' };
   const decided = Date.parse(String(record.decided_at ?? ''));
   const expires = Date.parse(String(record.expires_at ?? ''));

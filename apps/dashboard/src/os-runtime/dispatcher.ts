@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { redactSecrets } from '../lib/ai-os/memory';
 import {
+  deploymentEnvironment, strictRuntimeEnvironment, STAGING_PROJECT_REF,
+} from '../lib/ai-os/runtime-environment';
+import {
   workerHealth,
   workerSimulateLoop,
   type WorkerOnceInput,
@@ -106,22 +109,29 @@ export function parseArgs(argv: string[]): {
   return { command, maxIterations, diagnostic: argv.includes('--diagnostic') };
 }
 
-// Positive staging allowlist + production-URL denylist. Shared by db-health
-// and (Phase 5) the DB-touching loops: NO loop may read or write any database
-// the operator has not explicitly marked as staging.
+// Positive environment allowlist + cross-environment URL denylist (P2).
+// Shared by db-health and the DB-touching loops: NO loop may touch any
+// database the operator has not explicitly marked with THIS deployment's
+// environment, and the URL must not belong to the OTHER environment.
 function stagingGate(
   env: Record<string, string | undefined>,
   command: string,
   correlationId: string,
   log: Logger,
 ): DispatcherResult | null {
-  if (env['SUPABASE_RUNTIME_ENV'] !== 'staging') {
-    log({ level: 'error', command, correlationId, event: 'staging_gate', error: 'SUPABASE_RUNTIME_ENV must be staging (fail-closed)' });
+  const runtimeEnv = strictRuntimeEnvironment(env);
+  if (runtimeEnv === null) {
+    log({ level: 'error', command, correlationId, event: 'staging_gate', error: 'SUPABASE_RUNTIME_ENV must be staging or production (fail-closed)' });
     return { exitCode: EXIT.config, summary: { error: 'not marked staging' } };
   }
-  if (/\bprod(uction)?\b/i.test(String(env['SUPABASE_URL'] ?? ''))) {
+  const url = String(env['SUPABASE_URL'] ?? '');
+  if (runtimeEnv === 'staging' && /\bprod(uction)?\b/i.test(url)) {
     log({ level: 'error', command, correlationId, event: 'staging_gate', error: 'production target refused' });
     return { exitCode: EXIT.config, summary: { error: 'production target refused' } };
+  }
+  if (runtimeEnv === 'production' && url.includes(STAGING_PROJECT_REF)) {
+    log({ level: 'error', command, correlationId, event: 'staging_gate', error: 'staging target refused in production' });
+    return { exitCode: EXIT.config, summary: { error: 'staging target refused' } };
   }
   return null;
 }
@@ -294,7 +304,8 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
   // A driveable row that violates the DB simulation pins is corrupted or
   // drifted state - refuse the whole run rather than skip it silently.
   const pinViolations = driveable.filter(
-    (r) => r.simulation_only !== true || String(r.environment) !== 'staging',
+    (r) => r.simulation_only !== true ||
+      String(r.environment) !== deploymentEnvironment(),
   );
   if (pinViolations.length > 0) {
     log({ level: 'error', command, correlationId, event: 'orchestrate_once', error: 'simulation pin violated on a non-terminal goal (fail-closed)', goals: pinViolations.map((r) => String(r.id)) });

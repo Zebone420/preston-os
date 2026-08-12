@@ -26,6 +26,7 @@
 //  4. Reasons are static codes; env VALUES are never echoed.
 
 import type { SystemControls } from './controls';
+import { strictRuntimeEnvironment } from './runtime-environment';
 
 export const EXECUTION_LEVELS = ['SIMULATION', 'BOUNDED_CODE_EXECUTION',
   'EXTERNAL_WRITE'] as const;
@@ -71,8 +72,9 @@ export function resolveExecutionLevel(i: CapabilityInput): CapabilityResult {
   }
   if (requested === 'SIMULATION') reasons.push('level_env_not_set');
 
-  // Staging-only, always (mirrors the runtime staging gate + db-health).
-  if (i.env['SUPABASE_RUNTIME_ENV'] !== 'staging') {
+  // P2: environment allowlist (mirrors the runtime environment gate +
+  // db-health). Unset/blank/mistyped can never enable execution.
+  if (strictRuntimeEnvironment(i.env) === null) {
     reasons.push('runtime_env_not_staging');
   }
   // Emergency flag must be an EXPLICIT opt-out, matching the real adapter.

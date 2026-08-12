@@ -3,6 +3,9 @@
 // another. A capability is denied unless it appears in `capabilities` AND is
 // not in `prohibitions` AND the requested risk is within `max_risk`.
 
+import {
+  deploymentEnvironment, type RuntimeEnvironment,
+} from '../runtime-environment';
 import type { RiskClass } from '../types';
 import type { AgentRole } from './model';
 
@@ -47,7 +50,9 @@ export interface AgentContract {
   capabilities: readonly Capability[];
   prohibitions: readonly string[]; // extra, beyond the universal set
   max_risk: RiskClass; // highest risk this agent may even PROPOSE
-  environment_scope: 'staging'; // Phase 7 hard-pin
+  // P2: pinned to THIS deployment's environment at module load; audit
+  // checks equality with the deployment env (never "any environment").
+  environment_scope: RuntimeEnvironment;
   write_scope: 'worktree_only' | 'none';
   network_scope: 'none'; // no agent gets network in Phase 7
   can_approve: false; // hard-pinned false for every agent
@@ -58,6 +63,8 @@ export interface AgentContract {
 
 const RO = <T,>(a: T[]): readonly T[] => Object.freeze([...a]);
 
+const DEPLOYMENT_ENV = deploymentEnvironment();
+
 // Default-deny registry. ChatGPT proposes/intakes but never edits. Hermes
 // coordinates but never edits or approves. Claude/Codex implement in a
 // worktree. Audit reads + audits only. No `can_approve` anywhere.
@@ -67,7 +74,7 @@ export const AGENT_CONTRACTS: Readonly<Record<AgentRole, AgentContract>> =
       role: 'chatgpt', version: '1.0.0',
       capabilities: RO<Capability>(['intake_goal', 'propose_command', 'read_repo']),
       prohibitions: RO(['edit_repo', 'local_commit', 'run_tests']),
-      max_risk: 'YELLOW', environment_scope: 'staging',
+      max_risk: 'YELLOW', environment_scope: DEPLOYMENT_ENV,
       write_scope: 'none', network_scope: 'none', can_approve: false,
       max_concurrent_jobs: 1, timeout_ms: 60_000, max_retries: 1,
     },
@@ -78,7 +85,7 @@ export const AGENT_CONTRACTS: Readonly<Record<AgentRole, AgentContract>> =
         'local_commit', 'create_worktree', 'audit', 'propose_command',
       ]),
       prohibitions: RO([]),
-      max_risk: 'YELLOW', environment_scope: 'staging',
+      max_risk: 'YELLOW', environment_scope: DEPLOYMENT_ENV,
       write_scope: 'worktree_only', network_scope: 'none', can_approve: false,
       max_concurrent_jobs: 2, timeout_ms: 900_000, max_retries: 2,
     },
@@ -89,7 +96,7 @@ export const AGENT_CONTRACTS: Readonly<Record<AgentRole, AgentContract>> =
         'local_commit', 'create_worktree', 'audit', 'propose_command',
       ]),
       prohibitions: RO([]),
-      max_risk: 'YELLOW', environment_scope: 'staging',
+      max_risk: 'YELLOW', environment_scope: DEPLOYMENT_ENV,
       write_scope: 'worktree_only', network_scope: 'none', can_approve: false,
       max_concurrent_jobs: 2, timeout_ms: 900_000, max_retries: 2,
     },
@@ -97,7 +104,7 @@ export const AGENT_CONTRACTS: Readonly<Record<AgentRole, AgentContract>> =
       role: 'hermes', version: '1.0.0',
       capabilities: RO<Capability>(['read_repo', 'coordinate', 'audit']),
       prohibitions: RO(['edit_repo', 'local_commit', 'propose_command']),
-      max_risk: 'GREEN', environment_scope: 'staging',
+      max_risk: 'GREEN', environment_scope: DEPLOYMENT_ENV,
       write_scope: 'none', network_scope: 'none', can_approve: false,
       max_concurrent_jobs: 1, timeout_ms: 120_000, max_retries: 1,
     },
@@ -105,7 +112,7 @@ export const AGENT_CONTRACTS: Readonly<Record<AgentRole, AgentContract>> =
       role: 'audit', version: '1.0.0',
       capabilities: RO<Capability>(['read_repo', 'run_tests', 'run_scanners', 'audit']),
       prohibitions: RO(['edit_repo', 'local_commit']),
-      max_risk: 'GREEN', environment_scope: 'staging',
+      max_risk: 'GREEN', environment_scope: DEPLOYMENT_ENV,
       write_scope: 'none', network_scope: 'none', can_approve: false,
       max_concurrent_jobs: 2, timeout_ms: 300_000, max_retries: 1,
     },
@@ -145,7 +152,7 @@ export function auditContracts(): string[] {
         bad.push(`${c.role}:claims_prohibited:${cap}`);
       }
     }
-    if (c.environment_scope !== 'staging') bad.push(`${c.role}:env_not_staging`);
+    if (c.environment_scope !== deploymentEnvironment()) bad.push(`${c.role}:env_not_staging`);
     if (c.network_scope !== 'none') bad.push(`${c.role}:has_network`);
   }
   return bad;

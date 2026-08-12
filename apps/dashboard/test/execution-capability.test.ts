@@ -72,10 +72,17 @@ describe('execution capability - owner DB posture dominates host env', () => {
 });
 
 describe('execution capability - environment and emergency gates', () => {
-  it('refuses outside staging', () => {
+  it('refuses outside the P2 env allowlist', () => {
+    for (const v of ['test_dev', '', 'prod', 'Production']) {
+      const r = resolve({ ...readyEnv, SUPABASE_RUNTIME_ENV: v });
+      expect(r.level).toBe('SIMULATION');
+      expect(r.reasons).toContain('runtime_env_not_staging');
+    }
+  });
+
+  it("'production' clears the env gate (P2); every other gate still applies", () => {
     const r = resolve({ ...readyEnv, SUPABASE_RUNTIME_ENV: 'production' });
-    expect(r.level).toBe('SIMULATION');
-    expect(r.reasons).toContain('runtime_env_not_staging');
+    expect(r.reasons).not.toContain('runtime_env_not_staging');
   });
 
   it('refuses when DISABLE_REMOTE_RUNNER is absent (explicit opt-out required)', () => {

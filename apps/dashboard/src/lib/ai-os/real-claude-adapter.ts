@@ -40,6 +40,9 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
 import { basename, isAbsolute, sep } from 'node:path';
 import type { SystemControls } from './controls';
+import {
+  deploymentEnvironment, strictRuntimeEnvironment,
+} from './runtime-environment';
 import type { RuntimeClient, WriteOutcome } from './store';
 import { readSystemControlsChecked } from './store';
 import type { GoalJob } from './orchestration/model';
@@ -180,7 +183,9 @@ export function probeRealClaudeCapability(
   if (env['DISABLE_REMOTE_RUNNER'] !== 'false') {
     reasons.push('emergency_block_active');
   }
-  if (env['SUPABASE_RUNTIME_ENV'] !== 'staging') {
+  if (strictRuntimeEnvironment(env) === null) {
+    // P2: unset/blank/mistyped env can never run anything; the value itself
+    // must be exactly 'staging' or 'production' (deployment-pinned).
     reasons.push('runtime_env_not_staging');
   }
 
@@ -241,7 +246,7 @@ export function probeRealClaudeCapability(
 export interface RealJobContractInput {
   job: GoalJob;
   ownerIdentity: string; // master goal requested_by
-  goalEnvironment: string; // must be 'staging'
+  goalEnvironment: string; // must equal THIS deployment's environment
   goalSimulationOnly: boolean; // 0010 schema pin; unexpected value refuses
   approvalRecord?: Record<string, unknown>;
   runId: string;
@@ -258,7 +263,7 @@ export function checkRealJobContract(i: RealJobContractInput): ContractCheck {
   if (!i.ownerIdentity?.trim()) {
     return { ok: false, reason: 'owner_identity_missing' };
   }
-  if (i.goalEnvironment !== 'staging') {
+  if (i.goalEnvironment !== deploymentEnvironment()) {
     return { ok: false, reason: 'environment_not_staging' };
   }
   // The 0010 schema pins simulation_only=true. Any OTHER value means the

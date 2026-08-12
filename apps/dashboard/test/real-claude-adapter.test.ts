@@ -245,12 +245,17 @@ describe('real claude adapter - capability probe (fail-closed)', () => {
     }
   });
 
-  it('refuses any non-staging runtime env', () => {
-    for (const v of [undefined, 'production', 'prod', '']) {
+  it('refuses any runtime env outside the P2 allowlist', () => {
+    for (const v of [undefined, 'prod', '', 'Staging', 'test_dev']) {
       const r = probe({ ...goodEnv(), SUPABASE_RUNTIME_ENV: v });
       expect(r.capability).toBe('unavailable');
       expect(r.reasons).toContain('runtime_env_not_staging');
     }
+  });
+
+  it("'production' clears the env gate (P2) without weakening any other gate", () => {
+    const r = probe({ ...goodEnv(), SUPABASE_RUNTIME_ENV: 'production' });
+    expect(r.reasons).not.toContain('runtime_env_not_staging');
   });
 
   it('missing executable configuration is unavailable', () => {

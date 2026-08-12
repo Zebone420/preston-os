@@ -125,7 +125,8 @@ function goalFromRow(r: Record<string, unknown>): MasterGoal {
     source: (r.source as MasterGoal['source']) ?? 'dashboard',
     requested_by: String(r.requested_by ?? ''),
     status: (r.status as MasterGoal['status']) ?? 'proposed',
-    environment: 'staging', budget: budgetFrom(r.budget),
+    environment: r.environment === 'production' ? 'production' : 'staging',
+    budget: budgetFrom(r.budget),
     correlation_id: String(r.correlation_id ?? ''), simulation_only: true,
     created_at: String(r.created_at ?? ''), updated_at: String(r.updated_at ?? ''),
   };

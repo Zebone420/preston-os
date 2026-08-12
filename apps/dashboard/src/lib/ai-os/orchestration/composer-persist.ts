@@ -21,6 +21,7 @@
 
 import { createHash } from 'node:crypto';
 import { RUNTIME_ID_RE } from '../commands';
+import { deploymentEnvironment } from '../runtime-environment';
 import type { RuntimeClient } from '../store';
 import { composeRequest, type ComposedGoal, type ComposerProposal } from './composer';
 import { decomposeGoal, type TaskSpec } from './decomposition';
@@ -166,7 +167,7 @@ export async function confirmComposedRequest(
       source: 'dashboard',
       requested_by: input.ownerEmail,
       status: 'decomposed',
-      environment: 'staging',
+      environment: deploymentEnvironment(),
       budget: DEFAULT_BUDGET,
       correlation_id: correlationId,
       simulation_only: true,

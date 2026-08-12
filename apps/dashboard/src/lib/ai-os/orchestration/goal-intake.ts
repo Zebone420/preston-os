@@ -6,6 +6,7 @@
 // layer enforces structure, freshness, replay-safety, and default-deny.
 
 import { RUNTIME_ID_RE, hasSecretText } from '../commands';
+import { deploymentEnvironment } from '../runtime-environment';
 import { CLOCK_SKEW_MS } from './approvals';
 import {
   DEFAULT_BUDGET,
@@ -121,7 +122,7 @@ export function intakeCommand(input: {
     source: e.source,
     requested_by: e.owner_identity,
     status: 'proposed',
-    environment: 'staging',
+    environment: deploymentEnvironment(),
     budget,
     correlation_id: e.correlation_id,
     simulation_only: true,

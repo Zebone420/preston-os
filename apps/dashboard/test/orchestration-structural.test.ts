@@ -67,12 +67,15 @@ describe('orchestration structural pins - no spawn/network/send/external', () =>
     expect(text).toContain("return 'unavailable'"); // real capability gated
   });
 
-  it('model hard-pins staging + simulation_only', () => {
+  it('model pins deployment-environment equality + simulation_only', () => {
     const text = readFileSync(
       join(__dirname, '..', 'src/lib/ai-os/orchestration/model.ts'),
       'utf8',
     );
-    expect(text).toContain("environment: 'staging'");
+    // P2: the literal staging pin became an EQUALITY pin against the
+    // deployment's single environment - never "any environment".
+    expect(text).toContain('environment: RuntimeEnvironment');
+    expect(text).toContain('g.environment !== expectedEnvironment');
     expect(text).toContain('simulation_only: true');
   });
 

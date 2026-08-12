@@ -5,6 +5,7 @@
 // (require approval). Reuses classifyRisk from the runtime command layer.
 
 import { classifyRisk } from '../commands';
+import { deploymentEnvironment } from '../runtime-environment';
 import type { RiskClass } from '../types';
 import type { AgentRole } from './model';
 import { agentMayProposeRisk } from './agent-contracts';
@@ -60,8 +61,10 @@ export function evaluatePolicy(input: {
   if (action.trim().length === 0) {
     return failClosed('empty_action');
   }
-  if (input.environment !== 'staging') {
-    // Phase 7 is staging-only; any other environment is RED + mobile.
+  if (input.environment !== deploymentEnvironment()) {
+    // P2: an action may only target THIS deployment's environment; any
+    // mismatch (or unknown value) is RED + mobile, exactly as the old
+    // staging-only pin behaved.
     return {
       risk_class: 'RED', tier: 'RED', requires_approval: true,
       mobile_gate: true, evidence_required: ['environment_justification'],

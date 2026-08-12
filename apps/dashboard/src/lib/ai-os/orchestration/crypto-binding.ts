@@ -9,12 +9,17 @@
 // envelope so field order can never change the digest.
 
 import { createHash } from 'node:crypto';
+import {
+  deploymentEnvironment, type RuntimeEnvironment,
+} from '../runtime-environment';
 
 export interface ActionEnvelope {
   approval_id: string;
   action: string;
   affected_resource: string;
-  environment: 'staging';
+  // P2: the DEPLOYMENT environment is bound into the digest; a production
+  // approval can never authorize a staging action or vice versa.
+  environment: RuntimeEnvironment;
   owner_identity: string;
   risk_class: string;
   created_at: string;
@@ -94,7 +99,7 @@ export function jobApprovalEnvelope(args: {
     // separate job_* / assigned_role fields below, each bound independently.
     action: `${args.job_kind}: ${args.job_objective || args.job_title}`,
     affected_resource: `goal_job:${args.job_id}`,
-    environment: 'staging',
+    environment: deploymentEnvironment(),
     owner_identity: args.owner_identity,
     risk_class: args.risk_class,
     created_at: canonicalInstant(args.created_at),

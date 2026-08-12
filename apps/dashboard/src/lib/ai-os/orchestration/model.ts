@@ -7,6 +7,9 @@
 
 import type { RiskClass } from '../types';
 import { RUNTIME_ID_RE } from '../commands';
+import {
+  deploymentEnvironment, type RuntimeEnvironment,
+} from '../runtime-environment';
 
 export type GoalStatus =
   | 'proposed' // intake; not yet decomposed
@@ -94,7 +97,9 @@ export interface MasterGoal {
   source: 'chatgpt' | 'telegram' | 'dashboard' | 'owner_cli';
   requested_by: string; // owner identity
   status: GoalStatus;
-  environment: 'staging'; // Phase 7 is staging-only, hard-pinned
+  // P2: must equal THIS deployment's pinned environment (staging|production);
+  // validators enforce equality with deploymentEnvironment(), never "any".
+  environment: RuntimeEnvironment;
   budget: ExecutionBudget;
   correlation_id: string;
   simulation_only: true; // DB-pinned; never executes
@@ -143,14 +148,17 @@ export const GOAL_SOURCES: readonly MasterGoal['source'][] = [
   'chatgpt', 'telegram', 'dashboard', 'owner_cli',
 ];
 
-export function validateMasterGoal(g: MasterGoal): string[] {
+export function validateMasterGoal(
+  g: MasterGoal,
+  expectedEnvironment: RuntimeEnvironment = deploymentEnvironment(),
+): string[] {
   const errs: string[] = [];
   if (!ok(g.id)) errs.push('id_invalid');
   if (!ok(g.correlation_id)) errs.push('correlation_id_invalid');
   if (typeof g.title !== 'string' || !g.title.trim()) errs.push('title_required');
   if (typeof g.objective !== 'string' || !g.objective.trim()) errs.push('objective_required');
   if (!GOAL_SOURCES.includes(g.source)) errs.push('source_invalid');
-  if (g.environment !== 'staging') errs.push('environment_must_be_staging');
+  if (g.environment !== expectedEnvironment) errs.push('environment_must_be_staging');
   if (g.simulation_only !== true) errs.push('simulation_only_must_be_true');
   errs.push(...validateBudget(g.budget));
   return errs;
