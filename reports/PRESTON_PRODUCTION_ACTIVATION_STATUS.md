@@ -1,8 +1,8 @@
 # PRESTON PRODUCTION ACTIVATION STATUS (single resumable record)
 
-Updated: 2026-08-12. This file is THE resume point for any future
-session: verify facts against git/DB/HTTP before relying on them, but
-do not reconstruct history from chat.
+Updated: 2026-08-17 (laptop session). This file is THE resume point
+for any future session: verify facts against git/DB/HTTP before
+relying on them, but do not reconstruct history from chat.
 
 ## Gates closed (evidence committed)
 
@@ -29,10 +29,13 @@ do not reconstruct history from chat.
 
 ## Current critical path (P2 remainder - OWNER)
 
-preston-agent-prod does NOT exist yet. Hetzner console is unreachable
-from the agent session (extension site-permission + accounts.hetzner.com
-bot-check; three attempts, hard boundary). Owner runs runbook H-1..H-9:
-create host, harden, clone at pin 9aad6340440f46227a5c49ff818f66ffb3d37654,
+UPDATE 2026-08-17: preston-agent-prod EXISTS (created 2026-08-12,
+owner-authorized; Hetzner project Preston Automation; CPX22 - the
+runbook's "CPX21" was a naming slip, no such SKU; Ubuntu 24.04;
+key-auth only; IP recorded privately per owner rule, not in repo).
+Runbook H-1 is therefore DONE; H-2..H-9 remain and are NOT verified
+from any shared state as of this update. Owner runs runbook H-2..H-9:
+harden, clone at pin 9aad6340440f46227a5c49ff818f66ffb3d37654,
 prod worker.env, token-store bootstrap (fresh prod credential),
 Claude /login as preston-worker (fresh), units (nothing enabled),
 preflight, then drills D-P2-1 (consume 2 parked rows) ->
@@ -41,16 +44,37 @@ doc-only real execution x2). Evidence criteria in the runbook.
 
 ## Prepared/in-flight (agent-side, parallel)
 
-- Codex gate analysis (enablement delta), Hermes H1/H2 delta, n8n-1
-  delta: investigation running; packets to follow in reports/.
+- Codex enablement delta: DONE -
+  reports/PRESTON_CODEX_ACTIVATION_OWNER_PACKET_v1.md (fcf3e4d).
+- Hermes H1/H2 delta: DONE -
+  reports/PRESTON_HERMES_PROD_DELTA_PACKET_v1.md (this session).
+- n8n-1 delta: still to author (n8n gate is far downstream; 0016
+  draft exists).
 - 0016 (n8n actor role) DRAFTED, not applied - n8n gate only.
 - Remaining sequence after P2: Codex individual proof -> Claude+Codex
   team mode -> Hermes H1 then H2 -> n8n first bounded workflow ->
   remote owner operations proof -> final multi-agent drill ->
   PRESTON_AI_OS_FULL_MULTI_AGENT_LIVE_REPORT.md.
 
+## Session sync log (append-only, newest first)
+
+- 2026-08-17 laptop: full matrix RE-VERIFIED at fcf3e4d - vitest
+  1289 pass + 1 xfail + 5 known env-class worktree-prep (Windows
+  bash spawn; compensated by direct Git Bash checks), tsc x2 clean,
+  os-runtime build clean, next build clean, secret/RED scans 0/0.
+  COORDINATION: commits 776b65c..fcf3e4d (P2 runbook, this record,
+  Codex adapter+packet) exist ONLY on the laptop clone; origin/master
+  is still 9aad634. Any other session/host cannot see them until the
+  owner pushes - pushing these 4+ commits is the top sync action.
+  Untracked scripts/p1/p1_diagnose.local.ps1 (owner-run local 401
+  diagnostic, psql-only, no token exposure) passes both scanners.
+
 ## Standing deviations / owed items (non-blocking)
 
+- 0017 apply/seed verification output is not committed as evidence
+  files (no reports/p2_evidence/ yet, unlike p0/p1); recapture the
+  3-CHECK verification into reports/p2_evidence/ at the next owner
+  psql visit.
 - Vercel env vars Preview-scope fix claimed done at P1 session
   (verify at next Vercel visit); off-host backup copies (staging+prod)
   owed; P0 apply .log uncommitted (gitignore+classifier).
