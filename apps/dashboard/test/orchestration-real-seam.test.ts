@@ -213,6 +213,49 @@ describe('driver real-execution seam', () => {
     expect(contract).toEqual({ ok: true });
   });
 
+  it('T-mode F3: with a real executor, a READ-ONLY kind (audit) takes the fenced worktree lock', async () => {
+    // Pre-fix: non-edit kinds ran lock-free (token '', fence 0), so the real
+    // adapters' checkWorktreeConfinement (fence >= 1) refused every review
+    // job and it silently sim-completed. Real mode must lock EVERY kind.
+    const db = makeFakeDb();
+    await insertMasterGoal(db.client, goal());
+    db.rowsOf('master_goals')[0].created_at = NOW;
+    const specs: TaskSpec[] = [
+      { local_id: 'r', kind: 'audit', title: 'review', objective: 'review impl', depends_on_local: [] },
+    ];
+    const d = decomposeGoal(goal(), specs, (l) => `job-seam-${l}`, NOW);
+    if (!d.ok) throw new Error('decompose');
+    for (const j of d.jobs) await insertGoalJob(db.client, j);
+    const captured: Parameters<RealJobExecutor>[0][] = [];
+    const exec: RealJobExecutor = vi.fn(async (input) => {
+      captured.push(input);
+      return realCompleted();
+    });
+    const r = await driveGoal(db.client, 'goal-seam-0001', clock(Date.parse(NOW)), 20, () => [], lockCtx, undefined, exec);
+    expect(r.reason).toBe('completed');
+    expect(captured).toHaveLength(1);
+    expect(captured[0].lock.fence).toBeGreaterThanOrEqual(1);
+    expect(captured[0].lock.token).not.toBe('');
+    // the lock was durably acquired (repository_worktrees row exists)
+    expect(db.rowsOf('repository_worktrees').length).toBeGreaterThan(0);
+  });
+
+  it('T-mode F3 regression: WITHOUT a real executor an audit kind stays lock-free sim', async () => {
+    const db = makeFakeDb();
+    await insertMasterGoal(db.client, goal());
+    db.rowsOf('master_goals')[0].created_at = NOW;
+    const specs: TaskSpec[] = [
+      { local_id: 'r', kind: 'audit', title: 'review', objective: 'review impl', depends_on_local: [] },
+    ];
+    const d = decomposeGoal(goal(), specs, (l) => `job-seam-${l}`, NOW);
+    if (!d.ok) throw new Error('decompose');
+    for (const j of d.jobs) await insertGoalJob(db.client, j);
+    const r = await driveGoal(db.client, 'goal-seam-0001', clock(Date.parse(NOW)), 20, () => [], lockCtx);
+    expect(r.reason).toBe('completed');
+    expect((db.rowsOf('goal_jobs')[0].evidence_refs as string[]).join()).toContain('sim:goal:');
+    expect(db.rowsOf('repository_worktrees')).toHaveLength(0);
+  });
+
   it('mid-run owner stop discards a REAL result exactly like a simulated one', async () => {
     const db = makeFakeDb();
     await seedPlainGoal(db);

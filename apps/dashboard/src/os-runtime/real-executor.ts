@@ -125,6 +125,26 @@ function auditRef(jobId: string, runId: string, note: string): string {
   return `real-audit:job:${jobId}:run:${runId}:${note}`;
 }
 
+// Durable provider attribution (T-mode review F6, 2026-08-17): evidence_refs
+// and the result log line carried no provider identity, so a two-provider
+// goal could not prove WHICH adapter executed WHICH job from the run-scoped
+// record alone (goal_jobs.assigned_role is mutable outside the run). One
+// additional ref per real result closes it without touching the pinned
+// real:*/real-audit:* shapes.
+function providerRef(jobId: string, runId: string, role: string): string {
+  return `real-provider:job:${jobId}:run:${runId}:role:${role}`;
+}
+
+// Strict real-execution mode (T-mode review F2, 2026-08-17): by default a
+// per-job decline (provision failure, adapter refusal) falls back to the
+// Phase 7 simulation adapter - correct for staging bring-up, but in a
+// posture that INTENDS real execution it silently "sim-completes" work a
+// broken provider never did. With this env flag set to 'true' those
+// declines FAIL the job honestly instead (executed:false, reason coded).
+// capability_downgraded keeps the sim fallback in both modes: an owner
+// downgrade is an intentional posture change, not a broken provider.
+export const REQUIRE_REAL_ENV = 'ORCH_REQUIRE_REAL_EXECUTION';
+
 // Build the executor, or null when the host does not resolve
 // BOUNDED_CODE_EXECUTION at composition time (dispatcher start). The
 // per-job path ALSO re-resolves the level so a mid-run owner downgrade
@@ -147,7 +167,8 @@ export async function buildRealExecutor(
   // never enter these fields (evidence refs + reason codes only).
   const logResult = (
     r: RealExecutionResult,
-    ids: { job_id: string; goal_id: string; run_id: string },
+    ids: { job_id: string; goal_id: string; run_id: string } &
+      Record<string, unknown>,
   ): RealExecutionResult => {
     deps.log?.({
       event: 'real_executor_result', outcome: r.outcome,
@@ -180,9 +201,24 @@ export async function buildRealExecutor(
   }
 
   const gitRunner = deps.gitRunner ?? makeGitProcessRunner(deps.env);
+  const requireReal =
+    String(deps.env[REQUIRE_REAL_ENV] ?? '').trim() === 'true';
 
   const executor: RealJobExecutor = async (input) => {
     const { job, goal, runId, nowMs, lock } = input;
+    const role = job.assigned_role === 'codex' ? 'codex' : 'claude';
+    // Strict-mode honest failure for provider-broken declines (F2). The
+    // decline log line still fires at the call site; this converts the
+    // silent null (sim fallback) into a persisted failed attempt.
+    const failReal = (reason: string): RealExecutionResult => logResult({
+      outcome: 'failed', executed: false,
+      evidence_refs: [
+        auditRef(job.id, runId, `real_required:${reason}`),
+        providerRef(job.id, runId, role),
+      ],
+      failure_reason: `real_required:${reason}`,
+      summary: 'strict real mode: decline is a failure, not a simulation',
+    }, { job_id: job.id, goal_id: job.goal_id, run_id: runId, role });
 
     // Re-resolve the capability EVERY job (owner may have downgraded).
     const controls = await readSystemControlsChecked(deps.client);
@@ -194,7 +230,9 @@ export async function buildRealExecutor(
     if (!level.realExecutionAllowed) {
       decline({ stage: 'job', reason: 'capability_downgraded',
         reasons: level.reasons, job_id: job.id, goal_id: job.goal_id,
-        run_id: runId });
+        run_id: runId, role });
+      // Intentional in BOTH modes: an owner downgrade means simulation is
+      // the ruled posture - not a provider failure (F2 scope note).
       return null;
     }
 
@@ -207,11 +245,11 @@ export async function buildRealExecutor(
       baseCommit,
       runner: gitRunner,
     });
-    if (!prov.ok) { // decline -> simulation (fail-closed fallback)
+    if (!prov.ok) { // decline -> simulation (or honest failure in strict mode)
       decline({ stage: 'job', reason: prov.reason ?? 'provision_failed',
         detail: prov.detail ?? null, job_id: job.id, goal_id: job.goal_id,
-        run_id: runId });
-      return null;
+        run_id: runId, role });
+      return requireReal ? failReal(prov.reason ?? 'provision_failed') : null;
     }
 
     try {
@@ -251,11 +289,14 @@ export async function buildRealExecutor(
       if (result.outcome === 'unavailable' || result.outcome === 'blocked') {
         // Adapter refused (posture/contract/confinement). Decline to
         // simulation rather than failing the job - the refusal reasons are
-        // preconditions, not work outcomes.
+        // preconditions, not work outcomes. In strict real mode the refusal
+        // IS the work outcome: fail honestly (F2).
         decline({ stage: 'job', reason: 'adapter_refused',
           outcome: result.outcome, failure_reason: result.failure_reason,
-          job_id: job.id, goal_id: job.goal_id, run_id: runId });
-        return null;
+          job_id: job.id, goal_id: job.goal_id, run_id: runId, role });
+        return requireReal
+          ? failReal(result.failure_reason ?? 'adapter_refused')
+          : null;
       }
 
       // POST-RUN PATH ENFORCEMENT: enumerate every touched path; any edit
@@ -278,7 +319,7 @@ export async function buildRealExecutor(
       const bound = (s?: string) =>
         s ? s.replace(/\s+/g, ' ').trim().slice(-300) : null;
       const ids = {
-        job_id: job.id, goal_id: job.goal_id, run_id: runId,
+        job_id: job.id, goal_id: job.goal_id, run_id: runId, role,
         stderr_excerpt: bound(proc?.stderr_excerpt),
         stdout_excerpt: bound(proc?.stdout_excerpt),
         // Spawn-context fingerprint (11R-14): names + HOME path, no values.
@@ -291,6 +332,7 @@ export async function buildRealExecutor(
           evidence_refs: [
             ...result.evidence_refs,
             auditRef(job.id, runId, 'status_unreadable'),
+            providerRef(job.id, runId, role),
           ],
           failure_reason: 'worktree_audit_unreadable',
           summary: 'real run completed but confinement could not be proven',
@@ -303,6 +345,7 @@ export async function buildRealExecutor(
             ...result.evidence_refs,
             auditRef(job.id, runId,
               `path_violation:${audit.audit.violations.length}`),
+            providerRef(job.id, runId, role),
           ],
           failure_reason: 'path_violation',
           summary: 'real run touched paths outside the allowlist; ' +
@@ -319,6 +362,7 @@ export async function buildRealExecutor(
         evidence_refs: [
           ...result.evidence_refs,
           auditRef(job.id, runId, `paths_ok:${summaryNote}`),
+          providerRef(job.id, runId, role),
         ],
         failure_reason: result.failure_reason,
         summary: result.summary,

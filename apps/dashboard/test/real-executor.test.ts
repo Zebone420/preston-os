@@ -548,3 +548,128 @@ describe('buildRealExecutor - provider dispatch (claude vs codex)', () => {
     expect(git.calls.some((a) => a.includes('remove'))).toBe(true);
   });
 });
+
+// T-mode review F6: durable provider attribution. Every real result carries
+// a real-provider ref and the result log line names the role, so a
+// two-provider goal's run-scoped record proves WHO executed WHAT.
+describe('buildRealExecutor - provider attribution (F6)', () => {
+  const codexOk = async () => ({
+    spawned: true, exit_code: 0, timed_out: false, truncated: false,
+    stdout: '{"result":"codex done"}', stderr: '', error: null, duration_ms: 1100,
+  });
+  const bothEnv: Record<string, string> = {
+    ...fullEnv,
+    ORCH_REAL_CODEX_ENABLED: 'true',
+    ORCH_CODEX_EXECUTABLE: '/usr/local/bin/codex',
+  };
+
+  it('a codex run stamps real-provider:...:role:codex and logs role', async () => {
+    const db = makeFakeDb();
+    const git = makeGitFake(' M apps/dashboard/docs-change.md\n');
+    const entries: Record<string, unknown>[] = [];
+    const exec = await buildRealExecutor({
+      client: db.client, env: bothEnv, gitRunner: git.runner,
+      claudeRunner: claudeOk, codexRunner: codexOk,
+      log: (f) => entries.push(f), ...seams,
+    });
+    const j = job({ assigned_role: 'codex' });
+    const r = await exec!(execInput(j));
+    expect(r!.evidence_refs.join()).toContain(`real-provider:job:${j.id}:run:${j.run_id}:role:codex`);
+    const line = entries.find((e) => e.event === 'real_executor_result');
+    expect(line?.role).toBe('codex');
+  });
+
+  it('a claude run stamps role:claude (and never role:codex)', async () => {
+    const db = makeFakeDb();
+    const git = makeGitFake(' M apps/dashboard/docs-change.md\n');
+    const exec = await buildRealExecutor({
+      client: db.client, env: bothEnv, gitRunner: git.runner,
+      claudeRunner: claudeOk, codexRunner: codexOk, ...seams,
+    });
+    const r = await exec!(execInput(job()));
+    const joined = r!.evidence_refs.join();
+    expect(joined).toContain(':role:claude');
+    expect(joined).not.toContain(':role:codex');
+  });
+
+  it('a failed (path-violation) run still carries the provider ref', async () => {
+    const db = makeFakeDb();
+    const git = makeGitFake(' M packages/guards/escape.ts\n');
+    const exec = await buildRealExecutor({
+      client: db.client, env: bothEnv, gitRunner: git.runner,
+      claudeRunner: claudeOk, codexRunner: codexOk, ...seams,
+    });
+    const r = await exec!(execInput(job()));
+    expect(r!.failure_reason).toBe('path_violation');
+    expect(r!.evidence_refs.join()).toContain(':role:claude');
+  });
+});
+
+// T-mode review F2: strict real mode (ORCH_REQUIRE_REAL_EXECUTION=true).
+// Provider-broken declines FAIL honestly instead of sim-completing; an
+// owner capability downgrade still declines to simulation in both modes.
+describe('buildRealExecutor - strict real mode (F2)', () => {
+  const codexOk = async () => ({
+    spawned: true, exit_code: 0, timed_out: false, truncated: false,
+    stdout: '{"result":"codex done"}', stderr: '', error: null, duration_ms: 1100,
+  });
+  const strictEnv: Record<string, string> = {
+    ...fullEnv, ORCH_REQUIRE_REAL_EXECUTION: 'true',
+  };
+
+  it('adapter refusal (codex gate absent) FAILS the job instead of null', async () => {
+    // strictEnv has no codex vars: a codex job's probe refuses.
+    const db = makeFakeDb();
+    const git = makeGitFake(' M apps/dashboard/docs-change.md\n');
+    const exec = await buildRealExecutor({
+      client: db.client, env: strictEnv, gitRunner: git.runner,
+      claudeRunner: claudeOk, codexRunner: codexOk, ...seams,
+    });
+    const r = await exec!(execInput(job({ assigned_role: 'codex' })));
+    expect(r).not.toBeNull();
+    expect(r!.outcome).toBe('failed');
+    expect(r!.executed).toBe(false);
+    expect(String(r!.failure_reason)).toContain('real_required:');
+    expect(r!.evidence_refs.join()).toContain(':role:codex');
+    // worktree still cleaned up on the strict-fail path
+    expect(git.calls.some((a) => a.includes('remove'))).toBe(true);
+  });
+
+  it('provision failure FAILS the job instead of null (nothing spawned)', async () => {
+    const db = makeFakeDb();
+    const git = makeGitFake('', { addFails: true });
+    const claude = vi.fn(claudeOk);
+    const exec = await buildRealExecutor({
+      client: db.client, env: strictEnv, gitRunner: git.runner,
+      claudeRunner: claude, ...seams,
+    });
+    const r = await exec!(execInput());
+    expect(r).not.toBeNull();
+    expect(r!.outcome).toBe('failed');
+    expect(String(r!.failure_reason)).toContain('real_required:');
+    expect(claude).not.toHaveBeenCalled();
+  });
+
+  it('owner capability downgrade STILL declines to simulation (null) in strict mode', async () => {
+    const db = makeFakeDb();
+    const git = makeGitFake(' M apps/dashboard/docs-change.md\n');
+    const exec = await buildRealExecutor({
+      client: db.client, env: strictEnv, gitRunner: git.runner,
+      claudeRunner: claudeOk, ...seams,
+    });
+    Object.assign(db.rowsOf('system_controls')[0], { execution_enabled: false });
+    const r = await exec!(execInput());
+    expect(r).toBeNull(); // ruled posture change, not a provider failure
+  });
+
+  it('flag absent: adapter refusal still declines to null (unchanged default)', async () => {
+    const db = makeFakeDb();
+    const git = makeGitFake(' M apps/dashboard/docs-change.md\n');
+    const exec = await buildRealExecutor({
+      client: db.client, env: fullEnv, gitRunner: git.runner,
+      claudeRunner: claudeOk, codexRunner: codexOk, ...seams,
+    });
+    const r = await exec!(execInput(job({ assigned_role: 'codex' })));
+    expect(r).toBeNull();
+  });
+});

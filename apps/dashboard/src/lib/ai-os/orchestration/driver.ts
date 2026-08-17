@@ -464,13 +464,18 @@ export async function driverStep(
       // migration/repair/documentation) must NEVER run without an acquired
       // worktree lock. With no lock context we FAIL CLOSED - skip the run and
       // signal lockRequired so the loop halts rather than spinning. Read-only
-      // kinds (audit/recommendation/unknown) may proceed without a lock.
-      if (isEdit && !lockCtx) { lockRequired = true; continue; }
+      // kinds (audit/recommendation/unknown) may proceed without a lock in
+      // SIMULATION. When a real executor is composed, EVERY kind takes the
+      // fenced lock (T-mode review F3, 2026-08-17): the real adapters demand
+      // fence >= 1 (checkWorktreeConfinement), so a lock-free review kind
+      // could never really execute - it silently declined to simulation.
+      const needsLock = isEdit || Boolean(executeReal);
+      if (needsLock && !lockCtx) { lockRequired = true; continue; }
       const worktreeId = `wt-${job.id}`;
-      const token = isEdit ? lockCtx!.token(job.id) : '';
+      const token = needsLock ? lockCtx!.token(job.id) : '';
       let fence = 0;
       let acquired = false;
-      if (isEdit) {
+      if (needsLock) {
         const acq = await acquireWorktreeLock(client, {
           worktree_id: worktreeId, repo: 'preston-os', job_id: job.id,
           owner: job.assigned_role ?? 'claude', token,
