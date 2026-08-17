@@ -48,8 +48,18 @@ doc-only real execution x2). Evidence criteria in the runbook.
   reports/PRESTON_CODEX_ACTIVATION_OWNER_PACKET_v1.md (fcf3e4d).
 - Hermes H1/H2 delta: DONE -
   reports/PRESTON_HERMES_PROD_DELTA_PACKET_v1.md (this session).
-- n8n-1 delta: still to author (n8n gate is far downstream; 0016
-  draft exists).
+- n8n-1 delta: DONE -
+  reports/PRESTON_N8N_FIRST_WORKFLOW_PACKET_v1.md (intake-only
+  bounded workflow 1; 0016 draft is its migration).
+- P2 gate-close package: DONE -
+  reports/PRESTON_P2_GATE_REPORT_TEMPLATE.md (mechanical fill;
+  PASS requires evidence refs in every cell).
+- Full post-P2 sequence: DONE -
+  reports/PRESTON_FINAL_ACTIVATION_SEQUENCE_v1.md (gates 1-10 with
+  prereqs/owner/agent/proof/rollback/weight per gate).
+- Owed by laptop next: T-mode packet (after adversarial machinery
+  review closes), remote-owner-ops packet (gate 7), final
+  multi-agent drill script (gate 8).
 - 0016 (n8n actor role) DRAFTED, not applied - n8n gate only.
 - Remaining sequence after P2: Codex individual proof -> Claude+Codex
   team mode -> Hermes H1 then H2 -> n8n first bounded workflow ->
@@ -57,6 +67,15 @@ doc-only real execution x2). Evidence criteria in the runbook.
   PRESTON_AI_OS_FULL_MULTI_AGENT_LIVE_REPORT.md.
 
 ## Session sync log (append-only, newest first)
+
+- 2026-08-17 laptop (2nd cycle): the six laptop commits are NOW
+  PUSHED (origin/master==df63db2; the earlier "owner pushed" relay
+  was disproven by fetch - evidence-discipline hit #3, the push had
+  not landed). Office session owns the P2 lane (H-2..H-9 + drills)
+  from df63db2. Laptop authored: P2 gate report template, n8n
+  workflow-1 packet, final activation sequence (gates 1-10).
+  Codex packet audit + T-mode adversarial review running as
+  subagents; results and any fixes commit separately.
 
 - 2026-08-17 laptop: full matrix RE-VERIFIED at fcf3e4d - vitest
   1289 pass + 1 xfail + 5 known env-class worktree-prep (Windows
