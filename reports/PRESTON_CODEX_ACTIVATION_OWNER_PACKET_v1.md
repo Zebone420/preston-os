@@ -67,6 +67,10 @@ CX-2  REPIN FIRST (defect caught 2026-08-17): the P2 pin 9aad634
       Then append to /etc/preston/worker.env (root:root 0600):
         ORCH_REAL_CODEX_ENABLED=true
         ORCH_CODEX_EXECUTABLE=/var/lib/preston/worker/.local/bin/codex
+        ORCH_REQUIRE_REAL_EXECUTION=true
+      (strict real mode, T-mode review F2: a provider-broken decline
+      now FAILS the job honestly instead of silently sim-completing;
+      required from this gate onward - see the T-mode packet.)
       (ORCH_EXECUTION_LEVEL / DISABLE_REMOTE_RUNNER / SUPABASE_RUNTIME_ENV
       / ORCH_ALLOWED_PATHS / worktrees vars carry over unchanged.)
 

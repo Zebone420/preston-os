@@ -68,6 +68,22 @@ doc-only real execution x2). Evidence criteria in the runbook.
 
 ## Session sync log (append-only, newest first)
 
+- 2026-08-17 laptop (3rd cycle): downstream fast path built. Two
+  subagent reviews closed: (a) Codex packet audit - all 7 technical
+  claims CONFIRMED, 8 fixes applied incl. the CHILD_ENV_ALLOWLIST
+  scoping caveat and the CX-2 REPIN prerequisite (P2 pin 9aad634
+  predates the codex adapter d55e3ed - repin required before CX);
+  (b) T-mode adversarial machinery review - persistence layer
+  two-provider-safe; F2/F3/F6 FIXED in code 95c3d68 (strict real
+  mode ORCH_REQUIRE_REAL_EXECUTION, fenced lock for all kinds under
+  a real executor, real-provider:* attribution refs) with 9 new
+  tests; F1 (single-dispatcher rule), F4, F5, F7-F9 recorded as
+  gate conditions in the T-mode packet. New artifacts: T-mode
+  packet, remote-owner-ops packet (gate 7), final multi-agent drill
+  packet (gate 8), final activation sequence (gates 1-10), P2
+  gate-close template, n8n workflow-1 packet. Full matrix green at
+  95c3d68 (1298 pass + 1 xfail + 5 known env-class; tsc x2 0).
+
 - 2026-08-17 laptop (2nd cycle): the six laptop commits are NOW
   PUSHED (origin/master==df63db2; the earlier "owner pushed" relay
   was disproven by fetch - evidence-discipline hit #3, the push had
