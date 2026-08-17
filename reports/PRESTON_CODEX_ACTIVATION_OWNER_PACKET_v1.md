@@ -56,12 +56,19 @@ CX-1  Confirm the Codex CLI auth model (resolve the decision point).
       NEVER a staging or shared credential). If login needs an env-var
       key, STOP and return to the decision point above.
 
-CX-2  Host env (append to /etc/preston/worker.env, root:root 0600):
+CX-2  REPIN FIRST (defect caught 2026-08-17): the P2 pin 9aad634
+      PREDATES the codex adapter (d55e3ed). At that pin the runtime
+      has no codex dispatch - a codex job silently declines and
+      sim-completes. Before anything else:
+        cd /srv/preston-os && git fetch &&
+        git checkout <new pin: latest reviewed master commit>
+        cd apps/dashboard && npm ci && npm run build:os-runtime
+        update ORCH_BASE_COMMIT in worker.env to the same sha
+      Then append to /etc/preston/worker.env (root:root 0600):
         ORCH_REAL_CODEX_ENABLED=true
         ORCH_CODEX_EXECUTABLE=/var/lib/preston/worker/.local/bin/codex
       (ORCH_EXECUTION_LEVEL / DISABLE_REMOTE_RUNNER / SUPABASE_RUNTIME_ENV
-      / ORCH_ALLOWED_PATHS / worktrees / base-commit are already set by
-      the P2 Claude activation - Codex reuses them unchanged.)
+      / ORCH_ALLOWED_PATHS / worktrees vars carry over unchanged.)
 
 CX-3  actor_registry: enable codex-1 ONLY IF Codex must submit intake
       over the SSOT bearer path. For a doc-only job the owner/chatgpt-1
