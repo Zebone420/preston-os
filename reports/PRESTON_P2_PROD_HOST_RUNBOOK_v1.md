@@ -53,7 +53,10 @@ notes; NOT in committed docs). Resume at H-2.
   ORCH_CLAUDE_EXECUTABLE=/var/lib/preston/worker/.local/bin/claude
   ORCH_WORKTREES_ROOT=/srv/worktrees
   ORCH_ALLOWED_PATHS=<copy staging value verbatim>
-  CHILD_ENV_ALLOWLIST=<copy staging value verbatim - carries NO token vars>
+  (CHILD_ENV_ALLOWLIST: nothing to set - the child-env allowlist is
+   COMPILED into the runtime, real-claude-adapter.ts:105, locator
+   vars only, NO token vars; an env var of that name is unread. If
+   staging's worker.env carries such a line it is inert - skip it.)
   DISABLE_REMOTE_RUNNER=true            # stays true until drill 3
   (ORCH_EXECUTION_LEVEL absent           # simulation until drill 3)
   All other vars: copy staging names; values prod. NEVER a staging

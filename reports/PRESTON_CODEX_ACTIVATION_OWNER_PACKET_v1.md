@@ -35,6 +35,13 @@ file (like Claude), or does it require an API-KEY ENVIRONMENT VARIABLE?
   its own review (scope the var to codex only, confirm it never reaches
   the Claude path, re-run the adversarial review). Default recommend:
   prefer a Codex CLI auth mode that persists a home-dir credential.
+  NOTE (audit 2026-08-17): "scope to codex only" requires a CODE
+  change. CHILD_ENV_ALLOWLIST is one shared frozen constant consumed
+  by sanitizeChildEnv for BOTH adapters' spawns AND every git
+  provisioning/audit/removal spawn (makeGitProcessRunner). Adding a
+  key var to the existing list injects it into Claude and git child
+  envs too. If the env-var path is ever chosen, the review must ship
+  a per-provider allowlist threaded through the runners first.
 
 ## Codex activation steps (owner-run, AFTER P2 PASS)
 
@@ -61,15 +68,35 @@ CX-3  actor_registry: enable codex-1 ONLY IF Codex must submit intake
       submits and merely ASSIGNS to codex, codex-1 can stay disabled
       (execution identity is the host executable, not the actor row).
       If enabling: mint a FRESH prod token, hash-only in DB, 64-char
-      check, 1Password PROD-codex-1. (p1_actor_provision.ps1
-      -OnlyActor codex-1 exists for this.)
+      check, 1Password PROD-codex-1. Paste-ready:
+        .\scripts\p1\p1_actor_provision.ps1 `
+          -ProdHost aws-0-us-east-1.pooler.supabase.com `
+          -ProdUser postgres.hiqsymsiwonmvrbbqhhe -OnlyActor codex-1
 
 CX-4  Bounded Codex drill (mirror D-P2-3): submit ONE doc-only Level-1
-      goal whose text explicitly assigns codex (e.g. "... using codex")
-      so composer-persist routes assigned_role='codex'. Expect:
+      goal (same surface as D-P2-3: owner intake/dashboard) whose
+      NEUTRAL text explicitly assigns codex, e.g.:
+        "Create one task to document the codex drill result using codex."
+      Composer parses the explicit role and composer-persist routes
+      assigned_role='codex'. Env pickup: worker.env is read per
+      orchestrator start (Type=oneshot) - CX-2 takes effect on the
+      next tick, no restart step needed. Expect per run:
       real:*:completed:executed:true + real-audit:paths_ok:clean,
-      worktree created AND removed, zero sim:* fallback, and the audit
-      evidence names codex. Then a second independent bounded run.
+      worktree created AND removed, zero sim:* fallback.
+      ATTRIBUTION PROOF (evidence_refs are role-neutral by design):
+      the completed goal_jobs row must show assigned_role='codex'
+      (drill-verify capture) AND the journald real_executor_result
+      line for that job_id names the codex adapter.
+      Approval binding: inherited from D-P2-2 - the codex adapter
+      re-verifies the same SHA-256 envelope INCLUDING assigned_role,
+      so no codex-specific approval drill is required for a GREEN
+      doc job (optional: one YELLOW gated codex job to observe it).
+      Evidence capture after EACH run:
+        .\scripts\p2\p2_drill_verify.ps1 `
+          -ProdHost aws-0-us-east-1.pooler.supabase.com `
+          -ProdUser postgres.hiqsymsiwonmvrbbqhhe -Label cx-4-<n>
+      (files land in reports/p2_evidence/; commit with the report).
+      Then a second independent bounded run (cx-4-2).
 
 CX-5  Rollback / revocation (any of):
         - worker.env: remove ORCH_REAL_CODEX_ENABLED (codex declines to
@@ -77,7 +104,23 @@ CX-5  Rollback / revocation (any of):
         - update actor_registry set enabled=false where actor_id='codex-1'
         - global owner_stop=true halts both providers
       Prove one revocation (flip ORCH_REAL_CODEX_ENABLED off, confirm a
-      codex job declines) to close the gate.
+      codex job declines) to close the gate. Expected decline
+      signature: journald real_executor_decline with
+      reason adapter_refused / failure probe:gate_disabled, and the
+      job completing via sim:* evidence (no real spawn). Capture with
+      p2_drill_verify.ps1 -Label cx-5-revoke.
+
+## GATE PASS = (all required; then the CLAUDE.md gate report block)
+
+1. Two independent CX-4 runs, each with: real:*:executed:true +
+   real-audit paths_ok:clean, zero sim:*, worktree created+removed,
+   completed job row assigned_role='codex', journald result line.
+2. One CX-5 revocation proof with the decline signature above.
+3. Claude path regression: one claude-assigned job still executes
+   real (codex enablement changed nothing for claude).
+4. Safety invariants re-checked (P2 gate template section 3 list).
+5. Evidence files committed under reports/p2_evidence/ (cx-* labels)
+   and the gate closed in CLAUDE.md report format.
 
 ## Invariants that must NOT be weakened (from the review)
 
