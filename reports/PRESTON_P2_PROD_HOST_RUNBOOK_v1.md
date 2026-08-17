@@ -13,11 +13,13 @@ Pinned facts for this runbook:
   Cross-env guard: the runtime REFUSES the staging ref in production
   (and vice versa), case-insensitively - wrong URL cannot run.
 
-## H-1 Create the host (Hetzner console)
+## H-1 Create the host (Hetzner console) - DONE 2026-08-12
 
-CPX21 (or CPX11), same Ubuntu LTS image as preston-agent-staging,
-SSH key-auth ONLY, name preston-agent-prod. Note the public IP.
-Record IP privately (1Password + local notes; NOT in committed docs).
+DONE: created as CPX22 ("CPX21" here was a naming slip - no such
+SKU; CPX22 is the 2vCPU/4GB tier matching staging), Ubuntu 24.04,
+SSH key-auth ONLY, name preston-agent-prod, Hetzner project
+Preston Automation. IP recorded privately (1Password + local
+notes; NOT in committed docs). Resume at H-2.
 
 ## H-2 Base hardening (mirror staging exactly)
 
@@ -90,6 +92,11 @@ P2; orchestrator timer is enabled only at drill time (H-9).
   binary starts, exit codes sane. Paste output.
 
 ## H-9 Drill ladder (owner-run, in order; stop on any FAIL)
+
+Evidence capture after EACH drill step (read-only, from your
+workstation): scripts/p2/p2_drill_verify.ps1 -Label d-p2-<n>
+writes the posture/intake/goals/jobs/approvals ground truth to
+reports/p2_evidence/ - commit those files with the gate report.
 
 D-P2-1 CONSUME (execution stays off):
   systemctl start preston-orchestrator.service (one shot; or enable
