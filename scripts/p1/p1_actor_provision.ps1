@@ -9,7 +9,7 @@
 # Rows created:
 #   actor_registry: owner-remote-1 (enabled), chatgpt-1 (enabled),
 #                   claude-1 (enabled), codex-1 (DISABLED),
-#                   hermes-1 (DISABLED)      [n8n needs migration 0016]
+#                   hermes-1 (DISABLED), n8n-1 (DISABLED; needs 0016 applied)
 #   remote_intake_config: id='global', fresh legacy token hash, ENABLED
 #
 # Usage (own PowerShell window, from C:\dev\preston-os):
@@ -50,7 +50,10 @@ $actors = @(
   @{ id = 'chatgpt-1';      role = 'chatgpt';      name = 'ChatGPT';       enabled = 'true'  },
   @{ id = 'claude-1';       role = 'claude';       name = 'Claude';        enabled = 'true'  },
   @{ id = 'codex-1';        role = 'codex';        name = 'Codex';         enabled = 'false' },
-  @{ id = 'hermes-1';       role = 'hermes';       name = 'Hermes';        enabled = 'false' }
+  @{ id = 'hermes-1';       role = 'hermes';       name = 'Hermes';        enabled = 'false' },
+  # n8n-1 requires migration 0016 (adds 'n8n' to the role CHECK) to be
+  # OWNER-APPLIED first; row starts disabled per the workflow-1 packet.
+  @{ id = 'n8n-1';          role = 'n8n';          name = 'n8n workflow';  enabled = 'false' }
 )
 
 $rotateConfig = $true
@@ -106,4 +109,4 @@ Remove-Item $f -Force
 if ($code -ne 0) { throw "Provisioning failed (psql exit $code)." }
 Write-Host ''
 Write-Host 'DONE. Copy the two verification tables above into the session,' -ForegroundColor Green
-Write-Host 'or just confirm: 5 actors (3 enabled) + global config enabled, all hash_len 64.'
+Write-Host 'or just confirm: 6 actors (3 enabled) + global config enabled, all hash_len 64.'
