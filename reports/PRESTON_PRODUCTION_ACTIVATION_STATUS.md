@@ -68,6 +68,21 @@ doc-only real execution x2). Evidence criteria in the runbook.
 
 ## Session sync log (append-only, newest first)
 
+- 2026-08-18 laptop (CODEX + T-MODE BOTH CLOSED PASS): Codex gate
+  CX-1..CX-5 closed (reports/PRESTON_CODEX_GATE_REPORT.md) - 3 real
+  prod codex runs, fail-closed revocation x3 + restoration, claude
+  unaffected. T-mode closed (reports/PRESTON_TMODE_GATE_REPORT.md) -
+  goal a7b7abed ran claude(plan)->codex(write)->claude(review,audit
+  kind) ALL REAL first-attempt with full triples (tmode-01 capture).
+  Live defects fixed: composer-persist audit-kind role drop
+  (f55e146 + 4 regressions); deploy-sync gap (chunk-fingerprint
+  machine check established). Host pin f55e146; Vercel prod
+  f55e146 (fingerprint-verified). Stale graph 5d25fa51 approvals
+  REJECTED (hygiene cleared). Superseded failed goals c049c964 /
+  4880f59d retained as F2/F4 fail-closed evidence. Next: Hermes
+  H1/H2 -> n8n -> ChatGPT live SSOT read -> remote owner ops ->
+  final multi-agent drill -> SSOT activation.
+
 - 2026-08-18 laptop (CX-4 EXEC + CX-5 COMPLETE, host-side): three
   production real codex runs completed executed:true (jobs 97c7be23 /
   0ef04145 / 9e45c3f8) + claude regression (c66b5a71), all
