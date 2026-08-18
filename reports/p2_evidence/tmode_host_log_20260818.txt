@@ -1,0 +1,39 @@
+=== T-MODE HOST LOG EVIDENCE (2026-08-18) ===
+Source: /var/log/preston/orchestrator.log on preston-agent-prod
+Host pin f55e146ad5a29eadf0011a1c90180213f8f9e175 (repin verified);
+ORCH_REQUIRE_REAL_EXECUTION=true; zero dispatcher timers (F1).
+
+--- SUCCESSFUL TEAM CHAIN: goal a7b7abed (tick disp-103459) ---
+Canonical text (pinned by test/tmode-compose-repro.test.ts):
+  Task 1: propose a short plan ... using claude.
+  Task 2: write ... after task 1 using codex.
+  Task 3: review ... after task 2 using claude.
+job 08a71218 (plan)   real_executor_result completed executed=true
+  evidence_count=3 role=claude run 82ab1377
+job c567481c (write)  real_executor_result completed executed=true
+  evidence_count=3 role=codex  run 8c665f8d (Codex CLI frames)
+job 769d5b68 (review, AUDIT KIND) real_executor_result completed
+  executed=true evidence_count=3 role=claude run 26a05ee5
+  (F3 live proof: audit-kind job REALLY executed; the review agent
+  ran the tmode regression test inside its worktree)
+goal a7b7abed reason=completed cycles=3
+worktrees after: EMPTY. Parked stale goal 5d25fa51 skipped without
+starvation on every tick. All jobs first-attempt.
+
+--- SUPERSEDED FAILED ATTEMPTS (F2/F4 fail-closed, explained) ---
+goal c049c964: prose-form/default-role graph - review job 9500cd0d
+  failed real_required:provider_not_claude x3 (audit role has no
+  real adapter). Root cause A: engine-default role assignment
+  (F4 violation surfaced honestly). Root cause B: composer-persist
+  dropped explicit claude on audit-kind. FIXED f55e146 + regression.
+goal 4880f59d: Task-form via STALE Vercel deploy (still 24a5284) -
+  plan claude real OK, write codex real OK, review again audit ->
+  failed honestly x3. Proved deploy-sync gap; fingerprint probe
+  (chunk-set diff) then machine-verified the f55e146 deployment.
+
+--- LIVE DEFECTS FIXED THIS GATE ---
+1. composer-persist: explicit claude/codex on audit-kind tasks now
+   honored (f55e146) + prose-form rejection pinned by test.
+2. Deploy-sync verification method established: /_next chunk
+   fingerprint diff proves whether a new production deployment is
+   actually live (two prior promote relays had not landed).
