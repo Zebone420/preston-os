@@ -96,8 +96,10 @@ CX-4  Bounded Codex drill (mirror D-P2-3): submit ONE doc-only Level-1
       worktree created AND removed, zero sim:* fallback.
       ATTRIBUTION PROOF (evidence_refs are role-neutral by design):
       the completed goal_jobs row must show assigned_role='codex'
-      (drill-verify capture) AND the journald real_executor_result
-      line for that job_id names the codex adapter.
+      (drill-verify capture) AND the real_executor_result line for
+      that job_id names the codex role. NOTE (2026-08-18): executor
+      log lines are NOT in journald - the unit appends them to
+      /var/log/preston/orchestrator.log (StandardOutput=append:).
       Approval binding: inherited from D-P2-2 - the codex adapter
       re-verifies the same SHA-256 envelope INCLUDING assigned_role,
       so no codex-specific approval drill is required for a GREEN
@@ -122,7 +124,8 @@ CX-5  Rollback / revocation (any of):
       p2_drill_verify.ps1 -Label cx-5-revoke.
       STRICT-MODE UPDATE (2026-08-18, live since the CX-2 repin):
       with ORCH_REQUIRE_REAL_EXECUTION=true the decline no longer
-      sim-completes. Correct expected signature: journald
+      sim-completes. Correct expected signature (in
+      /var/log/preston/orchestrator.log, not journald):
       real_executor_decline (adapter_refused / probe:gate_disabled)
       followed by the job FAILED with
       failure_reason real_required:probe:gate_disabled, evidence

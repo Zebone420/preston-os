@@ -1,0 +1,63 @@
+=== CX-4 HOST LOG EVIDENCE (captured 2026-08-18, laptop session) ===
+Source: /var/log/preston/orchestrator.log on preston-agent-prod
+(unit StandardOutput=append: - NOT journald; packet wording corrected)
+Host runtime pin: 4983d3d65f3a9ea0921c489a7ae39bb8d8779819
+Strict mode: ORCH_REQUIRE_REAL_EXECUTION=true live during all runs.
+Worktrees listing after final tick: EMPTY (clean lifecycle).
+
+--- context: pre-resubmission ticks (goals not yet confirmed) ---
+disp-96195 orchestrate_once stoppedReason no_eligible_goal
+disp-96211 orchestrate_once stoppedReason no_eligible_goal
+
+--- context: stale RED graph parked+skipped (anti-starvation proof) ---
+disp-96356 goal 5d25fa51-ad36-463c-a4a0-e305ae9cdd26
+  awaiting_owner_approval unlockRefusals not_approved x3
+  (jobs 14b8fe28 / f08269b2 / bf887fee - misclassified RED by stale
+  Vercel deploy c615a52 pre-9e08b95; approvals rejected by owner)
+disp-96372/96512/96529/96545 skippedParked [5d25fa51...]
+
+--- CX-4 RUN 1 (codex) ---
+disp-96623 real_executor_result outcome=completed executed=true
+  failure_reason=null evidence_count=3
+  job_id=97c7be23-578b-43de-8218-add10a9176cf
+  goal_id=256e0211-acbc-4be4-b255-5eb95c3b8c31
+  run_id=97c7be23-...:6802de31-5ee5-4e15-9001-ba5cddde0776
+  role=codex
+  stdout excerpt shows Codex CLI JSON frames (turn.completed with
+  token usage) - real adapter spawn, not simulation.
+  child_env_keys=[PATH,HOME,SHELL,LANG] child_home=/var/lib/preston/worker
+  NOTE: codex agent self-report mentions "Tests/scanners: not run due
+  to sandbox failure" - reviewed against DB path audit evidence.
+disp-96623 orchestrate_once goal 256e0211 reason=completed
+  execution_level=BOUNDED_CODE_EXECUTION
+
+--- CX-4 RUN 2 (codex) ---
+disp-97514 real_executor_result outcome=completed executed=true
+  failure_reason=null evidence_count=3
+  job_id=0ef04145-ecbd-497f-af5a-eee84a9f63de
+  goal_id=1b6d14bb-d588-4053-9525-e01354aa49c6
+  run_id=0ef04145-...:b230000d-4d55-48f2-8435-442862d094a4
+  role=codex
+  child_env_keys=[PATH,HOME,SHELL,LANG] child_home=/var/lib/preston/worker
+disp-97514 orchestrate_once goal 1b6d14bb reason=completed
+  execution_level=BOUNDED_CODE_EXECUTION
+
+--- CLAUDE REGRESSION (codex enablement changed nothing for claude) ---
+disp-98238 real_executor_result outcome=completed executed=true
+  failure_reason=null evidence_count=3
+  job_id=c66b5a71-675b-430e-844f-e4a4848dced0
+  goal_id=225b7847-d91d-40eb-a895-a00142c25859
+  run_id=c66b5a71-...:7b6b58ac-a1fb-4d26-8281-93ad41e5b0b0
+  role=claude
+  child_env_keys=[PATH,HOME,SHELL,LANG] child_home=/var/lib/preston/worker
+disp-98238 orchestrate_once goal 225b7847 reason=completed
+  execution_level=BOUNDED_CODE_EXECUTION
+
+=== LIVE DEFECT RECORD (this window) ===
+1. Stale Vercel prod deployment (c615a52, pre-9e08b95): dashboard
+   compose path classified ALL jobs RED (env-mismatch, disp-93663
+   class). Fix: owner promoted 24a5284 to production. Follow-up:
+   deploy-sync preflight added to gate checklists.
+2. Packet/runbook said "journald" for executor evidence; actual sink
+   is /var/log/preston/orchestrator.log (StandardOutput=append:).
+   Packet corrected.
