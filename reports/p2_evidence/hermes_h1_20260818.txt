@@ -1,0 +1,45 @@
+=== HERMES H1 STAGING EVIDENCE (2026-08-18) ===
+Packet: PRESTON_HERMES_PROD_DELTA_PACKET_v1.md H1 +
+PHASE_5J_HERMES_VERIFICATION_PACKET.md (condensed check set - the
+closable subset per H2-7 note: posture + zero-lease + zero-attempt
++ log; decisions checks complete at the next queued job).
+
+--- Preconditions (machine-verified over ssh) ---
+staging pin b4f1b71 (go-live baseline commit, ancestor of master)
+hermes.env: preston-hermes:preston-hermes 0600, exactly 4 vars
+  (SUPABASE_URL / SUPABASE_RUNTIME_KEY / SUPABASE_RUNTIME_ENV /
+   SUPABASE_RUNTIME_TOKEN_STORE - names only, values never read)
+hermes home 0700 preston-hermes (isolation intact)
+historical proof: hermes.log Jul 28 runs stoppedReason completed
+
+--- Activation (owner-run via session `!`, root key) ---
+systemctl enable --now preston-hermes-observe.timer -> ENABLE:0
+systemctl start preston-hermes-observe.service      -> START:0
+is-enabled: enabled
+FRESH RUN: disp-204613-hermes-loop rounds=1
+  stoppedReason=completed recorded=0
+  orchestration_status=unsafe_controls approval_attention=true
+CADENCE: timer cycling (fired 05:59:27Z, next 06:04:33Z ~5min)
+
+--- SQL checks (owner psql, staging DB, pasted output) ---
+posture: hermes_mode=observe_only paused=f owner_stop=f
+  execution_enabled=t remote_runner_enabled=t
+non-observe route:* decisions: 0   (H3-class invariant)
+job_attempts worker=preston-hermes: 0   (H6)
+worker_leases owner=preston-hermes: 0   (H5)
+
+--- Classification notes ---
+1. execution_enabled/remote_runner_enabled TRUE on staging is the
+   owner-ruled go-live-baseline posture (post-Phase-5J). The 5J
+   "expect false" text was simulation-era. Hermes invariants all
+   hold regardless: observe mode, zero leases, zero attempts, zero
+   non-observe routing decisions.
+2. orchestration_status "unsafe_controls" in the fresh log line is
+   read-model.ts:239 labeling a non-simulation-safe posture (i.e.,
+   execution enabled) - Hermes OBSERVING the posture correctly, not
+   a defect. approval_attention=true surfaces staging's parked
+   approvals - also correct observe behavior.
+
+H1 RESULT: PASS (observe-only proven live, isolated identity, no
+writes, cadence active). Rollback: systemctl disable --now
+preston-hermes-observe.timer.
