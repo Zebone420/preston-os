@@ -1,0 +1,49 @@
+=== CX-5 REVOCATION + RESTORATION HOST LOG EVIDENCE (2026-08-18) ===
+Source: /var/log/preston/orchestrator.log on preston-agent-prod
+Host pin 4983d3d65f...; ORCH_REQUIRE_REAL_EXECUTION=true throughout.
+All gate flips owner-authorized (CX speed window), performed over ssh
+with before/after verification.
+
+--- STEP 1: gate OFF (bounded revocation mechanism) ---
+sed removed ORCH_REAL_CODEX_ENABLED from /etc/preston/worker.env
+verify: grep -c '^ORCH_REAL_CODEX_ENABLED=' == 0
+intact: ORCH_REAL_CLAUDE_ENABLED=true ORCH_REQUIRE_REAL_EXECUTION=true
+
+--- STEP 2: revocation tick disp-99418 (goal fa8f51a2, job 00803e07) ---
+THREE in-run attempts, each the exact strict-mode signature:
+  real_executor_decline stage=job reason=adapter_refused
+    outcome=unavailable failure_reason=probe:gate_disabled role=codex
+  real_executor_result outcome=failed executed=false
+    failure_reason=real_required:probe:gate_disabled evidence_count=2
+    role=codex
+run_ids: ...:93e57149, ...:6c4e37d4, ...:2a7eee00
+goal terminal: reason=failed cycles=6. ZERO sim:* fallback.
+worktrees after: EMPTY (no leakage; no real spawn occurred).
+
+--- STEP 3: gate RESTORED ---
+ORCH_REAL_CODEX_ENABLED=true re-appended; verify grep shows the pair
+(ORCH_REAL_CODEX_ENABLED=true + ORCH_CODEX_EXECUTABLE=.../codex).
+
+--- STEP 4: post-restore proof tick disp-99501 ---
+goal 4a38578e (job 9e45c3f8) real_executor_result outcome=completed
+executed=true failure_reason=null evidence_count=3 role=codex
+first attempt (cycles=1); Codex CLI turn.completed frames in stdout;
+child_env_keys=[PATH,HOME,SHELL,LANG]. worktrees after: EMPTY.
+ALSO PROVES: a terminally failed (revoked) goal does not block or
+starve later valid work (scheduling requirement, live).
+
+--- CODEX REAL-RUN LEDGER (production, to date) ---
+1. job 97c7be23 goal 256e0211 (cx-4 run 1)  completed executed:true
+2. job 0ef04145 goal 1b6d14bb (cx-4 run 2)  completed executed:true
+3. job 9e45c3f8 goal 4a38578e (cx-5 restore) completed executed:true
+claude regression: job c66b5a71 goal 225b7847 completed executed:true
+
+--- OBSERVED (not a defect) ---
+Codex CLI's internal sandbox refused some of the agent's own shell
+attempts ("operation not permitted"); jobs still completed their doc
+objective and host-side path audits were clean. Host confinement
+(worktree + allowlist + post-run audit) is the enforced boundary.
+
+--- OUTSTANDING FOR GATE CLOSE ---
+DB captures cx-4-1, cx-4-2, cx-5-revoke (owner psql; DB state is
+final so all three may be captured in one session).

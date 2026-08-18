@@ -68,6 +68,24 @@ doc-only real execution x2). Evidence criteria in the runbook.
 
 ## Session sync log (append-only, newest first)
 
+- 2026-08-18 laptop (CX-4 EXEC + CX-5 COMPLETE, host-side): three
+  production real codex runs completed executed:true (jobs 97c7be23 /
+  0ef04145 / 9e45c3f8) + claude regression (c66b5a71), all
+  first-attempt, paths_ok-branch outcomes, clean worktree lifecycle,
+  role attribution via F6. CX-5 proven STRONG: gate off -> 3 in-run
+  honest failures real_required:probe:gate_disabled (zero sim, no
+  worktree leakage, goal terminal failed) -> gate restored+verified
+  -> next codex goal executed real first-attempt (failed goal did
+  not starve it). Evidence: cx4_host_log_20260818.txt +
+  cx5_host_log_20260818.txt. LIVE DEFECTS this window: stale Vercel
+  prod deploy (c615a52 pre-9e08b95) misclassified all dashboard
+  jobs RED - owner promoted 24a5284 (deploy-sync preflight added);
+  executor logs are in /var/log/preston/orchestrator.log not
+  journald (packet corrected). GATE CLOSE PENDING ONLY: owner psql
+  captures cx-4-1 / cx-4-2 / cx-5-revoke (DB state final; one
+  session). Posture: codex gate RESTORED true; strict mode true;
+  claude unaffected.
+
 - 2026-08-18 laptop (SECURITY INCIDENT + CX-4 evidence state): a
   16-char credential-shaped string (believed the prod DB password)
   was pasted into the session CHAT while a backgrounded psql capture
