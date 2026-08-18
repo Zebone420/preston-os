@@ -1,0 +1,65 @@
+Production access restored + prod safety baseline - machine evidence
+Captured 2026-08-18 ~22:47 UTC (4th run, owner opened prod ufw from
+the Hetzner noVNC console). No secret values below.
+
+========================================================
+1) THE DURABLE JUMP PATH IS LIVE (rotation-proof)
+========================================================
+Chain: laptop -> preston-n8n (178.105.10.19, static)
+             -> preston-agent-staging (168.119.153.173, static)
+             -> preston-agent-prod (46.224.68.139)
+Method: nested ssh ProxyCommand, single laptop-held key
+(preston_agent_ed25519); no private key stored on any hop.
+
+Proof:
+  $ ssh (nested ProxyCommand chain) root@46.224.68.139 hostname
+  preston-agent-prod
+  up 6 days, 16 hours, 58 minutes
+  user=root
+Staging leg proof (earlier this day): preston-agent-staging,
+up 4 weeks 18 h.
+
+========================================================
+2) PROD UFW - the new rule, nothing widened
+========================================================
+  Status: active
+  22/tcp  ALLOW  108.6.133.135              (owner /32, pre-existing)
+  22/tcp  ALLOW  168.119.153.173  # staging-jump   <- NEW (owner-run
+                                     from the prod root console)
+No 0.0.0.0/0 rule. No rule removed.
+
+========================================================
+3) PROD RUNTIME BASELINE (all matches documented state)
+========================================================
+  SUPABASE_RUNTIME_ENV=production
+  ORCH_BASE_COMMIT=f55e146ad5a29eadf0011a1c90180213f8f9e175
+  ORCH_REQUIRE_REAL_EXECUTION=true          (strict real mode)
+  /srv/preston-os HEAD = f55e146...  (pin == checkout, verified)
+  Units: preston-orchestrator/worker/hermes-observe (+timers) present;
+    ONLY preston-hermes-observe.timer active (~5 min cadence);
+    orchestrator + worker timers off => manual-tick posture (P2 exit
+    ruling). /srv/worktrees EMPTY.
+  job/* branch residue: >=8 branches (known accrual, one per real
+    run; periodic owner sweep item - not a defect).
+
+========================================================
+4) POSTURE GROUND TRUTH (from live hermes DB observations)
+========================================================
+hermes ticks log orchestration_status="unsafe_controls", recorded:0.
+Per read-model.ts:221-240 that status branch REQUIRES:
+  controls readable, orchestration migration applied,
+  owner_stop=false, paused=false,
+  and (execution_enabled OR remote_runner_enabled) = true.
+=> live proof of the deliberate active remote-live posture:
+   execution_enabled=t, remote_runner_enabled=t, owner_stop=f,
+   paused=f, hermes observing every ~5 min with zero writes/leases.
+Orchestrator log tail also retains the T-mode PASS evidence
+(real_executor_result executed:true for roles claude AND codex,
+goal a7b7abed..., jobs 08a71218/c567481c/769d5b68) and one parked
+goal 5d25fa51 awaiting_owner_approval (skippedParked - expected).
+
+========================================================
+5) VERDICT OF THIS BASELINE
+========================================================
+Production access RESTORED and rotation-proof; production posture
+IDENTICAL to the documented P2/T-mode exit state; no drift found.

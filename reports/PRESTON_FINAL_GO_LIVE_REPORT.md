@@ -382,3 +382,74 @@ did not push production DDL or fabricate tokens through the browser.
 Updated dimension: n8n 70 -> 85 (host+container now live-ready;
 accepted-leg still owner-RED). Staging reachability: RESTORED.
 Verdict unchanged: NOT YET FULLY LIVE.
+
+---
+
+## 16. ADDENDUM — FOURTH RUN (2026-08-18 ~22:47 UTC): PROD RESTORED
+
+Owner ran the ufw rule from the prod noVNC root console. Full
+evidence: reports/p2_evidence/prod_access_baseline_20260818.txt.
+
+PROD ACCESS: RESTORED AND ROTATION-PROOF.
+- Chain proven end-to-end with one laptop-held key (no key copied to
+  any hop): laptop -> preston-n8n -> staging -> prod returns
+  `preston-agent-prod` (up 6 d 16 h), user=root.
+- prod ufw verified: Status active; exactly two 22/tcp allows —
+  108.6.133.135 (owner, pre-existing) and 168.119.153.173
+  `# staging-jump` (new). Nothing widened, nothing removed.
+- Note: a first "prod jump open" relay preceded any actual rule
+  (probes stayed CLOSED through a 2-min watch); the agent held to
+  machine evidence and re-requested. Second attempt verified OPEN
+  within seconds. The evidence-over-relay rule earned its keep again.
+
+PROD SAFETY BASELINE: PASS — ZERO DRIFT.
+- Pin f55e146 == /srv/preston-os HEAD; SUPABASE_RUNTIME_ENV=
+  production; ORCH_REQUIRE_REAL_EXECUTION=true.
+- Only hermes-observe timer active (~5 min); orchestrator+worker
+  manual-tick per P2 exit ruling; /srv/worktrees empty; job/*
+  branch residue = known sweep item.
+- Live posture proof via hermes DB observations: status
+  "unsafe_controls" (read-model.ts:221-240) is exactly the branch
+  requiring controls-readable + migration-applied + owner_stop=false
+  + paused=false + execution/remote-runner enabled — i.e. the
+  DELIBERATE active remote-live posture. Hermes records zero writes.
+- Orchestrator log retains T-mode real-execution evidence
+  (executed:true, roles claude AND codex, goal a7b7abed-...).
+
+THIS RUN'S LANE RESULTS:
+- Focused tests 18/18 (n8n-container-env, migration-0019,
+  actor-provision-registry); secret + RED scans 0/0.
+- n8n UI tunnel and any n8n workflow execute/CLI path remain
+  classifier/guard-denied to the agent in this session — the bracket
+  accepted-leg is packaged below as a minimal owner action instead.
+
+REMAINING GATES — EXACT OWNER HANDOFF (each is minutes, in order):
+
+(1) Push the pending commits (H-6 blocks agent push). In this
+    session type:
+      ! git -C C:\dev\preston-os push origin master
+
+(2) n8n live bracket (runs wholly ON the n8n host; the token never
+    leaves it; calls are byte-equivalent to workflow-1's two nodes).
+    Run twice — second run must return status "duplicate" (that IS
+    the idempotency leg) — then the read:
+      ! ssh root@178.105.10.19 "set -a; . /etc/n8n.env; curl -sS -H \"apikey: $N8N_SSOT_ANON_KEY\" -H \"Content-Type: application/json\" -d \"{\\\"p_token\\\":\\\"$N8N_SSOT_TOKEN\\\",\\\"p_request_id\\\":\\\"n8n-20260818-01\\\",\\\"p_owner_identity\\\":\\\"info@preston.nyc\\\",\\\"p_raw_request\\\":\\\"Create one task to document the n8n intake proof.\\\",\\\"p_source\\\":\\\"api\\\"}\" https://hiqsymsiwonmvrbbqhhe.supabase.co/rest/v1/rpc/submit_remote_intake"
+    (Alternatively fire workflow-1's Manual Trigger in the n8n UI via
+    your own tunnel — purest form. Either satisfies packet s5.)
+
+(3) Migration 0019, staging first then prod (owner psql per the
+    established p0/p1 script pattern; agent verifies the audit row
+    live after each apply via the gateway).
+
+(4) ChatGPT read gate: one authenticated read with the chatgpt-1
+    token (owner-held). After 0019 this same read must land exactly
+    one access_events row — closing gate E and the 0019 proof
+    together. Agent then verifies unauthorized/revoked refusals.
+
+(5) Remote-owner phone drills (packet R-1..R-3), final multi-agent
+    drill (fmad-01), SSOT activation ruling — owner windows with the
+    agent driving all verification, evidence and reports.
+
+Percentages after this run: Bridge 92 · SSOT 94 · Production-Live 93
+(access blocker retired; authenticated gates still open).
+Verdict: NOT YET FULLY LIVE.
