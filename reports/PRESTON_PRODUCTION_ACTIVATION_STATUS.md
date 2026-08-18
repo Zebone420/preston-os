@@ -68,6 +68,27 @@ doc-only real execution x2). Evidence criteria in the runbook.
 
 ## Session sync log (append-only, newest first)
 
+- 2026-08-18 laptop (CX-2 PRECHECK): repin target RULED
+  4983d3d65f3a9ea0921c489a7ae39bb8d8779819 (origin/master HEAD ==
+  local master). Evidence: (a) hotfix containment - 9aad634 is an
+  ancestor of master AND the host pin 412ad15 patch is byte-identical
+  to master 9e08b95 (git show compare), so the repin drops nothing;
+  (b) pin..master runtime delta is ONLY driver.ts (F3 fenced lock for
+  all kinds under a real executor), real-executor.ts (F2 strict mode
+  + F6 real-provider:* refs + codex dispatch), real-codex-adapter.ts
+  (new, inert without its env gate), migration 0018 (already
+  OWNER-APPLIED both envs); every other changed file is docs/tests/
+  evidence; (c) full matrix at 4983d3d on laptop: vitest 1309 pass +
+  1 xfail + 5 known env-class (bash ENOENT from vitest on Windows;
+  both scanners re-run green via Git Bash directly, secret_scan 0
+  findings), tsc build:os-runtime exit 0. No DB action needed (codex
+  needs no migration; 0018 already applied). Host repin is owner-run
+  (laptop has no prod SSH key): one ssh command issued in-session
+  (fetch + checkout 4983d3d + npm ci + build + ORCH_BASE_COMMIT
+  update + ORCH_REQUIRE_REAL_EXECUTION=true append). The codex
+  enable pair (ORCH_REAL_CODEX_ENABLED / ORCH_CODEX_EXECUTABLE) is
+  deferred until CX-1 confirms the installed absolute path.
+
 - 2026-08-18 laptop (P2 CLOSE): P2 PASS - BOUNDED PRODUCTION
   EXECUTION VERIFIED (reports/PRESTON_P2_GATE_REPORT.md; evidence
   reports/p2_evidence/ x8 captures). Two first-attempt real
