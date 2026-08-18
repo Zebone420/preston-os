@@ -95,7 +95,8 @@ export interface ConfirmInput {
 // Build the durable jobs for one composed goal. Reuses decomposeGoal (the
 // authoritative decomposition + policy + contract checks), then applies the
 // owner's explicitly requested role where the contract allows it.
-function buildJobs(
+// Exported for the T-mode role-mapping regression test (pure helper).
+export function buildJobs(
   goal: MasterGoal,
   cg: ComposedGoal,
   requestKey: string,
@@ -121,6 +122,17 @@ function buildJobs(
     // codex request (codex holds the same edit contract as claude).
     if (src && src.requested_role === 'codex' && j.assigned_role === 'claude') {
       return { ...j, assigned_role: 'codex' as const };
+    }
+    // An audit-kind task the owner EXPLICITLY routed to a real provider
+    // runs under that provider's contract (both hold the audit
+    // capability). The audit ROLE has no real adapter, so leaving it
+    // assigned makes a review job un-executable under a real executor:
+    // T-mode live defect 2026-08-18 (goal c049c964) - the review job
+    // failed honestly with real_required:provider_not_claude. Role-less
+    // audit tasks keep the read-only audit role as before.
+    if (src && j.assigned_role === 'audit' &&
+        (src.requested_role === 'claude' || src.requested_role === 'codex')) {
+      return { ...j, assigned_role: src.requested_role };
     }
     return j;
   });
