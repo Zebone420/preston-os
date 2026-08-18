@@ -1,0 +1,97 @@
+Preston go-live - third run (2026-08-18), owner logged into Hetzner
+console. Machine evidence. No secret values appear below.
+
+========================================================
+STEP 1 - HETZNER STATE (read from the authenticated console)
+========================================================
+Project "Preston Automation" (14856254). Servers (all Falkenstein,
+green/running):
+  preston-n8n         178.105.10.19    CPX12
+  preston-agent-prod  46.224.68.139    CPX22  (IPv6 2a01:4f8:c015:8a86::/64)
+  preston-agent-staging 168.119.153.173 CPX22
+  gmail-dev-n8n       188.245.80.146   CPX22  (legacy, untouched)
+  ubuntu-4gb-fsn1-2   159.69.118.154   CPX22  (legacy, untouched)
+
+Firewalls (3):
+  prod-n8n-fw                  -> guards ubuntu-4gb-fsn1-2 (legacy)
+  firewall-1                   -> guards gmail-dev-n8n (legacy); inbound
+                                  chips 174.244.145.56, 96.232.230.13
+  preston-agent-staging-firewall -> guards preston-agent-staging ONLY
+                                  (Resources tab confirmed: 1 resource,
+                                  168.119.153.173, Applied)
+preston-agent-prod FIREWALLS tab: "No Firewalls have been applied to
+your server yet." => PROD HAS NO HETZNER CLOUD FIREWALL. Its SSH
+filtering is HOST ufw only.
+No private Networks exist (Networks page: "You don't have any networks").
+
+========================================================
+STEP 2 - STAGING MADE REACHABLE (browser firewall change DONE)
+========================================================
+Added to preston-agent-staging-firewall, INBOUND:
+  description "n8n-jump SSH", TCP, port 22, source 178.105.10.19/32
+The default Any-IPv4/Any-IPv6 chips were removed before saving so the
+source is EXACTLY the n8n static IP. All 6 pre-existing rules preserved
+(Home SSH, Office SSH, 108.6.133.135, 174.244.146.219, 74.101.96.6,
+174.216.209.19 - all TCP/22). Save confirmed; firewall "Fully applied".
+
+Proof (laptop -> n8n -> staging, keys stay on laptop):
+  ssh -o ProxyCommand="ssh -W %h:%p root@178.105.10.19" root@168.119.153.173 hostname
+  => preston-agent-staging   (up 4 weeks, 18 h)
+This n8n->staging leg is now rotation-proof (n8n IP is static).
+
+========================================================
+STEP 3 - STAGING -> PROD: STILL BLOCKED (prod host ufw)
+========================================================
+TCP/22 to 46.224.68.139, current evidence, all CLOSED/filtered:
+  laptop  -> prod:22  CLOSED (direct; egress 174.229.38.13)
+  n8n     -> prod:22  CLOSED
+  staging -> prod:22  CLOSED
+Prod has NO cloud firewall (Step 1) => the block is prod HOST ufw, whose
+allowlist contains none of the three source IPs I can present. The
+permanent rule 168.119.153.173 -> TCP/22 -> ALLOW is NOT yet present.
+
+Why I cannot add it myself (all safe paths exhausted):
+  - No cloud firewall on prod => nothing to change in the browser.
+  - No allowlisted source IP available to me (laptop/n8n/staging all
+    filtered), so no SSH path to run ufw.
+  - The Hetzner noVNC web console opens a root TTY, but a cloud-image
+    root login needs an OS password I do not hold, and entering a
+    password to authenticate is prohibited by my safety rules.
+  - Resetting the root password / rescue mode would REBOOT prod
+    (invasive) - not done without explicit owner approval.
+=> Opening prod ufw is a genuine owner action (see OWNER ACTIONS).
+
+========================================================
+STEP 6 - N8N ENV DEFECT FIXED LIVE (recreation succeeded)
+========================================================
+Pre-checks: /etc/n8n.env exists, root:root, 0600; names present
+(N8N_SSOT_ANON_KEY, N8N_SSOT_TOKEN); /opt/n8n bind data present.
+Ran the committed deploy/n8n/recreate-n8n-container.sh over ssh
+(docker create/start, not run):
+  before: N8N_SSOT names in container = (none)   <- the defect
+  after : N8N_SSOT_ANON_KEY, N8N_SSOT_TOKEN      <- fixed
+  bind  : 5678/tcp -> 127.0.0.1:5678 (localhost only)
+  health: 200
+  data  : /opt/n8n/database.sqlite survived (1.5 MB, workflows intact)
+  active: workflow export active:false; nothing enabled by recreation
+Post-state: container Up, ufw active (deny except SSH), env file 0600
+root:root. n8n host+container are now genuinely READY for the bracket.
+
+========================================================
+WHAT REMAINS - ALL OWNER-SECRET / OWNER-RED / PROD-SHELL GATED
+========================================================
+By the security design, the remaining gates need something only the
+owner holds; none can be completed autonomously:
+  - prod host SSH: prod ufw rule (owner; see below). Needed for the
+    orchestrator tick in the final real-execution drill.
+  - migration 0019 apply: prod/staging DB password (owner psql, the
+    established owner-safe process; Supabase SQL editor nav was also
+    classifier-blocked).
+  - ChatGPT read gate: chatgpt-1 bearer token (owner 1Password).
+  - n8n live bracket accepted-leg: enable actor n8n-1 (RED) + fire
+    workflow (RED, CLAUDE.md rule 6) + a prod-DB audit-row read.
+  - remote-owner ops: phone drills (owner).
+  - SSOT activation: owner RED flag verification/declaration.
+Unauthenticated prod web tier reproven fail-closed this run:
+  GET /api/os/remote/status (no bearer) -> 401
+  GET /api/os/ssot/status  (no bearer) -> 401
