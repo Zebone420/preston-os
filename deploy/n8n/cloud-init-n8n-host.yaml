@@ -4,8 +4,17 @@
 # an SSH tunnel:  ssh -L 5678:localhost:5678 root@<host-ip>
 # The SSOT bearer token is NEVER in any workflow export - it lives
 # in /etc/n8n.env (root 0600) as N8N_SSOT_TOKEN after the owner
-# provisions n8n-1 (p1_actor_provision.ps1), then:
-#   docker restart n8n
+# provisions n8n-1 (p1_actor_provision.ps1).
+#
+# LIVE DEFECT (found 2026-08-18): docker bakes --env-file variables
+# into the container at CREATE time. This cloud-init creates the
+# container while /etc/n8n.env is still EMPTY, and `docker restart`
+# NEVER re-reads the env file - so N8N_SSOT_* were absent from the
+# running container and every $env reference in workflow 1 would
+# resolve empty. After filling /etc/n8n.env the container must be
+# RECREATED, not restarted:
+#   bash deploy/n8n/recreate-n8n-container.sh   (data survives in
+# the /opt/n8n bind mount; nothing is activated by recreation).
 #cloud-config
 package_update: true
 packages:

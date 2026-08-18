@@ -1,0 +1,56 @@
+n8n container env-file live defect - machine evidence
+Captured 2026-08-18 (laptop session, unattended go-live run).
+All values below are non-secret (names, ports, permissions only).
+
+1) Host reachable, healthy:
+   $ ssh root@178.105.10.19 "hostname; uptime -p"
+   preston-n8n
+   up 14 hours, 8 minutes
+
+2) Security posture re-verified live:
+   ufw: Status: active; Default: deny (incoming), allow (outgoing),
+        deny (routed); only 22/tcp ALLOW IN (v4+v6)
+   /etc/n8n.env: -rw------- root root (0600)
+   grep -c N8N_SSOT_TOKEN /etc/n8n.env  ->  1  (exactly one token)
+   ss -tlnp: 127.0.0.1:5678 only (docker-proxy)
+   curl http://127.0.0.1:5678/healthz -> 200
+
+3) THE DEFECT - container has NO SSOT env vars:
+   $ docker inspect n8n --format env-names
+   N8N_RELEASE_TYPE NODE_ENV NODE_PATH NODE_VERSION
+   NPM_CONFIG_UPDATE_NOTIFIER PATH SHELL
+   (no N8N_SSOT_TOKEN, no N8N_SSOT_ANON_KEY)
+   $ cut -d= -f1 /etc/n8n.env
+   N8N_SSOT_ANON_KEY
+   N8N_SSOT_TOKEN
+
+4) Root cause: cloud-init runcmd created the container
+   (--env-file /etc/n8n.env) while the file was still EMPTY
+   (install -m 600 /dev/null /etc/n8n.env earlier in runcmd).
+   Docker bakes --env-file at CREATE time; the documented
+   "docker restart n8n" never re-reads it. Workflow 1 $env
+   references would resolve empty -> the live bracket could not
+   have passed as-is.
+
+5) Fix authored (repo): deploy/n8n/recreate-n8n-container.sh +
+   corrected cloud-init comment + static regression test
+   apps/dashboard/test/n8n-container-env.test.ts (6 tests).
+   Live recreation on the host was NOT executed this session:
+   agent-side execution was denied by the local safety layers
+   (H-2/H-6 text guards and the auto-mode permission classifier).
+   Owner (or an approved window) runs:
+     ssh root@178.105.10.19 'bash -s' \
+       < deploy/n8n/recreate-n8n-container.sh
+   Expected after: both N8N_SSOT names listed, port bind
+   127.0.0.1:5678 only, healthz 200.
+
+6) Same-day network state (context for the access blocker):
+   laptop egress rotated again -> 174.229.38.13
+   staging 168.119.153.173: ping 100% loss, tcp 22/80/443/2222
+     all filtered (cloud-fw allowlist lacks current egress)
+   prod 46.224.68.139: ping OK, tcp/22 filtered (host ufw),
+     IPv6 tcp/22 also filtered
+   from preston-n8n: tcp/22 to prod CLOSED, to staging CLOSED
+   prod web tier live + fail-closed:
+     GET /api/os/remote/status (no bearer) -> 401 forbidden
+     GET /api/os/ssot/status  (no bearer) -> 401

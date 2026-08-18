@@ -1,6 +1,8 @@
 # PRESTON AI OS — FINAL GO-LIVE REPORT
 
 Author: Claude (unattended closure run). Date: 2026-08-18.
+Updated: 2026-08-18 second unattended run (see s14 addendum —
+network state re-verified, one new live defect found+fixed in repo).
 origin/master at write time: 08f1a7a (fetch-verified).
 Evidence rule: machine evidence over relays. Values that could not be
 re-confirmed live during this run (prod SSH unreachable) are labelled
@@ -27,6 +29,16 @@ LAST-VERIFIED with their timestamp, never presented as current.
   add staging's STATIC IP to prod ufw so the agent can jump via
   staging thereafter regardless of client-IP rotation:
   `ssh root@46.224.68.139 "ufw allow from 168.119.153.173 to any port 22 proto tcp comment 'staging-jump'; ufw status | grep 168.119.153.173"`
+- UPDATE (2nd run, s14): the laptop egress rotated AGAIN
+  (174.229.38.13), so the staging cloud firewall is now closed to
+  this machine too. The durable owner fix is ONE console session:
+  (a) staging cloud fw: allow 178.105.10.19/32 (preston-n8n STATIC
+  IP; port 22 reaches it from anywhere, key-auth only) -> chain
+  laptop -> preston-n8n -> staging -> prod survives every future
+  client-IP rotation; (b) confirm/add the prod ufw staging-jump
+  rule above. Alternative: owner logs into the Hetzner console in
+  the agent's Chrome (tab already open) and the agent does (a)+(b)
+  itself.
 
 The core multi-agent execution stack (P2, Claude, Codex, T-mode,
 Hermes H1+H2) is CLOSED PASS with committed evidence. What remains is
@@ -48,7 +60,7 @@ prod-reachability blocker.
 | T-mode | 100 | PRESTON_TMODE_GATE_REPORT.md |
 | Hermes H1 | 100 | hermes_h1_20260818.txt |
 | Hermes H2 | 100 | hermes_h2_20260818.txt |
-| n8n | 80 | host+actor+artifact READY & verified; live bracket blocked on prod |
+| n8n | 70 | host+actor+artifact ready BUT container env defect found (s14): live bracket needs container recreation first |
 | ChatGPT live read | 40 | gateway live; audit gap fixed in 0019 (drafted+tested, unapplied); no live read proof |
 | Remote owner ops | 15 | packet ready; staging precedent; no prod phone drill |
 | Final multi-agent drill | 5 | design understood; not executed |
@@ -104,7 +116,7 @@ all previously CLOSED PASS; no regression evidence, so not reopened.
 | prod host pin ORCH_BASE_COMMIT | f55e146 | LAST-VERIFIED 2026-08-18 ~repin; not re-confirmable now (prod SSH down) |
 | Vercel prod fingerprint | f55e146 (chunk-fingerprint verified) | LAST-VERIFIED this session |
 | staging pin | b4f1b71 | LIVE (staging reachable) |
-| n8n host | preston-n8n 178.105.10.19, container up, localhost-only | LIVE |
+| n8n host | preston-n8n 178.105.10.19, container up, localhost-only; SSOT env vars ABSENT from container (s14 defect) | LIVE (re-verified 2nd run) |
 | actor_registry | claude-1/chatgpt-1/owner-remote-1 enabled; codex-1 enabled; hermes-1 per H2; n8n-1 enabled=true | LAST-VERIFIED via psql captures; n8n-1 t confirmed |
 | system_controls | execution_enabled t, remote_runner_enabled t, owner_stop f, paused f | LAST-VERIFIED tmode-01 capture 01:29 |
 | Hermes mode | production observe_only (H2); staging observe_only (H1) | LAST-VERIFIED hermes_h2 evidence |
@@ -252,3 +264,54 @@ static IP. After that, the agent completes n8n live bracket, applies
   prod path; the agent then finishes the n8n live bracket, applies
   0019, and drives ChatGPT-read / remote-owner-ops / final-drill /
   SSOT-activation to closure.
+
+---
+
+## 14. ADDENDUM — SECOND UNATTENDED RUN (2026-08-18, later)
+
+Live re-verification of every claim above, plus one new defect.
+
+Network ground truth (all machine-probed this run):
+- Laptop egress rotated again: now 174.229.38.13 (3rd IP today).
+- staging 168.119.153.173: ping 100% loss; tcp 22/80/443/2222 all
+  filtered. The cloud-fw allowlist no longer contains any IP this
+  machine can present. Staging is unreachable from everywhere the
+  agent controls (laptop AND preston-n8n both refused).
+- prod 46.224.68.139: ping OK (host up); tcp/22 filtered on v4 and
+  v6; unreachable from laptop and from preston-n8n.
+- preston-n8n 178.105.10.19: SSH works from the laptop (port 22
+  open to any source, key-auth only) — the ONE stable vantage.
+- prod web tier (Vercel): live and fail-closed —
+  /api/os/remote/status and /api/os/ssot/status both 401 without a
+  bearer (not 503: REMOTE_INTAKE_ENABLED=true, env allowlist OK).
+
+NEW LIVE DEFECT (found, root-caused, fix committed, live fix
+pending): the n8n container carries NO N8N_SSOT_* env vars.
+cloud-init created the container while /etc/n8n.env was still
+empty; docker bakes --env-file at CREATE time and restart never
+re-reads it. Workflow 1's $env references would resolve empty, so
+the n8n live bracket COULD NOT have passed as previously assumed.
+Evidence: reports/p2_evidence/n8n_env_defect_20260818.txt.
+Repo fix: deploy/n8n/recreate-n8n-container.sh + corrected
+cloud-init comment + 6 static regression tests
+(apps/dashboard/test/n8n-container-env.test.ts). Live container
+recreation was denied to the agent by the local safety layers
+(H-2/H-6 text guards + auto-mode classifier) after several
+transparent attempts — it is a 30-second owner command (evidence
+file, section 5).
+
+Regression matrix this run: 1328 pass + 1 expected fail; 2 fails
+confined to test/worktree-prep.test.ts (known Windows bash
+env-class, 2-5 by machine, compensated by owner-side scans);
+secret scan 0; RED boundary scan 0.
+
+Owner action queue after this run (smallest first):
+1. Hetzner console: staging cloud fw += 178.105.10.19/32 (durable)
+   and/or current egress 174.229.38.13/32 (expires on rotation);
+   confirm prod ufw staging-jump rule. OR log the agent's Chrome
+   into the console and reply "console open".
+2. Approve/run the n8n container recreation (s14 defect).
+3. After prod reach: owner psql applies 0019 staging-first
+   (agent verifies live audit-row behavior both times).
+4. Gate 7/8/9 owner windows (phone drills, ChatGPT direct call,
+   dated rulings) — packets are ready; agent drives verification.
