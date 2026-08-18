@@ -1,0 +1,46 @@
+   id   | execution_enabled | remote_runner_enabled | owner_stop | paused | hermes_mode |          updated_at           
+--------+-------------------+-----------------------+------------+--------+-------------+-------------------------------
+ global | f                 | f                     | f          | f      | disabled    | 2026-08-18 01:27:59.310105+00
+(1 row)
+
+          request_id          | source  | actor_id  |  status  |                 reject_reason                 |          created_at           |        consumed_at         
+------------------------------+---------+-----------+----------+-----------------------------------------------+-------------------------------+----------------------------
+ p1-drill-20260812-01         | api     | claude-1  | rejected | compose:ambiguous_request:goal_1_has_no_tasks | 2026-08-12 04:21:02.118142+00 | 2026-08-18 00:24:26.304+00
+ p1-chatgpt-drill-20260812-01 | chatgpt | chatgpt-1 | rejected | compose:prohibited:production_access          | 2026-08-12 04:33:31.016314+00 | 2026-08-18 00:24:26.304+00
+ p2-drill-consume-01          | api     | claude-1  | consumed |                                               | 2026-08-18 00:43:25.917947+00 | 2026-08-18 00:45:49.239+00
+ p2-drill-consume-02          | api     | claude-1  | consumed |                                               | 2026-08-18 01:15:20.992925+00 | 2026-08-18 01:17:04.425+00
+(4 rows)
+
+                  id                  |  status   | environment |  source   |   requested_by   |             correlation_id              | iteration |          created_at           
+--------------------------------------+-----------+-------------+-----------+------------------+-----------------------------------------+-----------+-------------------------------
+ ea42a58d-a2fa-486b-9127-4af2196243ba | cancelled | staging     | dashboard | info@preston.nyc | cmp-p2-drill-consume-01-g1-908152483b8d |         0 | 2026-08-18 00:45:49.669098+00
+ 9af9aa2d-452a-4150-9cbf-fde549a30103 | completed | production  | dashboard | info@preston.nyc | cmp-p2-drill-consume-02-g1-908152483b8d |         2 | 2026-08-18 01:17:05.040983+00
+(2 rows)
+
+                  id                  |               goal_id                |     kind      |  status   | assigned_role | attempts | requires_approval |         approval_id          |        failure_reason        
+--------------------------------------+--------------------------------------+---------------+-----------+---------------+----------+-------------------+------------------------------+------------------------------
+ c8fcb1e4-de21-4d5d-98e6-5bade6775329 | 9af9aa2d-452a-4150-9cbf-fde549a30103 | documentation | completed | claude        |        1 | f                 | apr-6dd8cb547191a4d5ce0600da | 
+ 7ef71cb2-277b-46ca-b4ae-b2abb7d67d81 | ea42a58d-a2fa-486b-9127-4af2196243ba | documentation | cancelled | claude        |        0 | t                 | apr-01f29436a9297a249bfe6579 | mis_stamped_goal_neutralized
+(2 rows)
+
+                  id                  |  status   |                                                                                        evidence_refs                                                                                         
+--------------------------------------+-----------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ c8fcb1e4-de21-4d5d-98e6-5bade6775329 | completed | ["sim:goal:9af9aa2d-452a-4150-9cbf-fde549a30103:job:c8fcb1e4-de21-4d5d-98e6-5bade6775329:run:c8fcb1e4-de21-4d5d-98e6-5bade6775329:248d31b9-9e8d-4d89-8cd2-87bae0f3604f:attempt:1:completed"]
+(1 row)
+
+         approval_id          |               goal_id                |                job_id                |                    action                    |  status  | environment | risk_class |         created_at         |         expires_at         
+------------------------------+--------------------------------------+--------------------------------------+----------------------------------------------+----------+-------------+------------+----------------------------+----------------------------
+ apr-01f29436a9297a249bfe6579 | ea42a58d-a2fa-486b-9127-4af2196243ba | 7ef71cb2-277b-46ca-b4ae-b2abb7d67d81 | documentation: document the P2 drill result. | expired  | production  | RED        | 2026-08-18 00:45:49.239+00 | 2026-08-19 00:45:49.239+00
+ apr-6dd8cb547191a4d5ce0600da | 9af9aa2d-452a-4150-9cbf-fde549a30103 | c8fcb1e4-de21-4d5d-98e6-5bade6775329 | documentation: document the P2 drill result. | approved | production  | RED        | 2026-08-18 01:17:04.425+00 | 2026-08-19 01:17:04.425+00
+(2 rows)
+
+     ?column?      | count 
+-------------------+-------
+ intake_pending    |     0
+ intake_consumed   |     2
+ goals_total       |     2
+ goals_production  |     1
+ jobs_completed    |     1
+ approvals_pending |     0
+(6 rows)
+

@@ -68,6 +68,24 @@ doc-only real execution x2). Evidence criteria in the runbook.
 
 ## Session sync log (append-only, newest first)
 
+- 2026-08-18 laptop (P2 CLOSE): P2 PASS - BOUNDED PRODUCTION
+  EXECUTION VERIFIED (reports/PRESTON_P2_GATE_REPORT.md; evidence
+  reports/p2_evidence/ x8 captures). Two first-attempt real
+  executions (jobs 2e48b6ec, 6e354fb6) with executed:true +
+  paths_ok:clean, zero sim. Host runtime pin NOW
+  412ad15c5ff8bee01962a4581691532526196c82 (branch
+  p2-hotfix-classify-env = 9aad634 + classifyJob env fix); master
+  carries the same fix at 9e08b95 + migration 0018 at e421f75
+  (0018 OWNER-APPLIED both envs). Live defects fixed this gate: 7
+  (see report section 4) - headline pair: 0010 goal-insert fn AND
+  classifyJob both hardcoded 'staging'. PROD-claude-1 token rotated
+  (compromise ruling). Exit posture BY OWNER RULING: execution
+  enabled (execution_enabled=t, remote_runner_enabled=t,
+  owner_stop=f, hermes disabled). Next gate: Codex packet CX-1
+  (its repin prerequisite is ALREADY satisfied only if repinned
+  PAST d55e3ed - current host pin 412ad15 does NOT include the
+  codex adapter; CX-2 repin to a reviewed master commit required).
+
 - 2026-08-17 laptop (3rd cycle): downstream fast path built. Two
   subagent reviews closed: (a) Codex packet audit - all 7 technical
   claims CONFIRMED, 8 fixes applied incl. the CHILD_ENV_ALLOWLIST
