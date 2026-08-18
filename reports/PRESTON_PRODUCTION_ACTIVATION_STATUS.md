@@ -68,6 +68,20 @@ doc-only real execution x2). Evidence criteria in the runbook.
 
 ## Session sync log (append-only, newest first)
 
+- 2026-08-18 laptop (CX-2 REPIN DONE): owner executed the repin over
+  ssh; VERIFY block captured in-session: host HEAD ==
+  4983d3d65f3a9ea0921c489a7ae39bb8d8779819, status --porcelain empty,
+  npm ci 443 pkgs, tsc build:os-runtime clean. worker.env now:
+  ORCH_BASE_COMMIT=4983d3d65f... , ORCH_REQUIRE_REAL_EXECUTION=true
+  (strict real mode LIVE from this point), carried over unchanged:
+  DISABLE_REMOTE_RUNNER=false,
+  ORCH_EXECUTION_LEVEL=bounded_code_execution,
+  ORCH_REAL_CLAUDE_ENABLED=true. Codex enable pair still ABSENT by
+  design (deferred to post-CX-1). Host is now runtime-ready for the
+  codex gate. Next: CX-1 (owner: codex CLI install + login as
+  preston-worker; auth-model decision point first), then claude
+  strict-mode regression drill, then CX-4 x2 + CX-5.
+
 - 2026-08-18 laptop (CX-2 PRECHECK): repin target RULED
   4983d3d65f3a9ea0921c489a7ae39bb8d8779819 (origin/master HEAD ==
   local master). Evidence: (a) hotfix containment - 9aad634 is an
