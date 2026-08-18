@@ -135,7 +135,14 @@ export interface JobPolicy {
 
 export function classifyJob(kind: string, objective: string): JobPolicy {
   const text = `${kind}: ${objective ?? ''}`;
-  const d = evaluatePolicy({ action: text, agent: 'claude', environment: 'staging' });
+  // P2 live defect (prod tick disp-93663, 2026-08-18): this call carried the
+  // literal environment 'staging', so in a production deployment EVERY
+  // composed job tripped evaluatePolicy's env-mismatch branch and classified
+  // RED (non_staging_environment) - the real adapter then refused
+  // risk_exceeds_allowed and the job silently sim-completed. Same missed-
+  // generalization class as migration 0018. The deployment's own pinned
+  // environment is the only correct value here.
+  const d = evaluatePolicy({ action: text, agent: 'claude', environment: deploymentEnvironment() });
   if (d.mobile_gate || d.tier === 'RED') {
     return {
       risk_class: d.risk_class, tier: 'RED', requires_approval: true,
