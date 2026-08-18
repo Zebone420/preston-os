@@ -1,0 +1,34 @@
+=== N8N DEDICATED HOST EVIDENCE (2026-08-18) ===
+Host: preston-n8n, 178.105.10.19, CPX12, Ubuntu 24.04, Falkenstein.
+Created via Hetzner console (owner-authorized, agent-driven browser),
+cloud-init deploy/n8n/cloud-init-n8n-host.yaml. LA-1 ruling: REPLACE
+legacy; legacy automation.prestonwd.com (gmail-dev-n8n) left
+credential-free and untouched.
+
+Read-only verification (subagent, ssh agent key), all PASS:
+1. docker ps: "n8n Up 48 minutes 127.0.0.1:5678->5678/tcp"
+   -> container up, bound to LOCALHOST only (not 0.0.0.0).
+2. ss -tlnp | grep 5678: LISTEN 127.0.0.1:5678 (docker-proxy)
+   -> localhost bind confirmed.
+3. ufw status verbose: default deny incoming; only 22/tcp OpenSSH
+   (v4+v6) allowed; NO rule exposes 5678 publicly.
+4. stat /etc/n8n.env: root:root 600 (145 bytes) -> owner-only.
+5. /etc/n8n.env variable NAMES only: N8N_SSOT_ANON_KEY, N8N_SSOT_TOKEN.
+   grep -c '^N8N_SSOT_TOKEN=' == 1 -> exactly one token entry, no
+   duplicate. No values ever printed.
+6. curl localhost:5678/healthz -> 200 (n8n healthy).
+
+Workflow artifact deploy/n8n/workflow-1-ssot-intake.json:
+- 3 nodes (Manual Trigger -> Submit SSOT intake -> Read SSOT status),
+  active:false, bearer referenced via $env.N8N_SSOT_TOKEN (NOT embedded).
+Actor n8n-1: DB-verified role=n8n, token_hash len 64, enabled=true
+(positive-leg enable confirmed earlier via psql: "n8n-1 | n8n | t | 64").
+Negative bracket captured earlier: 403 Forbidden while disabled.
+
+GATE STATUS: host + actor + artifact READY and hardened.
+REMAINING (blocked on prod SSH - see go-live report): execute
+workflow-1 positive leg -> prod orchestrator tick to consume intake ->
+verify n8n-1-attributed goal/job rows in prod DB -> idempotency rerun
+-> revocation rerun (disable n8n-1, expect 403) -> gate close.
+The orchestrator tick runs on preston-agent-prod, which is currently
+SSH-unreachable (host-ufw allowlist vs rotating client egress IP).
