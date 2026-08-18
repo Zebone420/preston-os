@@ -68,6 +68,22 @@ doc-only real execution x2). Evidence criteria in the runbook.
 
 ## Session sync log (append-only, newest first)
 
+- 2026-08-18 laptop (SECURITY INCIDENT + CX-4 evidence state): a
+  16-char credential-shaped string (believed the prod DB password)
+  was pasted into the session CHAT while a backgrounded psql capture
+  was waiting on a password prompt. RULING (owner-protocol
+  compromise class, same as PROD-claude-1 2026-08-17): treat as
+  COMPROMISED; owner asked to reset the Supabase prod database
+  password immediately. The secret is NOT recorded here or anywhere
+  in the repo. Impact: host runtime + Vercel dashboard are
+  UNAFFECTED (neither authenticates with the postgres password;
+  token store + API keys). Hung capture task killed. CX-4 DB
+  captures (cx-4-1/cx-4-2) remain OUTSTANDING - three prior 'done'
+  relays produced no files on any ref or disk (psql interactive
+  prompt does not work through the session shell; captures must run
+  in a normal owner PowerShell window). CX-4 execution-layer
+  evidence is already committed (cx4_host_log_20260818.txt).
+
 - 2026-08-18 laptop (CX-1 DONE): owner installed the Codex CLI as
   preston-worker; which codex ==
   /var/lib/preston/worker/.local/bin/codex (basename allowlist OK)
