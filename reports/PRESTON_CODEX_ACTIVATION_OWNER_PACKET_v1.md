@@ -120,6 +120,16 @@ CX-5  Rollback / revocation (any of):
       reason adapter_refused / failure probe:gate_disabled, and the
       job completing via sim:* evidence (no real spawn). Capture with
       p2_drill_verify.ps1 -Label cx-5-revoke.
+      STRICT-MODE UPDATE (2026-08-18, live since the CX-2 repin):
+      with ORCH_REQUIRE_REAL_EXECUTION=true the decline no longer
+      sim-completes. Correct expected signature: journald
+      real_executor_decline (adapter_refused / probe:gate_disabled)
+      followed by the job FAILED with
+      failure_reason real_required:probe:gate_disabled, evidence
+      refs real-audit:*:real_required:probe:gate_disabled +
+      real-provider:*:role:codex, executed:false, ZERO sim:* rows,
+      and no real spawn. This is the stronger fail-closed proof;
+      the sim-complete signature applies only if strict mode is off.
 
 ## GATE PASS = (all required; then the CLAUDE.md gate report block)
 

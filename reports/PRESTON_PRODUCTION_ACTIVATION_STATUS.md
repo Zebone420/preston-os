@@ -68,6 +68,21 @@ doc-only real execution x2). Evidence criteria in the runbook.
 
 ## Session sync log (append-only, newest first)
 
+- 2026-08-18 laptop (CX-1 DONE): owner installed the Codex CLI as
+  preston-worker; which codex ==
+  /var/lib/preston/worker/.local/bin/codex (basename allowlist OK)
+  and login persisted a HOME-DIR credential (~/.codex/auth.json,
+  fresh prod login). DECISION POINT RESOLVED: home-dir credential,
+  NO CHILD_ENV_ALLOWLIST change, no invariant weakening. Composer
+  role-parse verified in code for the CX-4 text (using codex ->
+  requested_role codex -> composer-persist assigned_role codex;
+  kind documentation). CX-5 packet expected signature CORRECTED for
+  live strict mode (honest FAIL real_required:probe:gate_disabled,
+  zero sim:*, instead of the pre-strict sim-complete). Next owner
+  step: append the codex enable pair to worker.env, then the CX-4
+  drill window (2 codex runs + 1 claude regression + CX-5 revoke,
+  evidence via p2_drill_verify.ps1 cx-* labels).
+
 - 2026-08-18 laptop (CX-2 REPIN DONE): owner executed the repin over
   ssh; VERIFY block captured in-session: host HEAD ==
   4983d3d65f3a9ea0921c489a7ae39bb8d8779819, status --porcelain empty,
