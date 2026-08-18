@@ -1,0 +1,56 @@
+=== HERMES H2 PRODUCTION EVIDENCE (2026-08-18) ===
+Packet: PRESTON_HERMES_PROD_DELTA_PACKET_v1.md H2-1..H2-7.
+Prod queue empty -> closable set per H2-7: posture + log + cadence
++ zero-lease + zero-attempt; decisions checks complete at the next
+real goal.
+
+--- H2-1 identity (owner-run, verified) ---
+preston-hermes uid=996 gid=987, home /var/lib/preston/hermes 0700
+
+--- H2-2 env (owner-run via session `!`, machine-verified) ---
+/etc/preston/hermes.env root:root 600, 224 bytes, EXACTLY the four
+staging-mirrored vars (SUPABASE_RUNTIME_ENV=production,
+SUPABASE_URL=prod project, SUPABASE_RUNTIME_KEY copied server-side
+from worker.env - value never in chat,
+SUPABASE_RUNTIME_TOKEN_STORE=/var/lib/preston/hermes/token-store.json)
+
+--- H2-3 fresh credential + bootstrap (owner-run, machine-verified) ---
+Fresh prod refresh token minted via password-grant on the owner
+workstation (token clipboard->host prompt; never in chat).
+token-store.json preston-hermes:preston-hermes 600 written 06:16:58
+- the store is only written AFTER a successful auth exchange
+(supabase-runtime.ts:102), so the write itself proves the exchange.
+ROTATION LIVE: store mtime advanced to 06:20:19 on the first timer
+run (per-run refresh-token rotation persisting as designed).
+
+--- H2-4 units (machine-verified earlier) ---
+Installed service+timer sha256-IDENTICAL to deploy/systemd/ in git.
+
+--- H2-5 mode (owner psql, pasted) ---
+observe_only | t | t | f | f
+(hermes_mode observe_only; execution/remote enabled = ruled prod
+posture; owner_stop/paused false)
+
+--- H2-6 activation (owner-run via `!`) ---
+ENABLE:0 START:0 is-enabled=enabled
+FRESH PROD RUN disp-105779-hermes-loop rounds=1
+  stoppedReason=completed recorded=0
+  orchestration_status=unsafe_controls (read-model label for the
+  execution-enabled posture - Hermes observing correctly; no
+  approval_attention = zero open approvals, consistent with
+  tmode-01 capture)
+CADENCE: fired 06:20:18Z, next 06:25:23Z (~5min OnUnitInactiveSec)
+
+--- H5/H6 prod counts (owner psql) ---
+worker_leases owner=preston-hermes: 0   (H5 PASS)
+job_attempts worker=preston-hermes: 0   (H6 PASS)
+
+H2 RESULT: PASS (production observe-only live, isolated identity,
+rotating store, zero writes, cadence active).
+
+--- Invariants ---
+Separate identity + store (never worker/owner creds) OK; observe
+only OK; no lease/attempt/os_jobs mutation (counts above); sends
+remain RED (no send path exists in the unit); read-only SQL only.
+Rollback: systemctl disable --now preston-hermes-observe.timer;
+hermes_mode='disabled'; owner_stop=true.
