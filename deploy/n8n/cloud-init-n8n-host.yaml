@@ -1,0 +1,25 @@
+# Cloud-init for the DEDICATED n8n host (LA-1 Option A ruling,
+# 2026-08-18). Non-public by construction: n8n binds to 127.0.0.1
+# only; UFW denies all inbound except SSH. Owner reaches the UI via
+# an SSH tunnel:  ssh -L 5678:localhost:5678 root@<host-ip>
+# The SSOT bearer token is NEVER in any workflow export - it lives
+# in /etc/n8n.env (root 0600) as N8N_SSOT_TOKEN after the owner
+# provisions n8n-1 (p1_actor_provision.ps1), then:
+#   docker restart n8n
+#cloud-config
+package_update: true
+packages:
+  - docker.io
+  - ufw
+runcmd:
+  - ufw default deny incoming
+  - ufw allow OpenSSH
+  - ufw --force enable
+  - install -m 600 /dev/null /etc/n8n.env
+  - mkdir -p /opt/n8n && chown 1000:1000 /opt/n8n
+  - >
+    docker run -d --name n8n --restart unless-stopped
+    -p 127.0.0.1:5678:5678
+    -v /opt/n8n:/home/node/.n8n
+    --env-file /etc/n8n.env
+    docker.n8n.io/n8nio/n8n:latest

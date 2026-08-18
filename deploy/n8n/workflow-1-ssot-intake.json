@@ -1,0 +1,65 @@
+{
+  "name": "Preston SSOT intake proof (workflow 1)",
+  "active": false,
+  "nodes": [
+    {
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "parameters": {}
+    },
+    {
+      "id": "submit-intake",
+      "name": "Submit SSOT intake",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [520, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "https://hiqsymsiwonmvrbbqhhe.supabase.co/rest/v1/rpc/submit_remote_intake",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.N8N_SSOT_ANON_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_token: $env.N8N_SSOT_TOKEN, p_request_id: 'n8n-20260818-01', p_owner_identity: 'info@preston.nyc', p_raw_request: 'Create one task to document the n8n intake proof.', p_source: 'api' }) }}"
+      }
+    },
+    {
+      "id": "read-status",
+      "name": "Read SSOT status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [800, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "https://hiqsymsiwonmvrbbqhhe.supabase.co/rest/v1/rpc/read_ssot_status",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.N8N_SSOT_ANON_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_token: $env.N8N_SSOT_TOKEN }) }}"
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [[{ "node": "Submit SSOT intake", "type": "main", "index": 0 }]]
+    },
+    "Submit SSOT intake": {
+      "main": [[{ "node": "Read SSOT status", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}
