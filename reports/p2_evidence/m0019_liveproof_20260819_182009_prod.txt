@@ -1,0 +1,14 @@
+       ?column?        
+-----------------------
+ access_events_total=0
+(1 row)
+
+ system | event | actor | environment | actor_role | created_at 
+--------+-------+-------+-------------+------------+------------
+(0 rows)
+
+                                           ?column?                                            
+-----------------------------------------------------------------------------------------------
+ registry: actor=chatgpt-1 enabled=true hash_len=64 last_seen_at=2026-08-12 04:33:31.190335+00
+(1 row)
+

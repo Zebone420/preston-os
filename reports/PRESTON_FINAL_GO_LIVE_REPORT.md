@@ -561,3 +561,43 @@ convention as the untracked p1_diagnose.local.ps1 and the
 host-staged n8n bracket script). Its evidence outputs land in
 reports/p2_evidence/ and are committed after the gate.
 Verdict: NOT YET FULLY LIVE — gates 3-4 remain.
+
+---
+
+## 20. ADDENDUM — GATE 3 CLOSED (2026-08-19 22:23 UTC): CHATGPT LIVE READ + 0019 LIVE PROOF
+
+Evidence: reports/p2_evidence/chatgpt_read_20260819_182324.json and
+m0019_liveproof_20260819_182324_prod.txt (plus the five preceding 401
+attempts, kept as fail-closed evidence).
+
+Path to success: first attempts 401'd. Diagnosis: registry row healthy
+(enabled=t, hash_len=64) but last_seen_at stuck at 2026-08-12 — the
+presented token's hash matched no row (stale/wrong 1Password value;
+a v1 driver defect — no token trim — was also found and fixed).
+Owner rotated ONLY chatgpt-1 via the sanctioned
+p1_actor_provision.ps1 -OnlyActor path (no other actor, no intake
+config, no RLS/migration touched). Rerun succeeded.
+
+VERIFIED (agent-parsed from the machine evidence):
+- HTTP 200; ok=true; schema preston-ssot-status/1;
+  environment=production; actor chatgpt-1/chatgpt.
+- Payload shows live posture (exec=t remote=t stop=f paused=f),
+  intake n8n-20260819-01 status=consumed, and the Gate-1 bridge job
+  cbc54c47 completed with all three evidence refs (real / real-audit
+  paths_ok:clean / real-provider role:claude) — the
+  CONTROL-PLANE-VISIBLE COMPLETION STATE for the bridge run.
+- access_events_total=1: exactly one row ssot-read|used|chatgpt-1|
+  production at 22:23:34, timestamp == fresh last_seen_at. The five
+  denied attempts wrote NO rows — 0019's success-only audit and the
+  fail-closed read path both proven live on production.
+
+This closes: ChatGPT live read gate (E), 0019 live behavioral proof,
+ChatGPT-visible completion state. Claude<->ChatGPT bridge via SSOT is
+now proven in BOTH directions on production (write leg: gate 1;
+read leg: gate 3).
+
+Dimensions: Bridge 97 -> 100. SSOT 97 -> 99 (remaining: dated owner
+activation ruling). Production-Live 97. ChatGPT live read 40 -> 100.
+Verdict: NOT YET FULLY LIVE — gate 4 (owner windows: phone drills
+R-1..R-3, final multi-agent drill fmad-01, SSOT activation ruling)
+remains.

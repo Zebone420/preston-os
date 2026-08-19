@@ -1,0 +1,15 @@
+       ?column?        
+-----------------------
+ access_events_total=1
+(1 row)
+
+  system   | event |   actor   | environment | actor_role |          created_at           
+-----------+-------+-----------+-------------+------------+-------------------------------
+ ssot-read | used  | chatgpt-1 | production  | chatgpt    | 2026-08-19 22:23:34.153945+00
+(1 row)
+
+                                           ?column?                                            
+-----------------------------------------------------------------------------------------------
+ registry: actor=chatgpt-1 enabled=true hash_len=64 last_seen_at=2026-08-19 22:23:34.153945+00
+(1 row)
+
