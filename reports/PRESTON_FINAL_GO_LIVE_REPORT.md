@@ -601,3 +601,35 @@ activation ruling). Production-Live 97. ChatGPT live read 40 -> 100.
 Verdict: NOT YET FULLY LIVE — gate 4 (owner windows: phone drills
 R-1..R-3, final multi-agent drill fmad-01, SSOT activation ruling)
 remains.
+
+---
+
+## 21. ADDENDUM — GATE 4 DRILL R-1 PASS (2026-08-19 22:45-22:55 UTC): PHONE COMPOSE
+
+Evidence-over-relay enforced twice this drill:
+- First "r1 submitted" relay: agent checked BOTH environments through
+  sanctioned reads (prod intake via n8n-actor gateway; staging
+  orchestrator log) — rops-prod-drill-1 was in NEITHER. Verdict:
+  submission never landed (likely phone smart-quote JSON corruption
+  or wrong URL). Owner re-submitted per corrected instructions.
+- Second submission verified machine-side BEFORE ticking: prod intake
+  row rops-prod-drill-1 status=pending created 22:45:42Z.
+
+Consuming tick (disp-118809, /var/log/preston/orchestrator.log):
+  remote_intake selected=1 consumed rops-prod-drill-1 ->
+    goal 9d76bd97-8a0b-4769-9c49-a318215579a2
+  capability BOUNDED_CODE_EXECUTION executor=composed
+  real_executor_result outcome=completed executed=true
+    evidence_count=3 job 649e7278-... role=claude
+  goal 9d76bd97 completed cycles=1;
+  parked goal 5d25fa51 skipped (approval gate held, same tick).
+Phone response (owner screenshot): ok=true status=accepted
+actor_id=owner-remote-1 request_id=rops-prod-drill-1.
+
+R-1 PASS criteria met: accepted + consumed + production environment +
+owner-remote-1 attribution at the gateway. Note: the neutral drill
+text classified GREEN, so no approval parked (policy did not require
+one) — R-2 therefore targets the genuinely parked approval-gated job
+14b8fe28 on goal 5d25fa51 ("Document the codex drill result",
+bounded documentation kind, awaiting approval since T-mode).
+Owner DB capture: p2_drill_verify.ps1 -Label rops-r1 (owner-run).
