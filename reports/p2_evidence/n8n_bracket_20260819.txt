@@ -1,0 +1,84 @@
+GATE 1 - n8n LIVE BRACKET + FULL BRIDGE CHAIN - machine evidence
+Captured 2026-08-19 21:40-21:55 UTC. Owner-initiated (Gate 1 ruling in
+session). No secret values below.
+
+========================================================
+1) THE BRACKET (owner-run on the n8n host; token never left it)
+========================================================
+Script: /root/n8n_bracket_20260819.sh (staged by agent, md5
+2d61202253f075a9b8ca984d770b16f2, byte-equivalent to workflow-1's two
+nodes; sources /etc/n8n.env at runtime; prints responses only).
+Owner ran: ssh -i <local key> root@178.105.10.19 "bash /root/n8n_bracket_20260819.sh"
+
+  == call 1 2026-08-19T21:40:01Z
+  {"ok": true, "status": "accepted", "actor_id": "n8n-1", "request_id": "n8n-20260819-01"}
+  http=200
+  == call 2 2026-08-19T21:40:02Z
+  {"ok": true, "status": "duplicate", "request_id": "n8n-20260819-01"}
+  http=200
+
+ACCEPTED leg PASS (actor n8n-1 authenticated, enabled).
+IDEMPOTENCY leg PASS (same request_id -> duplicate, no second row).
+No n8n workflow was activated (rule 6 untouched); the sanctioned RPC
+gateway was called directly with the host-held token.
+
+========================================================
+2) SERVER-SIDE PROOF: SSOT RECORDED IT AND THE BRIDGE RAN
+========================================================
+One manual prod dispatcher tick (P2 manual-tick operation),
+correlationId disp-117132-orchestrate-once, /var/log/preston/orchestrator.log:
+
+  event=remote_intake  selected=1
+    consumed=[{request_id: n8n-20260819-01,
+               goal_ids: [eefedff8-9759-42bf-b86a-85cf468932fa]}]
+    rejected=[]
+  event=capability  level_resolved=BOUNDED_CODE_EXECUTION executor=composed
+  event=real_executor_result  outcome=completed executed=true
+    failure_reason=null evidence_count=3
+    job_id=cbc54c47-0b37-4778-b9ac-27f1e9d4900c
+    goal_id=eefedff8-9759-42bf-b86a-85cf468932fa
+    run_id=cbc54c47-...:2ea9981d-d2dc-40e4-8d30-c0d580f77c0a
+    role=claude
+  event=orchestrate_once  goal=eefedff8-... cycles=1 halted=false
+    reason=completed execution_level=BOUNDED_CODE_EXECUTION
+    skippedParked=[5d25fa51-ad36-463c-a4a0-e305ae9cdd26]
+
+Service exited cleanly (is-failed => inactive; ssh exit 0).
+
+THE COMPLETE BRIDGE CHAIN, ONE RUN, ALL LIVE ON PRODUCTION:
+  owner -> submit_remote_intake (n8n-1 token, n8n host)
+        -> SSOT remote_intake_requests row (accepted)
+        -> dispatcher consumed intake -> goal eefedff8 created
+        -> policy classified GREEN (composer default-deny pipeline)
+        -> bounded Claude executor ran in worktree wt-cbc54c47
+        -> executed:true, 3 evidence refs -> result written to SSOT
+        -> goal completed
+  while goal 5d25fa51 (non-GREEN, requires_approval) stayed PARKED
+  through every cycle of the SAME tick.
+
+========================================================
+3) APPROVAL SEMANTICS - BY DESIGN, VERIFIED IN CODE
+========================================================
+remote-intake.ts: remote rows are consumed "through the SAME composer
+pipeline the owner dashboard uses (deterministic parsing, policy
+classification, approval gating, idempotent persistence). A remote
+request can therefore never reach the goal graph by any weaker path
+than the owner's own."
+policy.ts evaluatePolicy: requires_approval = (tier !== GREEN),
+default-deny; fail-closed to RED+mobile on any parse trouble; RED for
+any environment mismatch. The bracket request ("Create one task to
+document the n8n intake proof.") classified GREEN => ran without an
+approval row. Non-GREEN parks - proven live in the same tick
+(skippedParked 5d25fa51).
+
+========================================================
+4) POST-RUN HYGIENE
+========================================================
+  /srv/worktrees: EMPTY again (wt-cbc54c47 cleaned after completion).
+  job/cbc54c47-... branch retained (known accrual, owner sweep item).
+  No secrets printed anywhere in the bracket or tick output.
+
+VERDICT: GATE 1 PASS. n8n leg live-proven end-to-end; bridge chain
+(intake -> SSOT -> goal -> dispatcher -> bounded Claude executor ->
+result -> SSOT) executed on production with the approval gate holding
+for non-GREEN work in the same tick.

@@ -500,3 +500,31 @@ Percentages after this run: Bridge 92 · SSOT 94 · Production-Live 94
 (push closed; n8n persistence proven; everything re-verified fresh).
 Verdict: NOT YET FULLY LIVE — no infrastructure blocker remains;
 every open gate is an owner-held credential or RED ruling.
+
+---
+
+## 18. ADDENDUM — GATE 1 CLOSED (2026-08-19 21:40 UTC): n8n BRACKET + FULL BRIDGE CHAIN LIVE
+
+Owner ruling executed Gate 1 in-session. Full machine evidence:
+reports/p2_evidence/n8n_bracket_20260819.txt.
+
+- BRACKET PASS: call 1 accepted (actor n8n-1), call 2 duplicate,
+  both http 200, request n8n-20260819-01. Token never left the n8n
+  host; no workflow activated.
+- BRIDGE CHAIN PASS (one prod tick, disp-117132): intake consumed ->
+  goal eefedff8 created via the owner-equivalent composer pipeline ->
+  policy GREEN -> bounded Claude executor ran in worktree wt-cbc54c47
+  -> executed:true, 3 evidence refs -> result to SSOT -> goal
+  completed. The non-GREEN goal 5d25fa51 stayed PARKED through the
+  same tick (approval gate held live).
+- Post-run: /srv/worktrees empty again; clean service exit.
+- This closes: n8n live bracket (s14/s15 item), production intake
+  proof, dispatcher proof, bounded-executor proof, evidence-return
+  proof — the ChatGPT-visible completion state now exists in SSOT
+  (pending Gate 4's authenticated read to observe it).
+
+Dimensions: n8n 85 -> 100. Bridge 92 -> 97 (remaining: live ChatGPT
+read). SSOT 94 (0019 still unapplied — Gate 2 driver
+scripts/p2/p2_0019_apply.ps1 handed to owner). Production-Live 96.
+Verdict: NOT YET FULLY LIVE — gates 2-4 (0019 psql, ChatGPT-token
+read, drills/activation ruling) remain owner-held.
