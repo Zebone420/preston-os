@@ -453,3 +453,50 @@ REMAINING GATES — EXACT OWNER HANDOFF (each is minutes, in order):
 Percentages after this run: Bridge 92 · SSOT 94 · Production-Live 93
 (access blocker retired; authenticated gates still open).
 Verdict: NOT YET FULLY LIVE.
+
+---
+
+## 17. ADDENDUM — FIFTH RUN (2026-08-19 ~21:30 UTC): FULL RE-VERIFY, ZERO DRIFT, PUSH CLOSED
+
+Full machine evidence: reports/p2_evidence/prod_reverify_20260819.txt.
+Everything below was re-probed live this run (no reliance on run-4
+values).
+
+RE-VERIFIED LIVE (all PASS):
+- Jump chain Zpc26 -> preston-n8n -> staging -> prod: all three legs
+  return correct hostname/root. Rotation-proof path holding.
+- Prod baseline: pin f55e146 == HEAD; production env; strict real
+  mode; only hermes-observe timer active; /srv/worktrees empty.
+  ZERO drift vs run-4 baseline.
+- Controls posture: hermes ticks minutes-fresh, status
+  "unsafe_controls" => active remote-live posture (execution on,
+  remote runner on, owner_stop off, paused off).
+- FRESH approval-gate proof: one manual orchestrator tick
+  (disp-117018) found goal 5d25fa51 awaiting_owner_approval and
+  skipped it; clean exit. Live negative test PASS.
+- RLS/grants: runtime anon key DENIED direct SELECT on
+  system_controls / remote_intake_requests / access_events. Only the
+  token-gated RPC gateways read. Intact.
+- Web tier: /api/health 200 connected; /api/os/remote/status and
+  /api/os/ssot/status both 401 bare. Fail-closed.
+- n8n env fix PERSISTENCE proven: docker restart n8n -> both
+  N8N_SSOT_* names still in container env, healthz 200,
+  localhost-only bind. s14 defect closed durably. No workflow
+  activated; owner bracket still NOT run (history shows zero calls).
+- Tests/scans: 1331 pass + 1 xfail (5 known Windows bash-ENOENT
+  env-class fails); secret scan 0; RED boundary scan 0.
+
+CLOSED THIS RUN:
+- Handoff item (1): git push origin master SUCCEEDED
+  (239cf72..eebac5b). origin/master == local HEAD.
+
+REMAINING GATES — unchanged, all RED/owner-only (action-class doc:
+"production anything" is RED; a blanket YES never covers RED):
+items (2)–(5) of the s16 handoff (n8n bracket curls, 0019 psql
+staging-then-prod, ChatGPT-token read, phone/final drills +
+activation ruling). The agent verifies each immediately after.
+
+Percentages after this run: Bridge 92 · SSOT 94 · Production-Live 94
+(push closed; n8n persistence proven; everything re-verified fresh).
+Verdict: NOT YET FULLY LIVE — no infrastructure blocker remains;
+every open gate is an owner-held credential or RED ruling.

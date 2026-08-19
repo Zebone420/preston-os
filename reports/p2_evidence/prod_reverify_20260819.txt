@@ -1,0 +1,110 @@
+Fifth-run full re-verification - machine evidence
+Captured 2026-08-19 ~21:22-21:35 UTC from Zpc26 (office machine).
+No secret values below. All probes live this run unless noted.
+
+========================================================
+1) JUMP CHAIN RE-PROVEN (all three legs, live)
+========================================================
+Config: session-local ssh config (scratchpad), single laptop-held key
+preston_agent_ed25519, ProxyJump pn8n -> pstaging -> pprod.
+
+  Zpc26 -> preston-n8n (178.105.10.19):
+    preston-n8n / root / up 1 day 14:44
+  Zpc26 -> n8n -> staging (168.119.153.173):
+    preston-agent-staging / root / up 29 days 18:33
+  Zpc26 -> n8n -> staging -> prod (46.224.68.139):
+    preston-agent-prod / root / up 7 days 15:36  (21:22:36 UTC)
+
+Rotation-proof path CONFIRMED still open (prod ufw staging-jump rule
+holding; staging cloud-fw n8n-jump rule holding).
+
+========================================================
+2) PROD RUNTIME BASELINE - ZERO DRIFT (live)
+========================================================
+  /srv/preston-os HEAD = f55e146ad5a29eadf0011a1c90180213f8f9e175
+  worker.env: ORCH_BASE_COMMIT=f55e146... (pin == checkout)
+              SUPABASE_RUNTIME_ENV=production
+              ORCH_REQUIRE_REAL_EXECUTION=true
+  hermes.env: SUPABASE_RUNTIME_ENV=production
+  Timers: ONLY preston-hermes-observe.timer active (~5 min cadence).
+  orchestrator/worker/hermes services: inactive between ticks (correct
+  manual-tick posture per P2 exit ruling).
+  /srv/worktrees: EMPTY.
+
+========================================================
+3) LIVE CONTROLS POSTURE (hermes, minutes-fresh)
+========================================================
+/var/log/preston/hermes.log tail (disp-116270..116564, this hour):
+  orchestration_status="unsafe_controls", recorded:0, every ~5 min.
+Per read-model.ts:221-240 this status branch REQUIRES controls
+readable + migration applied + owner_stop=false + paused=false +
+(execution_enabled OR remote_runner_enabled)=true.
+=> active remote-live posture CONFIRMED live 2026-08-19.
+
+========================================================
+4) FRESH APPROVAL-GATE PROOF (live manual tick, this run)
+========================================================
+Ran: systemctl start preston-orchestrator (one tick, P2 manual-tick
+operation). Result (disp-117018-orchestrate-once):
+  goal 5d25fa51-ad36-463c-a4a0-e305ae9cdd26
+  stoppedReason="awaiting_owner_approval", skipped=true,
+  skippedParked=[5d25fa51...]
+Service exited cleanly (is-failed => inactive). No job executed, no
+write beyond the tick's own bookkeeping. LIVE PROOF: an unapproved
+goal cannot execute on production.
+
+========================================================
+5) RLS / GRANT POSTURE (live, read-only probe from prod host)
+========================================================
+Using the host's own runtime (anon-tier) key via PostgREST:
+  system_controls direct SELECT      -> 42501 permission denied
+  remote_intake_requests direct SELECT -> 42501 permission denied
+  access_events SELECT               -> 401
+=> direct table reads DENIED to the runtime key; the sanctioned
+token-gated RPC gateways remain the only read path. RLS/grants intact.
+
+========================================================
+6) PROD WEB TIER (live, unauthenticated probes from Zpc26)
+========================================================
+  https://preston-os-prod.vercel.app/api/health            -> 200 {"ok":true,"mode":"connected"}
+  https://preston-os-prod.vercel.app/api/os/remote/status  -> 401 {"ok":false,"status":"forbidden"}
+  https://preston-os-prod.vercel.app/api/os/ssot/status    -> 401 {"ok":false,"status":"forbidden"}
+=> fail-closed without bearer; intake env present (not 503).
+
+========================================================
+7) N8N HOST - ENV FIX PERSISTENCE PROVEN (live restart test)
+========================================================
+Before restart: container running, restarts=0,
+  started=2026-08-18T21:44:50Z, env contains N8N_SSOT_ANON_KEY and
+  N8N_SSOT_TOKEN (names only), bind 127.0.0.1:5678 only, healthz=200,
+  /etc/n8n.env root:root 600, exactly 1 N8N_SSOT_TOKEN entry.
+Action: docker restart n8n (bounded persistence test, Phase-4 mandate).
+After restart: status=running, BOTH N8N_SSOT_* names still present,
+  healthz=200, bind 127.0.0.1:5678 only.
+=> the s14 env defect fix SURVIVES restart. PASS.
+No workflow activated (rule 6 untouched). Owner bracket NOT run:
+/root/.bash_history contains zero submit_remote_intake calls.
+
+========================================================
+8) GIT / TESTS / SCANNERS (this run)
+========================================================
+  git push origin master: SUCCEEDED this session (239cf72..eebac5b).
+  origin/master == local HEAD = eebac5b (handoff item 1 CLOSED).
+  Test matrix: 1331 pass + 1 expected fail; 5 fails confined to
+    test/worktree-prep.test.ts spawnSync bash ENOENT (documented
+    Windows env-class, compensated below).
+  secret_scan_phase0a.ps1:      0 findings
+  red_boundary_scan_phase0a.ps1: 0 findings
+
+========================================================
+9) WHAT REMAINS (all RED / owner-only, per action-class doc:
+   "production anything" = RED, blanket YES never covers RED)
+========================================================
+  (2) n8n live bracket curl x2 + read (owner, on n8n host)
+  (3) migration 0019 psql apply, staging then prod (owner password)
+  (4) ChatGPT read gate with chatgpt-1 token (owner 1Password)
+  (5) phone drills R-1..R-3, final drill fmad-01, activation ruling
+Agent verifies each immediately after the owner acts.
+
+VERDICT: infrastructure + posture 100% re-verified healthy; zero
+drift; zero new defects; remaining gates are authenticated/RED only.
