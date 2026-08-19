@@ -1,0 +1,28 @@
+            ?column?             
+---------------------------------
+ env_check: postgres as postgres
+(1 row)
+
+        ?column?        
+------------------------
+ before_access_events=0
+(1 row)
+
+CREATE FUNCTION
+REVOKE
+GRANT
+         ?column?         
+--------------------------
+ fn_has_audit_insert=true
+(1 row)
+
+       ?column?        
+-----------------------
+ after_access_events=0
+(1 row)
+
+                          ?column?                          
+------------------------------------------------------------
+ grants=anon:EXECUTE,authenticated:EXECUTE,postgres:EXECUTE
+(1 row)
+

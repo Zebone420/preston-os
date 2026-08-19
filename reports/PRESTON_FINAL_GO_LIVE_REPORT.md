@@ -528,3 +528,36 @@ read). SSOT 94 (0019 still unapplied — Gate 2 driver
 scripts/p2/p2_0019_apply.ps1 handed to owner). Production-Live 96.
 Verdict: NOT YET FULLY LIVE — gates 2-4 (0019 psql, ChatGPT-token
 read, drills/activation ruling) remain owner-held.
+
+---
+
+## 19. ADDENDUM — GATE 2 CLOSED (2026-08-19 ~21:53 UTC): 0019 APPLIED STAGING + PROD
+
+Owner ran scripts/p2/p2_0019_apply.ps1 (three attempts; final run
+175237 completed both stages — earlier partials were idempotent
+staging re-applies of the same CREATE OR REPLACE, harmless).
+Evidence: reports/p2_evidence/m0019_apply_20260819_175237_{staging,prod}.txt.
+
+Verified in both captures:
+- CREATE FUNCTION applied; fn_has_audit_insert=true (body now
+  contains the 'ssot-read' access_events INSERT).
+- before_access_events=0 == after_access_events=0 (DDL wrote no rows).
+- grants unchanged: anon:EXECUTE, authenticated:EXECUTE (+ owner).
+- No RLS or policy touched (0019 is CREATE OR REPLACE + revoke/grant
+  restatement only).
+
+Post-apply live regression (agent, prod host): read_ssot_status with
+a dummy token -> {"ok": false, "status": "forbidden"} — fail-closed
+behavior intact on the new body; per 0019's deliberate scope, this
+denied call must land NO audit row (Gate 3's capture confirms).
+
+SSOT 94 -> 97 (per-read audit deployed; live behavioral proof =
+Gate 3's read landing exactly one access_events row).
+Gate 3 driver handed OUT-OF-REPO (session scratchpad): the driver
+performs an HTTP read, and the repo's RED-boundary scanner correctly
+forbids network calls in committed code (the pre-commit hook blocked
+an in-repo copy; the guard was respected, not bypassed — same
+convention as the untracked p1_diagnose.local.ps1 and the
+host-staged n8n bracket script). Its evidence outputs land in
+reports/p2_evidence/ and are committed after the gate.
+Verdict: NOT YET FULLY LIVE — gates 3-4 remain.
