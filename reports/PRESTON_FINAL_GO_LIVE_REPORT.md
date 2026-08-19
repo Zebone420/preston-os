@@ -627,9 +627,27 @@ Phone response (owner screenshot): ok=true status=accepted
 actor_id=owner-remote-1 request_id=rops-prod-drill-1.
 
 R-1 PASS criteria met: accepted + consumed + production environment +
-owner-remote-1 attribution at the gateway. Note: the neutral drill
-text classified GREEN, so no approval parked (policy did not require
-one) — R-2 therefore targets the genuinely parked approval-gated job
-14b8fe28 on goal 5d25fa51 ("Document the codex drill result",
-bounded documentation kind, awaiting approval since T-mode).
-Owner DB capture: p2_drill_verify.ps1 -Label rops-r1 (owner-run).
+owner-remote-1 attribution at the gateway (DB capture
+p2_rops-r1_20260819_190356.txt: rops-prod-drill-1|phone|
+owner-remote-1|consumed; goal 9d76bd97 completed|production).
+
+R-2 TARGET CORRECTION (owner phone check caught it): the agent first
+targeted parked job 14b8fe28 (goal 5d25fa51) — WRONG. Live data shows
+its approvals were REJECTED 2026-08-18 04:22-04:23 (T-mode/CX-5
+fail-closed cleanup); zero pending approvals exist, so the phone
+dashboard's "Open approvals: 0" was CORRECT and consistent with the
+gateway. A rejected job stays parked by contract; no approval was
+fabricated. Also confirmed: the orchestration page's
+"SIMULATION-ONLY" badge and coordinator-ladder chips are hard-coded
+Phase-7 presentation text (page.tsx:56-58,172-178), NOT runtime
+state — post-live UI-text backlog item; runtime safety panel shows
+live controls correctly.
+
+Sanctioned R-2 case: new phone submission rops-prod-drill-2 whose
+text names the mobile-gate marker hermes_mode (policy.ts) — job
+classifies RED/mobile, requires_approval=true, while the work is
+harmless documentation. Verified offline against the repo composer
+(probe: 1 documentation task, approval-gated; R-1 text GREEN
+control) before handing to the owner. Timer preston-orchestrator
+enabled by owner for the R-2 window (5-min cadence, worker timer
+stays off).
