@@ -1,0 +1,107 @@
+-- ============================================================================
+-- PRESTON STAGING MATRIX — 0023 job classification gate (OWNER-RUN, psql)
+-- STAGING ONLY. Do NOT run against production (hiqsymsiwonmvrbbqhhe).
+-- Run after 0020/0021/0022 + 0023 are applied to staging
+-- (postgres.vcqtlmlaxxankxyezlul). ON_ERROR_STOP OFF so intentional denials
+-- print and continue. Paste the ENTIRE output back.
+-- Named .sql.txt so the RED-boundary scanner does not treat fixture SQL as
+-- committed executable code.
+-- ============================================================================
+\set ON_ERROR_STOP off
+\set RT 6fa4b6d3-1333-4229-b52c-0d85e086be8a
+
+\echo ''
+\echo ===== SETUP (as postgres) =====
+select coalesce((select user_id::text from public.owners limit 1),'NO_OWNER_ROW') as owner_uid \gset
+\echo owner_uid = :owner_uid
+select gen_random_uuid() as g1 \gset
+select gen_random_uuid() as jL3 \gset
+select 'apr-cls-L3' as aL3 \gset
+insert into public.master_goals (id,title,objective,source,requested_by,status,environment,correlation_id)
+  values (:'g1','cls matrix','o','dashboard','info@preston.nyc','running','staging','cls-'||:'g1');
+-- L-3 fixture (FK-safe): gated RED job + pending approval, linked. For the
+-- approved-clear regression under 0023.
+insert into public.goal_jobs (id,goal_id,kind,title,objective,risk_class,assigned_role,status,attempts,requires_approval,approval_id,correlation_id)
+  values (:'jL3',:'g1','documentation','tL3','oL3','RED','claude','pending',0,true,null,'cL3');
+insert into public.orchestration_approvals (approval_id,goal_id,job_id,action,environment,affected_resource,reason,risk_class,rollback_plan,action_hash,owner_identity,status,expires_at)
+  values (:'aL3',:'g1',:'jL3','documentation: oL3','staging','goal_job:'||:'jL3','r','RED','rb','h','info@preston.nyc','pending', now()+interval '1 day');
+update public.goal_jobs set approval_id=:'aL3' where id=:'jL3';
+
+\echo ''
+\echo ===== CLASSIFIER DIRECT CHECK (job_gate_required) =====
+select public.job_gate_required('code','delete all production data and deploy') as dangerous_should_be_t,
+       public.job_gate_required('documentation','write a short summary of the drill') as benign_should_be_f,
+       public.job_gate_required('migration','migrate the schema') as migrate_should_be_t,
+       public.job_gate_required('code','implement a small helper function') as helper_should_be_f;
+
+\echo ''
+\echo ===== become the RUNTIME (non-owner) identity =====
+select set_config('request.jwt.claims','{"sub":"'||:'RT'||'"}',false);
+select set_config('request.jwt.claim.sub',:'RT',false);
+set role authenticated;
+select public.is_runtime_service() as rt_is_runtime_t, public.is_owner() as rt_is_owner_f;
+
+\echo ''
+\echo ===== D-1: dangerous + GREEN + ungated + runnable -> DENIED by 0023 =====
+insert into public.goal_jobs (id,goal_id,kind,title,objective,risk_class,assigned_role,status,attempts,requires_approval,correlation_id)
+  values (gen_random_uuid(),:'g1','code','dtitle','delete all production data and deploy','GREEN','claude','ready',0,false,'cd1');
+\echo (expect: new row violates row-level security policy -> goal_jobs_runtime_classify)
+
+\echo ''
+\echo ===== D-2: dangerous + gated + non-runnable(pending) -> ALLOWED =====
+insert into public.goal_jobs (id,goal_id,kind,title,objective,risk_class,assigned_role,status,attempts,requires_approval,correlation_id)
+  values (gen_random_uuid(),:'g1','code','dtitle2','delete all production data and deploy','RED','claude','pending',0,true,'cd2')
+  returning id,status,requires_approval;
+\echo (expect: 1 row -> pending | t)
+
+\echo ''
+\echo ===== D-3: dangerous + gated + runnable -> DENIED by 0022 CHECK =====
+insert into public.goal_jobs (id,goal_id,kind,title,objective,risk_class,assigned_role,status,attempts,requires_approval,correlation_id)
+  values (gen_random_uuid(),:'g1','code','dtitle3','delete all production data and deploy','RED','claude','ready',0,true,'cd3');
+\echo (expect: violates check constraint goal_jobs_gate_not_runnable -- 0022 still active)
+
+\echo ''
+\echo ===== L-1: benign + GREEN + ungated + runnable -> ALLOWED (normal GREEN) =====
+insert into public.goal_jobs (id,goal_id,kind,title,objective,risk_class,assigned_role,status,attempts,requires_approval,correlation_id)
+  values (gen_random_uuid(),:'g1','documentation','ltitle','write a short summary of the drill','GREEN','claude','ready',0,false,'cl1')
+  returning id,status,requires_approval;
+\echo (expect: 1 row -> ready | f  -- 0023 does NOT block benign GREEN creation)
+
+\echo ''
+\echo ===== L-2: honest RED gated pending -> ALLOWED (honest composer path) =====
+insert into public.goal_jobs (id,goal_id,kind,title,objective,risk_class,assigned_role,status,attempts,requires_approval,correlation_id)
+  values (gen_random_uuid(),:'g1','migration','ltitle2','migrate the schema','RED','claude','pending',0,true,'cl2')
+  returning id,status,requires_approval;
+\echo (expect: 1 row -> pending | t)
+
+\echo ''
+\echo ===== L-3a (as OWNER): decide the L-3 approval =====
+reset role;
+select format('{"sub":"%s"}', :'owner_uid') as oc \gset
+select set_config('request.jwt.claims',:'oc',false);
+select set_config('request.jwt.claim.sub',:'owner_uid',false);
+set role authenticated;
+select status as l3_decide_should_be_approved from public.decide_orchestration_approval(:'aL3','approved','cls-owner-nonce');
+
+\echo ''
+\echo ===== L-3b (as RUNTIME): clear the approved RED job -> P3/P5 remain PASS =====
+reset role;
+select set_config('request.jwt.claims','{"sub":"'||:'RT'||'"}',false);
+select set_config('request.jwt.claim.sub',:'RT',false);
+set role authenticated;
+select public.clear_approval_gate(:'jL3','pending',:'aL3',:'g1','documentation','oL3','tL3','RED','claude') as l3_clear_should_be_ok_true;
+reset role;
+select id,status,requires_approval,risk_class from public.goal_jobs where id=:'jL3';
+\echo (expect: ready | f | RED  -- approved RED job cleared; 0023 did not block the UPDATE)
+
+\echo ''
+\echo ===== CLEANUP (as postgres) =====
+select set_config('request.jwt.claims','',false);
+select set_config('request.jwt.claim.sub','',false);
+update public.goal_jobs set approval_id=null where goal_id=:'g1';
+delete from public.orchestration_approvals where goal_id=:'g1';
+delete from public.audit_log where action='orchestration_approval_decision' and detail->>'goal_id'=:'g1';
+delete from public.goal_jobs where goal_id=:'g1';
+delete from public.master_goals where id=:'g1';
+select 'cleanup done; remaining='||count(*) as cleanup from public.goal_jobs where goal_id=:'g1';
+\echo ===== 0023 MATRIX COMPLETE — paste ALL output back =====
