@@ -178,6 +178,68 @@ without ever touching orchestration_approvals or decide (both blocked).
   calls the RPC instead of the direct update. Do NOT bundle into
   0020/0021 — it needs its own analysis of every goal_jobs write site.
 
+## 0022 — DB-ENFORCED APPROVAL GATE (built after the finding above)
+
+Migration 0022 closes the residual so the invariant is DB-enforced:
+"an approval-gated job cannot become executable without a verified
+owner approval," even against a compromised runtime binary.
+- CHECK goal_jobs_gate_not_runnable: requires_approval=true ⇒ status
+  not in (ready,assigned,in_progress). Insert+update, all roles.
+- CHECK goal_jobs_red_must_gate: RED/BLACK ⇒ requires_approval=true.
+- column-privilege: table UPDATE revoked; UPDATE re-granted on every
+  goal_jobs column EXCEPT requires_approval → runtime can't flip the gate.
+- clear_approval_gate() SECURITY DEFINER: runtime/owner-gated, verifies
+  the job's linked approval is owner-'approved' and scoped to this
+  job+goal, CAS-binds action fields, clears atomically. Only path.
+- store.ts clearApprovalGate delegates to the RPC and FAILS CLOSED.
+Residual (documented, NOT closed): classification integrity — a
+hostile runtime mis-marking a dangerous job GREEN at insert — is
+app-logic; full closure needs DB-side classification (separate change).
+
+## EXTENDED STAGING MATRIX — 0022 (agent runs after apply)
+
+With the non-owner runtime session + a throwaway owner session:
+POSITIVE
+- P1 runtime inserts a gated job as status='pending' → ok.
+- P2 owner decides its approval (decide RPC) → approved + audit row.
+- P3 runtime calls clear_approval_gate for that job → ok:true; job
+  now requires_approval=false, status='ready'; then executes.
+- P4 all normal non-gated transitions/leases/retries still succeed.
+NEGATIVE (runtime session; expected result in parens)
+- N1 UPDATE goal_jobs SET requires_approval=false → ERROR permission
+  denied for column requires_approval.
+- N2 UPDATE goal_jobs SET status='ready' WHERE requires_approval=true
+  → ERROR new row violates check goal_jobs_gate_not_runnable.
+- N3 INSERT goal_jobs (requires_approval=true, status='ready') → same
+  CHECK ERROR; INSERT (risk_class='RED', requires_approval=false) →
+  goal_jobs_red_must_gate ERROR.
+- N4 clear_approval_gate with a pending/denied/nonexistent approval →
+  ok:false reason not_approved/approval_not_found.
+- N5 relink approval_id to another job's approved record, then
+  clear_approval_gate → ok:false reason scope_mismatch.
+- N6 replay clear_approval_gate after the gate is cleared → ok:false
+  reason stale_cas (job no longer gated).
+- N7 a throwaway non-owner/non-runtime user calls clear_approval_gate
+  → ERROR forbidden.
+- N8 forge: INSERT orchestration_approvals status='approved' → RLS
+  with-check ERROR (insert forces pending); UPDATE approvals →
+  permission denied (update revoked).
+
+## ROLLBACK — 0022 (exact, bounded)
+
+1. drop function if exists public.clear_approval_gate(text,text,text,
+   text,text,text,text,text,text);
+2. revoke update on public.goal_jobs from authenticated; grant
+   update on public.goal_jobs to authenticated;  (restore table-wide
+   UPDATE — the pre-0022 grant from 0010:217)
+3. alter table public.goal_jobs drop constraint if exists
+   goal_jobs_gate_not_runnable; drop constraint if exists
+   goal_jobs_red_must_gate;
+4. revert store.ts clearApprovalGate to the direct-CAS implementation
+   (git revert the code commit) — REQUIRED, else the runtime calls a
+   dropped RPC. (Do code+DB rollback together.)
+No business data touched; owner access unchanged; production untouched.
+
 ## ROLLBACK (exact, bounded; restores prior authorization state only)
 
 Preconditions: touches ONLY the objects 0020/0021 created/replaced; no
