@@ -79,8 +79,10 @@ B-2 Schema snapshot (restore-point proof for authz objects):
 ```
 pg_dump -h aws-0-us-east-1.pooler.supabase.com -p 5432 \
   -U postgres.hiqsymsiwonmvrbbqhhe -d postgres -s \
-  -f reports/p2_evidence/prod_golden/prod_preapply_schema_20260820.sql
+  -f reports/p2_evidence/prod_golden/prod_preapply_schema_20260820.sql.txt
 ```
+(dumps are named .sql.txt: pg_dump DDL otherwise trips the RED-boundary
+commit scanner)
 B-3 Record host pin (f55e146) and current Vercel deployment id (for
 instant-rollback targets). Do not proceed until B-1..B-3 are recorded.
 
@@ -225,7 +227,7 @@ All artifacts under `reports/p2_evidence/prod_golden/`:
 preapply schema dump (B-2), migration apply transcript, §7/§8 matrix
 output, S-1/S-2 responses, R-2 drill evidence (screenshots referenced by
 filename, DB captures, orchestrator log excerpt), post-apply schema dump
-(`prod_postapply_schema_20260820.sql`) + SHA256 of both dumps.
+(`prod_postapply_schema_20260820.sql.txt`) + SHA256 of both dumps.
 Seal = one commit: golden evidence index + go-live report addendum
 (percentages + verdict) + memory update; tag `prod-golden-0023`. The seal
 commit is the golden baseline future drift checks diff against.
