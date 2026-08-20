@@ -1,0 +1,57 @@
+-- ============================================================================
+-- PRESTON PRODUCTION PREFLIGHT — before applying 0020-0023 (OWNER-RUN, psql)
+-- PRODUCTION (postgres.hiqsymsiwonmvrbbqhhe). READ-ONLY: no writes, no DDL.
+-- Every field is named *_expected_*; if ANY value deviates, STOP — apply
+-- nothing — and paste this output back.
+-- Named .sql.txt per the RED-boundary scanner convention.
+-- ============================================================================
+\set ON_ERROR_STOP off
+
+\echo ''
+\echo ===== P-1a deployment identity =====
+select environment as deployment_env_expected_production
+  from public.runtime_deployment where id='self';
+
+\echo ''
+\echo ===== P-1b 0020-0023 objects must be ABSENT (not yet applied) =====
+select count(*) as fns_0020_0022_0023_expected_0 from pg_proc
+ where proname in ('is_runtime_service','clear_approval_gate','job_gate_required');
+select count(*) as check_0022_expected_0 from pg_constraint
+ where conname='goal_jobs_gate_not_runnable';
+select count(*) as policy_0023_expected_0 from pg_policies
+ where tablename='goal_jobs' and policyname='goal_jobs_runtime_classify';
+select count(*) as runtime_services_table_expected_0
+  from information_schema.tables
+ where table_schema='public' and table_name='runtime_services';
+
+\echo ''
+\echo ===== P-1c parity floor: 0019 present =====
+select count(*) as fn_0019_expected_1 from pg_proc
+ where proname='read_ssot_audit_recent';
+
+\echo ''
+\echo ===== P-1d decide RPC exists but WITHOUT the 0021 audit yet =====
+select count(*) as decide_fn_expected_1 from pg_proc
+ where proname='decide_orchestration_approval';
+select position('audit_log' in prosrc)>0 as decide_has_audit_expected_f
+  from pg_proc where proname='decide_orchestration_approval';
+
+\echo ''
+\echo ===== P-1e owners intact; the new runtime UID is NOT an owner =====
+select count(*) as owners_expected_gte_1 from public.owners;
+select count(*) as runtime_uid_in_owners_expected_0 from public.owners
+ where user_id='7efd5d40-29b8-4f6b-bf38-d6f909cc2477';
+select count(*) as runtime_auth_user_expected_1 from auth.users
+ where id='7efd5d40-29b8-4f6b-bf38-d6f909cc2477'
+   and email='runtime@service.preston';
+
+\echo ''
+\echo ===== P-1f pre-0022 goal_jobs baseline =====
+select relrowsecurity as goal_jobs_rls_expected_t
+  from pg_class where oid='public.goal_jobs'::regclass;
+select count(*) as gj_tablewide_update_grant_expected_1
+  from information_schema.table_privileges
+ where table_schema='public' and table_name='goal_jobs'
+   and grantee='authenticated' and privilege_type='UPDATE';
+
+\echo ===== PREFLIGHT COMPLETE — proceed ONLY if every expected value matches =====

@@ -1,0 +1,32 @@
+-- ============================================================================
+-- PRESTON PRODUCTION APPLY — 0020 -> 0023 + runtime registration (OWNER-RUN)
+-- PRODUCTION (postgres.hiqsymsiwonmvrbbqhhe). Run from C:\dev\preston-os so
+-- the \i paths resolve. FAIL-FAST: ON_ERROR_STOP on — any error aborts the
+-- remainder; already-applied files then need the matching rollback
+-- (reports/p2_evidence/rollback/) before a re-run.
+-- Registration UID = the PROD runtime service user created in OWNER ACTION A
+-- (runtime@service.preston, NOT in owners).
+-- Named .sql.txt per the RED-boundary scanner convention.
+-- ============================================================================
+\set ON_ERROR_STOP on
+
+\echo ===== APPLY 0020 (runtime service identity) =====
+\i supabase/migrations/0020_runtime_service_identity.sql
+
+\echo ===== REGISTER the PROD runtime service user =====
+insert into public.runtime_services (user_id, note)
+  values ('7efd5d40-29b8-4f6b-bf38-d6f909cc2477', 'preston runtime (non-owner, production)')
+  on conflict (user_id) do nothing;
+select count(*) as runtime_services_rows_expected_1 from public.runtime_services;
+
+\echo ===== APPLY 0021 (fail-closed decide audit) =====
+\i supabase/migrations/0021_decide_audit_failclosed.sql
+
+\echo ===== APPLY 0022 (DB-enforced approval gate) =====
+\i supabase/migrations/0022_approval_gate_db_enforced.sql
+
+\echo ===== APPLY 0023 (job classification gate) =====
+\i supabase/migrations/0023_job_classification_gate.sql
+\echo (the last statement above MUST have printed CREATE POLICY)
+
+\echo ===== APPLY COMPLETE 0020->0023 =====
