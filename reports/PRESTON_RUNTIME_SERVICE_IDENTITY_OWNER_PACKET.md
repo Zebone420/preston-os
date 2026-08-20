@@ -185,16 +185,32 @@ Migration 0022 closes the residual so the invariant is DB-enforced:
 owner approval," even against a compromised runtime binary.
 - CHECK goal_jobs_gate_not_runnable: requires_approval=true ⇒ status
   not in (ready,assigned,in_progress). Insert+update, all roles.
-- CHECK goal_jobs_red_must_gate: RED/BLACK ⇒ requires_approval=true.
 - column-privilege: table UPDATE revoked; UPDATE re-granted on every
-  goal_jobs column EXCEPT requires_approval → runtime can't flip the gate.
+  goal_jobs column EXCEPT requires_approval AND the action fields
+  kind/objective/title/risk_class → runtime can't flip the gate NOR
+  mutate the approved action after the fact.
 - clear_approval_gate() SECURITY DEFINER: runtime/owner-gated, verifies
   the job's linked approval is owner-'approved' and scoped to this
   job+goal, CAS-binds action fields, clears atomically. Only path.
 - store.ts clearApprovalGate delegates to the RPC and FAILS CLOSED.
-Residual (documented, NOT closed): classification integrity — a
-hostile runtime mis-marking a dangerous job GREEN at insert — is
-app-logic; full closure needs DB-side classification (separate change).
+
+Two adversarial-review findings, both handled:
+- R3 FIXED: an earlier "RED ⇒ requires_approval=true" CHECK was
+  REMOVED — it would have made every owner-APPROVED RED/BLACK job
+  permanently un-runnable (clearing sets requires_approval=false while
+  risk_class stays RED). The gate is enforced on the flag itself,
+  risk-class-independent.
+- R2 CLOSED (action integrity): the action-defining fields are now
+  UPDATE-revoked from the runtime, so a hostile runtime cannot approve
+  action X then swap the job to action Y and clear.
+
+Residuals (documented, NOT closed):
+- Classification integrity: a hostile runtime mis-marking a dangerous
+  job GREEN/ungated at INSERT — app-logic; needs DB-side classification.
+- Executor-role substitution: assigned_role stays updatable (driver
+  assigns a default role), so a hostile runtime could change WHICH
+  agent runs an approved job — not WHAT runs. Bounded by agent_contracts.
+  Full closure needs assigned_role frozen-after-set (future).
 
 ## EXTENDED STAGING MATRIX — 0022 (agent runs after apply)
 
@@ -210,9 +226,8 @@ NEGATIVE (runtime session; expected result in parens)
   denied for column requires_approval.
 - N2 UPDATE goal_jobs SET status='ready' WHERE requires_approval=true
   → ERROR new row violates check goal_jobs_gate_not_runnable.
-- N3 INSERT goal_jobs (requires_approval=true, status='ready') → same
-  CHECK ERROR; INSERT (risk_class='RED', requires_approval=false) →
-  goal_jobs_red_must_gate ERROR.
+- N3 INSERT goal_jobs (requires_approval=true, status='ready') →
+  CHECK goal_jobs_gate_not_runnable ERROR.
 - N4 clear_approval_gate with a pending/denied/nonexistent approval →
   ok:false reason not_approved/approval_not_found.
 - N5 relink approval_id to another job's approved record, then
@@ -224,6 +239,11 @@ NEGATIVE (runtime session; expected result in parens)
 - N8 forge: INSERT orchestration_approvals status='approved' → RLS
   with-check ERROR (insert forces pending); UPDATE approvals →
   permission denied (update revoked).
+- N9 action-swap (R2): UPDATE goal_jobs SET objective/title/kind/
+  risk_class=... → ERROR permission denied for column (action fields
+  are UPDATE-revoked).
+- P5 positive: an owner-approved RED job clears + runs (proves R3 fix -
+  no red_must_gate blocking it).
 
 ## ROLLBACK — 0022 (exact, bounded)
 
@@ -233,8 +253,7 @@ NEGATIVE (runtime session; expected result in parens)
    update on public.goal_jobs to authenticated;  (restore table-wide
    UPDATE — the pre-0022 grant from 0010:217)
 3. alter table public.goal_jobs drop constraint if exists
-   goal_jobs_gate_not_runnable; drop constraint if exists
-   goal_jobs_red_must_gate;
+   goal_jobs_gate_not_runnable;
 4. revert store.ts clearApprovalGate to the direct-CAS implementation
    (git revert the code commit) — REQUIRED, else the runtime calls a
    dropped RPC. (Do code+DB rollback together.)

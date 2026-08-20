@@ -16,24 +16,41 @@
 --   SECURITY DEFINER RPC that verifies a genuine owner-decided approval
 --   scoped to that exact job. No table UPDATE by any client role can clear it.
 --
--- THREE MECHANISMS (defense in depth):
+-- MECHANISMS (defense in depth):
 --   1. CHECK goal_jobs_gate_not_runnable: forbids (requires_approval=true AND
 --      status in the executable set) on INSERT and UPDATE, for EVERY role
 --      including SECURITY DEFINER. Closes the "status-only bypass" and
 --      "insert gated+runnable" structurally.
---   2. CHECK goal_jobs_red_must_gate: a RED/BLACK job cannot carry
---      requires_approval=false (a mis-marked high-risk job can't be born
---      ungated). Defense in depth for classification consistency.
---   3. Column privilege: revoke table UPDATE on goal_jobs from authenticated;
---      grant UPDATE on every column EXCEPT requires_approval. The runtime can
---      transition status/leases/results but CANNOT flip requires_approval.
---      Combined with (1), a gated job is stuck non-runnable until the RPC.
+--   2. Column privilege: revoke table UPDATE on goal_jobs from authenticated;
+--      grant UPDATE on every column EXCEPT requires_approval AND the action-
+--      defining fields kind/objective/title/risk_class. The runtime can
+--      transition status/leases/results/assignment but CANNOT flip
+--      requires_approval NOR mutate the approved action after the fact.
+--      Combined with (1), a gated job is stuck non-runnable until the RPC,
+--      and the action a clear authorizes is the action the owner approved
+--      (the action fields are immutable post-insert - closes the
+--      approve-then-swap-the-action integrity gap).
 --   + clear_approval_gate(): the ONLY sanctioned clearer. SECURITY DEFINER
 --      (runs as table owner, so it may set requires_approval); verifies the
 --      job's linked approval is owner-decided 'approved', scoped to this job
 --      and goal; CAS-binds the action fields; sets requires_approval=false +
 --      status=ready atomically. Rejects nonexistent/pending/denied/mismatched/
 --      replayed approvals with a structured reason.
+--
+-- WHY NO "RED must be gated" CHECK: an owner-APPROVED RED/BLACK job must run
+-- with requires_approval=false while risk_class stays RED, so a
+-- "risk_class RED => requires_approval=true" CHECK would make every approved
+-- high-risk job permanently un-runnable (adversarial-review R3). The gate is
+-- enforced by (1)+(2)+the RPC on the requires_approval flag itself, which is
+-- risk-class-independent and correct.
+--
+-- RESIDUAL (documented, NOT closed): assigned_role stays UPDATE-able (the
+-- driver assigns a default role to unassigned jobs), so a hostile runtime
+-- could substitute the EXECUTOR ROLE on an already-approved job. It cannot
+-- change WHAT runs (kind/objective/title/risk_class are immutable) - only
+-- which agent runs it, itself bounded by agent_contracts default-deny. Full
+-- closure needs assigned_role frozen-after-set (a future trigger or an
+-- insert-time default), out of scope here.
 --
 -- COMPATIBILITY: the composer inserts every job as status='pending'
 -- (composer-persist.ts) and the driver parks gated jobs to 'awaiting_approval'
@@ -51,7 +68,7 @@
 -- Depends on: 0010 (goal_jobs, orchestration_approvals), 0002 (is_owner),
 -- 0020 (is_runtime_service).
 
--- 1. structural CHECK constraints (idempotent add) --------------------------
+-- 1. structural CHECK constraint (idempotent add) ---------------------------
 do $$
 begin
   if not exists (select 1 from pg_constraint where conname = 'goal_jobs_gate_not_runnable') then
@@ -60,20 +77,18 @@ begin
       check (not (requires_approval = true
                   and status in ('ready','assigned','in_progress')));
   end if;
-  if not exists (select 1 from pg_constraint where conname = 'goal_jobs_red_must_gate') then
-    alter table public.goal_jobs
-      add constraint goal_jobs_red_must_gate
-      check (not (risk_class in ('RED','BLACK') and requires_approval = false));
-  end if;
 end $$;
 
 -- 2. column privilege: strip the runtime's ability to UPDATE requires_approval
--- Revoke the table-wide UPDATE and re-grant UPDATE on every column EXCEPT
--- requires_approval. (INSERT/SELECT grants are unchanged; the composer still
--- inserts requires_approval=true via INSERT. anon stays fully revoked.)
+-- AND the action-defining fields (kind/objective/title/risk_class), which are
+-- INSERT-only in the legitimate flow. Revoke the table-wide UPDATE and re-grant
+-- UPDATE on every OTHER column. (INSERT/SELECT grants are unchanged; the
+-- composer still inserts requires_approval + the action fields via INSERT.
+-- anon stays fully revoked. assigned_role stays updatable for the driver's
+-- default-role assignment - see the RESIDUAL note in the header.)
 revoke update on public.goal_jobs from authenticated;
 grant update (
-  id, goal_id, kind, title, objective, risk_class, assigned_role, status,
+  id, goal_id, assigned_role, status,
   attempts, approval_id, runtime_job_id, correlation_id, evidence_refs,
   failure_reason, run_id, run_lease_expires_at, executed, created_at, updated_at
 ) on public.goal_jobs to authenticated;

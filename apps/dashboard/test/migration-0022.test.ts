@@ -18,18 +18,21 @@ describe('migration 0022 - DB-enforced approval gate', () => {
     expect(sql).toContain("where conname = 'goal_jobs_gate_not_runnable'");
   });
 
-  it('adds the RED-must-gate CHECK (defense in depth)', () => {
-    expect(sql).toContain('goal_jobs_red_must_gate');
-    expect(sql).toMatch(/risk_class in \('RED','BLACK'\) and requires_approval = false/);
+  it('does NOT add a RED-must-gate CHECK (would break approved RED jobs - review R3)', () => {
+    expect(sql).not.toContain('goal_jobs_red_must_gate');
+    expect(sql).not.toMatch(/risk_class in \('RED','BLACK'\) and requires_approval = false/);
   });
 
-  it('revokes table UPDATE and re-grants UPDATE on every column EXCEPT requires_approval', () => {
+  it('revokes table UPDATE and re-grants UPDATE excluding requires_approval AND the action fields', () => {
     expect(sql).toMatch(/revoke update on public\.goal_jobs from authenticated/);
     const grant = sql.slice(sql.indexOf('grant update ('));
     const cols = grant.slice(0, grant.indexOf(')')).replace('grant update (', '');
-    expect(cols).not.toMatch(/\brequires_approval\b/);
+    // gate flag + action-defining fields must NOT be runtime-updatable
+    for (const c of ['requires_approval', 'kind', 'objective', 'title', 'risk_class']) {
+      expect(cols, `grant must exclude ${c}`).not.toMatch(new RegExp(`\\b${c}\\b`));
+    }
     // sanity: the columns the runtime does update ARE present
-    for (const c of ['status', 'attempts', 'approval_id', 'run_id', 'evidence_refs', 'executed']) {
+    for (const c of ['status', 'attempts', 'approval_id', 'run_id', 'evidence_refs', 'executed', 'assigned_role']) {
       expect(cols, `grant missing ${c}`).toMatch(new RegExp(`\\b${c}\\b`));
     }
   });
