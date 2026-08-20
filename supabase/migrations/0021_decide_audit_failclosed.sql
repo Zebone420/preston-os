@@ -11,23 +11,32 @@
 --
 -- FIX: write the decision audit row INSIDE the decide RPC transaction, so
 -- EVERY successful decision - regardless of caller - lands exactly one
--- append-only access_events row atomically. If the audit insert fails, the
--- whole decision rolls back (fail-closed). The row records auth.uid() and
--- is_owner() so future decisions carry machine attribution (directly
--- addresses the R-2 attribution gap).
+-- append-only audit_log row atomically. If the audit insert fails, the whole
+-- decision rolls back (fail-closed). The row records auth.uid() and is_owner()
+-- so future decisions carry machine attribution (directly addresses the R-2
+-- attribution gap).
+--
+-- SINK CHOICE: the general append-only audit_log (0001), NOT access_events.
+-- access_events is the specialized credential/access table whose event column
+-- is CHECK-constrained to granted|used|denied|revoked|rotated - an approval
+-- OUTCOME (approved/rejected/more_info) does not belong to that enum, and
+-- widening it to fit would corrupt the credential-event vocabulary. audit_log
+-- has a free-form `action` + jsonb `detail`, exactly matching the app-level
+-- logAudit shape (action='orchestration_approval_decision'), so the DB audit
+-- and any app audit are homogeneous.
 --
 -- INVARIANTS PRESERVED (byte-identical to 0010 except the one INSERT):
 --   - is_owner() gate, one-time nonce, FOR UPDATE lock, pending-only,
 --     real-clock (clock_timestamp) expiry, updates ONLY decision fields.
 --   - SECURITY DEFINER, fixed search_path, execute revoked from public/anon,
 --     granted only to authenticated. No RLS change. No new grant.
---   - access_events stays append-only (0001/0002 revoke update/delete); the
+--   - audit_log stays append-only (0001/0002: no update/delete policy); the
 --     INSERT runs in the definer context, same pattern as 0012/0019.
 --   - NO secret/token value is written: only the nonce PREFIX (5 chars),
 --     never the full nonce.
 --
 -- Depends on: 0010 (decide_orchestration_approval, orchestration_approvals),
--- 0001 (access_events).
+-- 0001 (audit_log).
 
 create or replace function public.decide_orchestration_approval(
   p_approval_id text,
@@ -76,19 +85,23 @@ begin
          nonce = p_nonce
    where approval_id = p_approval_id;
 
-  -- FAIL-CLOSED AUDIT (0021): one append-only row per decision, atomic with
-  -- the update. Records WHO decided (auth.uid) and whether they are an owner,
-  -- for durable attribution. Never writes the token or the full nonce.
-  insert into access_events (system, event, actor, environment, detail)
+  -- FAIL-CLOSED AUDIT (0021): one append-only audit_log row per decision,
+  -- atomic with the update. Records WHO decided (auth.uid), the outcome, and
+  -- whether they are an owner, for durable attribution. Never writes the token
+  -- or the full nonce. audit_log requires only actor + action (NOT NULL); the
+  -- rest is optional. environment maps 1:1 (staging|production are valid).
+  insert into audit_log (actor, actor_type, action, action_class, environment, detail)
   values (
-    'orchestration-approval',
-    p_outcome,
     coalesce(nullif(auth.uid()::text, ''), 'unknown'),
+    'orchestration',
+    'orchestration_approval_decision',
+    'GREEN',
     v_row.environment,
     jsonb_build_object(
       'approval_id', p_approval_id,
       'goal_id', v_row.goal_id,
       'job_id', v_row.job_id,
+      'outcome', p_outcome,
       'is_owner', public.is_owner(),
       'nonce_prefix', left(p_nonce, 5)));
 

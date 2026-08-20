@@ -185,7 +185,7 @@ select set_config('request.jwt.claim.sub','',false);
 -- break the circular goal_jobs<->orchestration_approvals FK link first
 update public.goal_jobs set approval_id=null where goal_id=:'g1';
 delete from public.orchestration_approvals where goal_id=:'g1';
-delete from public.access_events where system='orchestration-approval' and detail->>'goal_id'=:'g1';
+delete from public.audit_log where action='orchestration_approval_decision' and detail->>'goal_id'=:'g1';
 delete from public.goal_jobs where goal_id=:'g1';
 delete from public.master_goals where id=:'g1';
 select 'cleanup done; remaining matrix goal_jobs='||count(*) as cleanup from public.goal_jobs where goal_id=:'g1';

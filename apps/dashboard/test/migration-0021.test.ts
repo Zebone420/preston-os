@@ -32,25 +32,28 @@ describe('migration 0021 - decide audit fail-closed', () => {
     expect(sql).toContain('for update');
   });
 
-  it('writes exactly one access_events audit row per decision', () => {
-    const inserts = sql.match(/insert into access_events/g) ?? [];
-    expect(inserts).toHaveLength(1);
-    expect(sql).toMatch(/insert into access_events \(system, event, actor, environment, detail\)/);
-    expect(sql).toContain("'orchestration-approval'");
+  it('writes exactly one audit_log row per decision (NOT access_events)', () => {
+    const auditInserts = sql.match(/insert into audit_log/g) ?? [];
+    expect(auditInserts).toHaveLength(1);
+    // access_events is the wrong sink (its event enum forbids approved/rejected)
+    expect(sql).not.toMatch(/insert into access_events/);
+    expect(sql).toMatch(/insert into audit_log \(actor, actor_type, action, action_class, environment, detail\)/);
+    expect(sql).toContain("'orchestration_approval_decision'");
   });
 
   it('the audit is INSIDE the function transaction (atomic / fail-closed)', () => {
     const body = sql.slice(sql.indexOf('as $fn$'), sql.indexOf('$fn$;', sql.indexOf('as $fn$') + 5));
     const upd = body.indexOf('update public.orchestration_approvals');
-    const ins = body.indexOf('insert into access_events');
+    const ins = body.indexOf('insert into audit_log');
     const ret = body.indexOf('return query');
     expect(upd).toBeGreaterThan(-1);
     expect(ins).toBeGreaterThan(upd); // audit after the decision update
     expect(ret).toBeGreaterThan(ins); // and before returning
   });
 
-  it('records attribution (auth.uid + is_owner) without leaking the nonce', () => {
+  it('records attribution (auth.uid + outcome + is_owner) without leaking the nonce', () => {
     expect(sql).toContain('auth.uid()::text');
+    expect(sql).toContain("'outcome', p_outcome");
     expect(sql).toContain("'is_owner', public.is_owner()");
     expect(sql).toContain("'nonce_prefix', left(p_nonce, 5)");
     // never the full nonce as a value
