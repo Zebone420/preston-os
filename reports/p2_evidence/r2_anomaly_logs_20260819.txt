@@ -1,0 +1,27 @@
+R-2 anomaly log preservation - captured 2026-08-20T00:15:36Z from Zpc26
+
+=== orchestrator.log lines for rops-prod-drill-2 / a9dec5b1 / 5117bf5b ===
+{"source":"ai-os-dispatcher","level":"info","command":"orchestrate-once","correlationId":"disp-119834-orchestrate-once","event":"remote_intake","selected":1,"consumed":[{"request_id":"rops-prod-drill-2","goal_ids":["a9dec5b1-af7a-4490-ac81-ea79f65a2df7"]}],"rejected":[]}
+{"source":"ai-os-dispatcher","level":"info","command":"orchestrate-once","correlationId":"disp-119834-orchestrate-once","event":"orchestrate_once","goal":"a9dec5b1-af7a-4490-ac81-ea79f65a2df7","cycles":1,"halted":false,"reason":"awaiting_owner_approval","execution_level":"BOUNDED_CODE_EXECUTION","skippedParked":["5d25fa51-ad36-463c-a4a0-e305ae9cdd26"],"unlockRefusals":[{"job_id":"5117bf5b-c3db-46bf-81b1-a2c26ada67f2","reason":"not_approved"}]}
+{"source":"ai-os-dispatcher","level":"info","command":"orchestrate-once","correlationId":"disp-119951-orchestrate-once","event":"real_executor_result","outcome":"completed","executed":true,"failure_reason":null,"evidence_count":3,"job_id":"5117bf5b-c3db-46bf-81b1-a2c26ada67f2","goal_id":"a9dec5b1-af7a-4490-ac81-ea79f65a2df7","run_id":"5117bf5b-c3db-46bf-81b1-a2c26ada67f2:6b32f86a-6351-4855-a9ee-0e41cea8a824","role":"claude","stderr_excerpt":null,"stdout_excerpt":" headings\"}},{\"tool_name\":\"Edit\",\"tool_use_id\":\"toolu_01Pfr8odCjYEKeZMFhV5Z8fN\",\"tool_input\":{\"file_path\":\"/srv/worktrees/wt-5117bf5b-c3db-46bf-81b1-a2c26ada67f2/apps/dashboard/test/synthetic-drill.test.ts\",\"old_string\":\"// The `it()` blocks below are ORDER-DEPENDENT BY DESIGN: they share module\\n//","child_env_keys":["PATH","HOME","SHELL","LANG"],"child_home":"/var/lib/preston/worker"}
+{"source":"ai-os-dispatcher","level":"info","command":"orchestrate-once","correlationId":"disp-119951-orchestrate-once","event":"orchestrate_once","goal":"a9dec5b1-af7a-4490-ac81-ea79f65a2df7","cycles":1,"halted":false,"reason":"completed","execution_level":"BOUNDED_CODE_EXECUTION","skippedParked":["5d25fa51-ad36-463c-a4a0-e305ae9cdd26"]}
+
+=== orchestrator service timeline 23:30-23:59 UTC (systemd journal) ===
+Aug 19 23:32:49 preston-agent-prod systemd[1]: Starting preston-orchestrator.service - Preston AI OS Phase-7 goal driver (simulation only, bounded)...
+Aug 19 23:32:51 preston-agent-prod systemd[1]: preston-orchestrator.service: Deactivated successfully.
+Aug 19 23:32:51 preston-agent-prod systemd[1]: Finished preston-orchestrator.service - Preston AI OS Phase-7 goal driver (simulation only, bounded).
+Aug 19 23:37:59 preston-agent-prod systemd[1]: Starting preston-orchestrator.service - Preston AI OS Phase-7 goal driver (simulation only, bounded)...
+Aug 19 23:38:04 preston-agent-prod systemd[1]: preston-orchestrator.service: Deactivated successfully.
+Aug 19 23:38:04 preston-agent-prod systemd[1]: Finished preston-orchestrator.service - Preston AI OS Phase-7 goal driver (simulation only, bounded).
+Aug 19 23:43:09 preston-agent-prod systemd[1]: Starting preston-orchestrator.service - Preston AI OS Phase-7 goal driver (simulation only, bounded)...
+Aug 19 23:47:29 preston-agent-prod systemd[1]: preston-orchestrator.service: Deactivated successfully.
+Aug 19 23:47:29 preston-agent-prod systemd[1]: Finished preston-orchestrator.service - Preston AI OS Phase-7 goal driver (simulation only, bounded).
+Aug 19 23:52:49 preston-agent-prod systemd[1]: Starting preston-orchestrator.service - Preston AI OS Phase-7 goal driver (simulation only, bounded)...
+Aug 19 23:52:51 preston-agent-prod systemd[1]: preston-orchestrator.service: Deactivated successfully.
+Aug 19 23:52:51 preston-agent-prod systemd[1]: Finished preston-orchestrator.service - Preston AI OS Phase-7 goal driver (simulation only, bounded).
+Aug 19 23:57:59 preston-agent-prod systemd[1]: Starting preston-orchestrator.service - Preston AI OS Phase-7 goal driver (simulation only, bounded)...
+Aug 19 23:58:01 preston-agent-prod systemd[1]: preston-orchestrator.service: Deactivated successfully.
+Aug 19 23:58:01 preston-agent-prod systemd[1]: Finished preston-orchestrator.service - Preston AI OS Phase-7 goal driver (simulation only, bounded).
+
+=== gateway view: approval decided (from n8n-1 authenticated read 00:2x UTC) ===
+apr-df39913f3a529546551071e0 status=approved decided_at=2026-08-19T23:40:34.387305+00:00 (created ~23:38:00, expires 2026-08-20T23:38:00)
