@@ -188,6 +188,18 @@ Required exact outcomes:
 | CLEANUP | bounded blast radius | remaining=0 |
 Any deviation = FAIL: stop, evaluate §11 rollback, report.
 
+RUN RECORD 2026-08-20 (prod_golden/prod_matrix_out_20260820.txt): ALL
+security invariants PASS exactly. Two harness notes, no production change:
+(1) I-0021's SELECT ran while still `set role authenticated`, which has no
+direct SELECT grant on audit_log (by design) → permission denied. The
+audit write itself is proven by the cleanup's postgres-session DELETE 1
+scoped to action='orchestration_approval_decision' + the fixture goal_id
+(exactly one row existed). Matrix corrected: reset role before the read.
+(2) I-0022n1's denial prints as "permission denied for table goal_jobs"
+(column-grant model wording), not "for column" — same enforcement; expect
+text corrected. The §9 R-2 drill independently re-proves the 0021 audit
+row on a real owner decision.
+
 ## 9. BRIDGE / SSOT END-TO-END REMOTE-LIVE SMOKE TEST
 
 After §4–§8 all PASS:

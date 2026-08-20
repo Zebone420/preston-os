@@ -93,7 +93,7 @@ select public.decide_orchestration_approval(:'al3','approved','prodmx-rt-nonce')
 select status as l3_approval_still_pending from public.orchestration_approvals where approval_id=:'al3';
 
 \echo ''
-\echo ===== I-0022n1: runtime CANNOT flip the gate column (expect: permission denied for column) =====
+\echo ===== I-0022n1: runtime CANNOT flip the gate column (expect: permission denied for table goal_jobs -- column-grant model: requires_approval has no UPDATE grant) =====
 update public.goal_jobs set requires_approval=false where id=:'jl3';
 
 \echo ''
@@ -146,6 +146,12 @@ select status as l3_decide_should_be_approved from public.decide_orchestration_a
 
 \echo ''
 \echo ===== I-0021 (fail-closed audit): decide wrote exactly one audit_log row =====
+-- HARNESS NOTE (2026-08-20 prod run): this SELECT must run as the postgres
+-- session — authenticated has NO direct SELECT grant on audit_log (by
+-- design), and the original placement under `set role authenticated`
+-- correctly got permission denied. That run's audit write was proven by
+-- the scoped cleanup DELETE 1. Corrected: reset role BEFORE reading.
+reset role;
 select count(*) as decide_audit_rows_expected_1
   from public.audit_log
  where action='orchestration_approval_decision' and detail->>'goal_id'=:'g1';
