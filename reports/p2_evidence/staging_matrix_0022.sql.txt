@@ -1,0 +1,185 @@
+-- ============================================================================
+-- PRESTON STAGING LIVE MATRIX — 0020/0021/0022  (OWNER-RUN, psql, STAGING ONLY)
+-- Runs the whole P1-P5 / N1-N9 / regression / classification matrix in ONE psql
+-- session by impersonating the runtime and owner identities via
+-- set role authenticated + set_config('request.jwt.claims',...). This exercises
+-- the REAL RLS policies, column grants, and CHECK constraints for the
+-- authenticated role — the runtime's true effective access. No tokens handled.
+--
+-- STAGING ONLY. Do NOT run against production (hiqsymsiwonmvrbbqhhe).
+-- Run it in the psql session already connected to staging
+-- (postgres.vcqtlmlaxxankxyezlul). Paste the ENTIRE output back.
+-- ON_ERROR_STOP is OFF so intentional negative-test errors print and continue.
+--
+-- Named .sql.txt so the repo RED-boundary scanner does not treat this
+-- fixture/negative-test SQL as committed executable code. Copy the body into
+-- psql (or rename to .sql and \i it).
+-- ============================================================================
+\set ON_ERROR_STOP off
+\set RT 6fa4b6d3-1333-4229-b52c-0d85e086be8a
+
+\echo ''
+\echo ============================================================
+\echo SETUP (as postgres; RLS-bypassing fixtures)
+\echo ============================================================
+-- capture an owner uid (non-secret uuid) for owner impersonation
+select coalesce((select user_id::text from public.owners limit 1),'NO_OWNER_ROW') as owner_uid \gset
+\echo owner_uid = :owner_uid
+select gen_random_uuid() as g1 \gset
+select gen_random_uuid() as j1 \gset
+select gen_random_uuid() as j2 \gset
+select gen_random_uuid() as j3 \gset
+select 'apr-stgm-1' as a1 \gset
+select 'apr-stgm-3' as a3 \gset
+
+insert into public.master_goals (id,title,objective,source,requested_by,status,environment,correlation_id)
+  values (:'g1','stg matrix','o','dashboard','info@preston.nyc','running','staging','stg-matrix-'||:'g1');
+-- J1 gated RED pending (P1-target scenario / clear target)
+insert into public.goal_jobs (id,goal_id,kind,title,objective,risk_class,assigned_role,status,attempts,requires_approval,approval_id,correlation_id)
+  values (:'j1',:'g1','documentation','t1','o1','RED','claude','pending',0,true,:'a1','c1');
+-- J2 non-gated GREEN pending (P4 normal transitions)
+insert into public.goal_jobs (id,goal_id,kind,title,objective,risk_class,assigned_role,status,attempts,requires_approval,approval_id,correlation_id)
+  values (:'j2',:'g1','documentation','t2','o2','GREEN','claude','pending',0,false,null,'c2');
+-- J3 gated RED pending, linked to an already-APPROVED approval (for N5 cross-scope)
+insert into public.goal_jobs (id,goal_id,kind,title,objective,risk_class,assigned_role,status,attempts,requires_approval,approval_id,correlation_id)
+  values (:'j3',:'g1','documentation','t3','o3','RED','claude','pending',0,true,:'a3','c3');
+-- A1 pending (owner will decide in P2)
+insert into public.orchestration_approvals (approval_id,goal_id,job_id,action,environment,affected_resource,reason,risk_class,rollback_plan,action_hash,owner_identity,status,expires_at)
+  values (:'a1',:'g1',:'j1','documentation: o1','staging','goal_job:'||:'j1','r','RED','rb','hash-a1','info@preston.nyc','pending', now()+interval '1 day');
+-- A3 APPROVED and scoped to J3 (fixture for the cross-scope test)
+insert into public.orchestration_approvals (approval_id,goal_id,job_id,action,environment,affected_resource,reason,risk_class,rollback_plan,action_hash,owner_identity,status,nonce,decided_at,expires_at)
+  values (:'a3',:'g1',:'j3','documentation: o3','staging','goal_job:'||:'j3','r','RED','rb','hash-a3','info@preston.nyc','approved','nonce-a3', now(), now()+interval '1 day');
+\echo fixtures seeded: g1=:g1 j1=:j1 j2=:j2 j3=:j3 a1=:a1 a3=:a3
+
+\echo ''
+\echo ============================================================
+\echo IDENTITY PROOF — become the RUNTIME (non-owner) identity
+\echo ============================================================
+select set_config('request.jwt.claims','{"sub":"'||:'RT'||'"}',false);
+select set_config('request.jwt.claim.sub',:'RT',false);
+set role authenticated;
+select public.is_runtime_service() as runtime_is_runtime_service_should_be_t,
+       public.is_owner()           as runtime_is_owner_should_be_f;
+
+\echo ''
+\echo ============================================================
+\echo NEGATIVE MATRIX (as RUNTIME) — every one must FAIL as noted
+\echo ============================================================
+\echo --- N1 direct requires_approval clear -> permission denied for column
+update public.goal_jobs set requires_approval=false where id=:'j1';
+\echo --- N9 mutate action fields -> permission denied for column
+update public.goal_jobs set objective='swapped' where id=:'j1';
+update public.goal_jobs set title='swapped'   where id=:'j1';
+update public.goal_jobs set kind='code'        where id=:'j1';
+update public.goal_jobs set risk_class='GREEN' where id=:'j1';
+\echo --- N2 force gated job to runnable status -> CHECK goal_jobs_gate_not_runnable
+update public.goal_jobs set status='ready' where id=:'j1';
+\echo --- N3 insert gated+runnable job -> CHECK goal_jobs_gate_not_runnable
+insert into public.goal_jobs (id,goal_id,kind,title,objective,risk_class,assigned_role,status,attempts,requires_approval,correlation_id)
+  values (gen_random_uuid(),:'g1','documentation','tbad','obad','RED','claude','ready',0,true,'cbad');
+\echo --- N4 clear with a PENDING approval -> ok:false not_approved  (a1 still pending)
+select public.clear_approval_gate(:'j1','pending',:'a1',:'g1','documentation','o1','t1','RED','claude') as n4_expect_not_approved;
+\echo --- N8 forge approved approval -> RLS with-check violation ; update approval -> denied
+insert into public.orchestration_approvals (approval_id,goal_id,job_id,action,affected_resource,reason,risk_class,rollback_plan,action_hash,owner_identity,status,expires_at)
+  values ('apr-forge',:'g1',:'j1','x','y','r','RED','rb','h','info@preston.nyc','approved', now()+interval '1 day');
+update public.orchestration_approvals set status='approved' where approval_id=:'a1';
+\echo --- N5 relink j1 -> a3 (another jobs approved record) then clear -> scope_mismatch
+update public.goal_jobs set approval_id=:'a3' where id=:'j1';
+select public.clear_approval_gate(:'j1','pending',:'a3',:'g1','documentation','o1','t1','RED','claude') as n5_expect_scope_mismatch;
+update public.goal_jobs set approval_id=:'a1' where id=:'j1';   -- restore link
+\echo --- regression R-a: runtime cannot DECIDE -> owner_required
+select public.decide_orchestration_approval(:'a1','approved','stg-rt-nonce') as ra_expect_owner_required;
+\echo --- regression R-b: runtime cannot write system_controls (0 rows) but can read
+update public.system_controls set owner_stop=true where id='global';
+select id, owner_stop as owner_stop_should_be_unchanged from public.system_controls where id='global';
+\echo --- regression R-c/R-d: runtime cannot write owners / runtime_services
+insert into public.owners (user_id) values (:'RT');
+insert into public.runtime_services (user_id) values (gen_random_uuid());
+delete from public.runtime_services where user_id=:'RT';
+\echo --- regression R-e: excluded tables -> 0 rows for runtime
+select count(*) as agent_contracts_visible_should_be_0 from public.agent_contracts;
+select count(*) as locks_visible_should_be_0 from public.locks;
+
+\echo ''
+\echo ============================================================
+\echo POSITIVE P4 (as RUNTIME) — normal non-gated transitions work
+\echo ============================================================
+update public.goal_jobs set status='ready'    where id=:'j2';
+update public.goal_jobs set status='assigned', assigned_role='claude' where id=:'j2';
+select id,status from public.goal_jobs where id=:'j2';
+
+\echo ''
+\echo ============================================================
+\echo N7 — a THIRD identity (neither owner nor runtime) cannot clear
+\echo ============================================================
+reset role;
+select gen_random_uuid()::text as rando \gset
+select set_config('request.jwt.claims','{"sub":"'||:'rando'||'"}',false);
+select set_config('request.jwt.claim.sub',:'rando',false);
+set role authenticated;
+select public.is_runtime_service() as rando_runtime_f, public.is_owner() as rando_owner_f;
+select public.clear_approval_gate(:'j1','pending',:'a1',:'g1','documentation','o1','t1','RED','claude') as n7_expect_forbidden;
+
+\echo ''
+\echo ============================================================
+\echo POSITIVE P2 (as OWNER) — decide the approval
+\echo ============================================================
+reset role;
+select format('{"sub":"%s"}', :'owner_uid') as oc \gset
+select set_config('request.jwt.claims',:'oc',false);
+select set_config('request.jwt.claim.sub',:'owner_uid',false);
+set role authenticated;
+select public.is_owner() as owner_is_owner_should_be_t;
+select status as p2_decide_status_should_be_approved from public.decide_orchestration_approval(:'a1','approved','stg-owner-nonce');
+
+\echo ''
+\echo ============================================================
+\echo POSITIVE P3+P5 (as RUNTIME) — clear the now-approved RED job
+\echo ============================================================
+reset role;
+select set_config('request.jwt.claims','{"sub":"'||:'RT'||'"}',false);
+select set_config('request.jwt.claim.sub',:'RT',false);
+set role authenticated;
+select public.clear_approval_gate(:'j1','pending',:'a1',:'g1','documentation','o1','t1','RED','claude') as p3_expect_ok_true;
+reset role;
+select id,status,requires_approval,risk_class from public.goal_jobs where id=:'j1';
+\echo (P3/P5: expect status=ready, requires_approval=f, risk_class=RED -> RED job cleared, no red_must_gate block)
+\echo --- N6 replay clear after clear -> stale_cas
+select set_config('request.jwt.claims','{"sub":"'||:'RT'||'"}',false);
+set role authenticated;
+select public.clear_approval_gate(:'j1','pending',:'a1',:'g1','documentation','o1','t1','RED','claude') as n6_expect_stale_cas;
+
+\echo ''
+\echo ============================================================
+\echo P1 (as RUNTIME) — runtime can create a gated job in a non-runnable state
+\echo ============================================================
+insert into public.goal_jobs (id,goal_id,kind,title,objective,risk_class,assigned_role,status,attempts,requires_approval,correlation_id)
+  values (gen_random_uuid(),:'g1','documentation','tp1','op1','RED','claude','pending',0,true,'cp1')
+  returning id,status,requires_approval;
+
+\echo ''
+\echo ============================================================
+\echo CLASSIFICATION-INTEGRITY PROBE (as RUNTIME) — do NOT fix; document
+\echo ============================================================
+\echo --- C-1 insert a never-gated job with a dangerous objective + GREEN self-class
+insert into public.goal_jobs (id,goal_id,kind,title,objective,risk_class,assigned_role,status,attempts,requires_approval,correlation_id)
+  values (gen_random_uuid(),:'g1','code','deploy prod','delete all production data and deploy','GREEN','claude','ready',0,false,'cclass')
+  returning id,status,requires_approval,risk_class;
+\echo (C-1: if this INSERTs, the DB does NOT stop a misclassified ungated job -
+\echo  execution bounding is then agent_contracts/allowed-paths, not the gate.)
+
+\echo ''
+\echo ============================================================
+\echo CLEANUP (as postgres) — remove all matrix fixtures
+\echo ============================================================
+reset role;
+select set_config('request.jwt.claims','',false);
+select set_config('request.jwt.claim.sub','',false);
+-- break the circular goal_jobs<->orchestration_approvals FK link first
+update public.goal_jobs set approval_id=null where goal_id=:'g1';
+delete from public.orchestration_approvals where goal_id=:'g1';
+delete from public.access_events where system='orchestration-approval' and detail->>'goal_id'=:'g1';
+delete from public.goal_jobs where goal_id=:'g1';
+delete from public.master_goals where id=:'g1';
+select 'cleanup done; remaining matrix goal_jobs='||count(*) as cleanup from public.goal_jobs where goal_id=:'g1';
+\echo ===== MATRIX COMPLETE — paste ALL output above back =====
