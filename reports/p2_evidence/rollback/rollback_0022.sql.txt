@@ -1,0 +1,17 @@
+-- rollback_0022.sql  — OWNER-RUN, reverses migration 0022 only.
+-- Restores the pre-0022 goal_jobs authorization (table-wide UPDATE), removes
+-- the gate CHECK and the clear RPC. NB: the store.ts code change must be
+-- git-reverted TOGETHER (else the runtime calls a dropped RPC). No business
+-- data touched; owner access unchanged. Idempotent.
+begin;
+
+drop function if exists public.clear_approval_gate(
+  text, text, text, text, text, text, text, text, text);
+
+-- restore the pre-0022 table-wide UPDATE grant (0010:217 equivalent)
+revoke update on public.goal_jobs from authenticated;
+grant update on public.goal_jobs to authenticated;
+
+alter table public.goal_jobs drop constraint if exists goal_jobs_gate_not_runnable;
+
+commit;

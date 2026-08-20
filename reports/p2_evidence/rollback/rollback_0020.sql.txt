@@ -1,0 +1,93 @@
+-- rollback_0020.sql  — OWNER-RUN, reverses migration 0020 only.
+-- Reverts every policy 0020 widened back to its ORIGINAL is_owner()-only form
+-- (verbatim from 0010/0004/0003), drops the runtime-service-specific policies,
+-- and drops is_runtime_service() + runtime_services. agents_owner_all and
+-- remote_intake_requests_owner were NOT modified by 0020, so they are left as
+-- is. No business data touched; owner access unchanged. Idempotent.
+-- Apply AFTER rollback_0022 (0022's grant/RPC reference goal_jobs only; order
+-- independent, but run 0022→0021→0020 to mirror the reverse of apply order).
+begin;
+
+-- restore 0010 owner-only policies -----------------------------------------
+drop policy if exists master_goals_owner_all on master_goals;
+create policy master_goals_owner_all on master_goals
+  for all to authenticated using (public.is_owner()) with check (public.is_owner());
+
+drop policy if exists goal_jobs_owner_all on goal_jobs;
+create policy goal_jobs_owner_all on goal_jobs
+  for all to authenticated using (public.is_owner()) with check (public.is_owner());
+
+drop policy if exists job_dependencies_owner_ins on job_dependencies;
+create policy job_dependencies_owner_ins on job_dependencies
+  for insert to authenticated with check (public.is_owner());
+drop policy if exists job_dependencies_owner_sel on job_dependencies;
+create policy job_dependencies_owner_sel on job_dependencies
+  for select to authenticated using (public.is_owner());
+
+drop policy if exists orch_approvals_owner_ins on orchestration_approvals;
+create policy orch_approvals_owner_ins on orchestration_approvals
+  for insert to authenticated with check (
+    public.is_owner() and status = 'pending' and nonce is null and decided_at is null);
+drop policy if exists orch_approvals_owner_sel on orchestration_approvals;
+create policy orch_approvals_owner_sel on orchestration_approvals
+  for select to authenticated using (public.is_owner());
+
+-- restore 0004 owner-only policies -----------------------------------------
+drop policy if exists os_jobs_owner_all on os_jobs;
+create policy os_jobs_owner_all on os_jobs
+  for all to authenticated using (public.is_owner()) with check (public.is_owner());
+drop policy if exists worker_leases_owner_all on worker_leases;
+create policy worker_leases_owner_all on worker_leases
+  for all to authenticated using (public.is_owner()) with check (public.is_owner());
+drop policy if exists runtime_command_packets_owner_all on runtime_command_packets;
+create policy runtime_command_packets_owner_all on runtime_command_packets
+  for all to authenticated using (public.is_owner()) with check (public.is_owner());
+drop policy if exists repository_worktrees_owner_all on repository_worktrees;
+create policy repository_worktrees_owner_all on repository_worktrees
+  for all to authenticated using (public.is_owner()) with check (public.is_owner());
+drop policy if exists orch_decisions_owner_ins on orchestration_decisions;
+create policy orch_decisions_owner_ins on orchestration_decisions
+  for insert to authenticated with check (public.is_owner());
+drop policy if exists orch_decisions_owner_sel on orchestration_decisions;
+create policy orch_decisions_owner_sel on orchestration_decisions
+  for select to authenticated using (public.is_owner());
+drop policy if exists job_attempts_owner_ins on job_attempts;
+create policy job_attempts_owner_ins on job_attempts
+  for insert to authenticated with check (public.is_owner());
+drop policy if exists job_attempts_owner_sel on job_attempts;
+create policy job_attempts_owner_sel on job_attempts
+  for select to authenticated using (public.is_owner());
+drop policy if exists job_checkpoints_owner_ins on job_checkpoints;
+create policy job_checkpoints_owner_ins on job_checkpoints
+  for insert to authenticated with check (public.is_owner());
+drop policy if exists job_checkpoints_owner_sel on job_checkpoints;
+create policy job_checkpoints_owner_sel on job_checkpoints
+  for select to authenticated using (public.is_owner());
+drop policy if exists dead_letters_owner_ins on dead_letters;
+create policy dead_letters_owner_ins on dead_letters
+  for insert to authenticated with check (public.is_owner());
+drop policy if exists dead_letters_owner_sel on dead_letters;
+create policy dead_letters_owner_sel on dead_letters
+  for select to authenticated using (public.is_owner());
+
+-- restore 0003 owner-only policies -----------------------------------------
+drop policy if exists os_events_owner_insert on os_events;
+create policy os_events_owner_insert on os_events
+  for insert to authenticated with check (public.is_owner());
+drop policy if exists os_events_owner_select on os_events;
+create policy os_events_owner_select on os_events
+  for select to authenticated using (public.is_owner());
+
+-- drop the runtime-service-specific policies --------------------------------
+drop policy if exists agents_runtime_ins on agents;
+drop policy if exists agents_runtime_upd on agents;
+drop policy if exists agents_runtime_sel on agents;
+drop policy if exists remote_intake_requests_runtime_sel on remote_intake_requests;
+drop policy if exists remote_intake_requests_runtime_upd on remote_intake_requests;
+drop policy if exists system_controls_runtime_sel on system_controls;
+
+-- drop the identity objects (cascade drops runtime_services_select_owner) ----
+drop function if exists public.is_runtime_service();
+drop table if exists public.runtime_services;
+
+commit;
