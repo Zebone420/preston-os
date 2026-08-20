@@ -14,9 +14,40 @@ Fixes in this packet:
 - apps/dashboard/src/app/os/orchestration/actions.ts — app-level audit
   no longer swallowed (defense in depth; rides the next dashboard deploy).
 
+Exact runtime write surface (proven from the os-runtime dependency
+graph: store.ts ORCH_TABLES/RUNTIME_TABLES accessors + access modes) —
+15 write tables + system_controls read-only, NO MORE:
+  master_goals, goal_jobs, job_dependencies, orchestration_approvals
+  (insert pending-only + select), orchestration_decisions, os_jobs,
+  worker_leases, job_attempts, job_checkpoints, dead_letters,
+  runtime_command_packets, repository_worktrees, agents (staging-sim),
+  os_events, remote_intake_requests (consume); system_controls SELECT.
+Excluded (no runtime caller): agent_contracts, locks, telegram_updates,
+agent_memory, execution_queue.
+
 Regression tests: apps/dashboard/test/migration-0020.test.ts,
-migration-0021.test.ts (17 static pins, green). Full matrix 1348 pass +
-1 xfail + 5 known Windows bash-ENOENT; secret/RED scans 0/0.
+migration-0021.test.ts, migration-0020-0021-lint.test.ts (36 static
+pins incl. exact-surface + structural lint, green). Local ephemeral-PG
+behavioral proof was NOT possible (the installed PostgreSQL 17 is
+client-only, missing server share files) — the LIVE behavioral matrix
+below is run by the agent against STAGING after Stage 2.
+
+## STAGE 2b — LIVE BEHAVIORAL VERIFICATION (agent runs on staging)
+
+After Stage 2/3, with a runtime-service session and a throwaway
+non-owner + owner session, the agent proves each property live:
+| # | Property | Live check |
+|---|---|---|
+| 1 | runtime CAN write goals/jobs | insert master_goals/goal_jobs as runtime session → ok |
+| 2 | runtime CAN read controls | select system_controls as runtime → row returned |
+| 3 | runtime CANNOT write controls | update system_controls as runtime → 0 rows / denied |
+| 4 | runtime is NOT owner | select public.is_owner() as runtime → false |
+| 5 | runtime CANNOT decide | rpc decide_orchestration_approval as runtime → owner_required |
+| 6 | approvals UPDATE impossible | update orchestration_approvals directly (any session) → denied |
+| 7 | owner CAN still approve | rpc decide as owner on a pending row → approved + 1 access_events row |
+| 8 | non-runtime authenticated denied | insert master_goals as a random non-owner/non-runtime user → denied |
+| 9 | RLS fail-closed | anon select on any widened table → denied |
+Drill is not promoted to prod until all 9 pass on staging.
 
 ---
 

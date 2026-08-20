@@ -651,3 +651,45 @@ harmless documentation. Verified offline against the repo composer
 control) before handing to the owner. Timer preston-orchestrator
 enabled by owner for the R-2 window (5-min cadence, worker timer
 stays off).
+
+---
+
+## 22. ADDENDUM — R-2 DISPOSITION + RUNTIME LEAST-PRIVILEGE FIX (2026-08-20)
+
+Single authoritative R-2 verdict (supersedes the framing in the
+interim r2_rootcause / r2_reconciliation evidence files):
+
+- R-2 (2026-08-19) = INCONCLUSIVE as drill evidence. NOT PASS, NOT a
+  confirmed compromise. The approval GATE behaved correctly (is_owner
+  + one-time nonce + expiry + fail-closed; direct approvals write
+  revoked). Owner approval is PLAUSIBLE (dash- nonce + timing +
+  is_owner all fit a phone tap) but UNPROVEN (no screenshot; no Vercel
+  prod request captured at the tap time). A FRESH, fully instrumented
+  R-2 (new ids rops-prod-drill-3) is required AFTER the fixes below.
+
+Two separate architecture defects the forensics surfaced, now fixed in
+repo (staging-first; not yet applied):
+- 0020_runtime_service_identity.sql — the runtime was seeded a
+  human-OWNER Supabase session (passes is_owner -> could decide and
+  write controls unattended). Fix: dedicated NON-owner runtime
+  identity (runtime_services allowlist + is_runtime_service()); the
+  RLS on EXACTLY the 15-table runtime write surface widened to (owner
+  OR runtime); system_controls made runtime-READ-ONLY; and the decide
+  RPC kept is_owner()-ONLY so the runtime can propose but never decide.
+- 0021_decide_audit_failclosed.sql — the decide RPC now writes one
+  append-only access_events row IN-TRANSACTION (fail-closed; records
+  auth.uid + is_owner), closing the swallowed-audit gap that made R-2
+  unattributable. actions.ts no longer ignores the app-level audit.
+
+Quality gate this run: exact runtime surface derived from the
+os-runtime dependency graph (no more / no less); 36 static pins incl.
+structural lint + exact-surface parity; full orchestration/migration
+suite 100/100; secret/RED scans 0/0; independent reviewer pass. Live
+RLS behavioral proof runs on STAGING at apply (a local ephemeral
+Postgres was unavailable — client-only install). Owner packet:
+reports/PRESTON_RUNTIME_SERVICE_IDENTITY_OWNER_PACKET.md.
+
+Verdict: NOT YET FULLY LIVE. Remaining path: apply 0020/0021 to
+staging -> agent runs the 9-point behavioral matrix -> owner promotes
+to prod + re-seeds the runtime with the non-owner identity + signs out
+the owner session -> fresh instrumented R-2 (rops-prod-drill-3).
