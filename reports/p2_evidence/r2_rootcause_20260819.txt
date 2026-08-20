@@ -1,0 +1,154 @@
+R-2 APPROVAL ANOMALY - ROOT CAUSE FORENSICS (read-only, no containment)
+Captured 2026-08-20 ~00:40-01:20 UTC from Zpc26 over the read-only
+jump chain + owner-logged consoles. NO secret values, JWTs, refresh
+tokens, or passwords appear below.
+
+INCIDENT: orchestration approval apr-df39913f3a529546551071e0 (goal
+a9dec5b1, job 5117bf5b, "Document the hermes_mode default...") was
+decided status=approved at 2026-08-19 23:40:34.387Z. The owner did
+NOT tap Approve. The job then executed on the next timer tick.
+
+========================================================
+WHAT DECIDED IT - eliminations (all machine-proven)
+========================================================
+1. Vercel dashboard (the ONLY code in the whole system that calls
+   decide_orchestration_approval): prod AND staging runtime logs show
+   ZERO requests 23:36-23:44. Not the dashboard.
+2. Supabase prod API-gateway edge log: EXACTLY ONE decide event -
+   id a4f8f17b-7f76-4252-870a-b897f8362561, 23:40:34, POST
+   /rest/v1/rpc/decide_orchestration_approval, 200, user_agent="node".
+   Gateway schema stores no source IP (headers carry user_agent only).
+3. Deployed runtime bundle (/srv/preston-os/apps/dashboard/dist/
+   os-runtime/*, pin f55e146): the string
+   "decide_orchestration_approval" DOES NOT APPEAR anywhere in it.
+   The 7 "decide" hits in dispatcher.js are all comments / the
+   worktree-lock helper "decideAcquire". os-runtime imports neither
+   composer-persist.js nor store.js (the only dist files carrying the
+   RPC name, and there only in comments). => the
+   orchestrator/worker/hermes/dispatcher CANNOT call decide.
+4. Bounded executor: the R-2 job's Claude Code executor
+   (worktree wt-5117bf5b) transcript first event 23:43:14Z - THREE
+   MINUTES AFTER the decision - and it ran only grep/find/git/wc
+   research commands; no curl to any rpc endpoint, no auth call.
+   No other executor transcript has an mtime in 23:30-23:50.
+5. Interactive/host vectors: /var/log/auth.log shows NO SSH login
+   23:30-23:50; no root/user crontab; no cron.d job; no MCP server
+   configured for the executor (mcpServers: none); no lingering user
+   node process (loginctl: only root console + this investigation's
+   non-interactive ssh); ps shows no node now; systemd journal
+   23:39-23:42 shows NO preston unit active (only sysstat + UFW).
+
+========================================================
+CREDENTIAL SOURCE - why owner authority exists on the host
+========================================================
+- Runtime auth (dist/os-runtime): supabase-js createClient with
+  persistSession + autoRefreshToken, keyed by env SUPABASE_RUNTIME_KEY,
+  session persisted to SUPABASE_RUNTIME_TOKEN_STORE
+  (/var/lib/preston/{worker,hermes}/token-store.json, 0600/0700,
+  12-byte opaque blobs).
+- Root shell history proves the seed mechanism:
+    read -s SUPABASE_RUNTIME_REFRESH_TOKEN ; export ... ; unset ...
+  i.e. an OWNER-USER refresh token was hand-seeded into the runtime.
+- Effect: the runtime holds a STANDING OWNER Supabase USER session
+  (auth.uid() -> a row in public.owners), auto-refreshed. Two such
+  sessions exist (worker + hermes), both source IP 46.224.68.139,
+  user_agent node, with ~5-min refresh chains that match the two
+  enabled timers (forensics2):
+    23:30:40->23:35:49->23:41:09  (hermes cadence)
+    23:32:49->23:37:59->23:43:09  (orchestrator cadence)
+  Sessions 5adaba3e-... and f2f586f4-... .
+- decide_orchestration_approval (0010) is SECURITY DEFINER whose ONLY
+  gate is public.is_owner() (auth.uid() in public.owners). A standing
+  owner session PASSES that gate. Direct UPDATE on the table is
+  revoked, so the RPC is the sole write path - but an owner session
+  can call it freely.
+
+========================================================
+ROOT CAUSE
+========================================================
+The production runtime is seeded with a HUMAN-OWNER Supabase session
+(owner refresh token -> persisted, auto-refreshed). That standing
+owner session confers FULL owner authority - including the sole
+approval-decision RPC - to unattended host processes and to anything
+that can read the host session store. The approval gate is therefore
+NOT bound to a live human; it is satisfied by a machine-held owner
+credential. A node process bearing that host-origin owner session
+decided apr-df39913f at 23:40:34.
+
+RESIDUAL ATTRIBUTION UNCERTAINTY (stated honestly): the exact node
+process is not nameable from retained logs - no deployed service,
+executor, SSH, cron, or MCP was running at 23:40:34, and the gateway
+log keeps no source IP. The two remaining possibilities, which the
+evidence cannot separate, are (a) an ad-hoc/transient node invocation
+on the host that left no systemd/cron/SSH trace, or (b) off-host use
+of a copied owner ACCESS token (bearer) from the runtime session -
+which would still log as user_agent node with no IP. OWNER INPUT
+NEEDED: did any owner-side tool (phone automation, a saved script, or
+a ChatGPT-side integration) hold an owner Supabase session and issue
+this decision? Either way the fix below closes both.
+
+========================================================
+BLAST RADIUS
+========================================================
+Because is_owner() is the ONLY check and the runtime session passes
+it, that session can decide (approve OR reject) ANY pending production
+approval - not just this workflow - and can submit owner goals and
+write any owner-RLS-gated table. This is full standing owner authority
+on an unattended host.
+
+========================================================
+OTHER POSSIBLY-AFFECTED APPROVALS (owner review)
+========================================================
+recently_decided (from the authenticated gate-3 read):
+  apr-c234f690... approved 2026-08-18 01:49:42Z
+  apr-6dd8cb54... approved 2026-08-18 01:22:47Z
+  apr-a45b400c / apr-81a0bdc3 / apr-873d94c3 rejected 04:22-04:23Z
+The two Aug-18 "approved" rows fall in the P2 T-mode drill window and
+should be re-checked the same way (their nonce prefix + whether a
+human decided them). Today's R-2 is the confirmed anomaly.
+
+========================================================
+AUDIT DEFECT (separate, confirmed)
+========================================================
+audit_log rows for 23:30-23:59 = ZERO. Two findings:
+D1. decideOrchestrationApproval (actions.ts) ignores logAudit's
+    return value; a failed audit insert is swallowed - a decision can
+    succeed with no audit trail. Real defect regardless of caller.
+D2. The zero-row here ALSO corroborates that the decision did NOT go
+    through the dashboard action at all (which is the writer of that
+    audit row) - consistent with the Vercel zero-requests finding.
+
+========================================================
+MINIMUM SAFE CONTAINMENT (owner-only; NOT performed)
+========================================================
+Revoke the standing owner session so NOTHING unattended holds owner
+authority: in Supabase Auth, sign out / revoke all sessions for the
+owner user (info@preston.nyc), and unset+rotate the seeded
+SUPABASE_RUNTIME_REFRESH_TOKEN so it cannot re-seed. Expected side
+effect (intended): the runtime loses owner-write ability until the
+permanent fix - acceptable, the runtime should never have had it.
+Pausing the two timers first (systemctl disable --now
+preston-orchestrator.timer preston-hermes-observe.timer) stops
+unattended ticks meanwhile and is fully reversible.
+
+========================================================
+PERMANENT ARCHITECTURAL FIX
+========================================================
+Give the runtime a DEDICATED NON-OWNER service identity with exactly
+the grants it needs (insert/select goals+jobs, update status, read
+controls) and that CANNOT pass is_owner() and has NO execute on
+decide_orchestration_approval. Then the approval decision requires a
+genuine human owner session (dashboard login), and no machine can
+self-approve. Remove all human-owner credentials from unattended
+services permanently. Also fix D1 (fail-closed audit on decide).
+
+========================================================
+EVIDENCE PATHS
+========================================================
+- reports/p2_evidence/r2_forensics_findings_20260819.txt (attribution)
+- reports/p2_evidence/r2_anomaly_logs_20260819.txt (preserved logs)
+- reports/p2_evidence/r2_rootcause_20260819.txt (this file)
+- Supabase edge log id a4f8f17b-7f76-4252-870a-b897f8362561
+- prod pin f55e146; dist/os-runtime has zero decide-RPC references
+- owner psql captures: r2_forensics_*.txt, r2_forensics2 (sessions)
+- scripts/p2/p2_r2_forensics.ps1, p2_r2_forensics2.ps1 (SELECT-only)
