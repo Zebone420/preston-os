@@ -1,0 +1,34 @@
+-- ============================================================================
+-- PRESTON APPLY 0024 (submit_goal_decomposition admits runtime service)
+-- OWNER-RUN. STAGING FIRST (postgres.vcqtlmlaxxankxyezlul), then PRODUCTION
+-- (postgres.hiqsymsiwonmvrbbqhhe). Same file both times. Run from
+-- C:\dev\preston-os so the \i path resolves. Session pooler port 5432.
+-- FAIL-FAST: ON_ERROR_STOP on. Rollback:
+-- reports/p2_evidence/rollback/rollback_0024.sql.txt (0018 body verbatim).
+-- Named .sql.txt per the RED-boundary scanner convention.
+-- ============================================================================
+\set ON_ERROR_STOP on
+
+\echo ===== PRE: which project, current guard line =====
+select current_database(), current_setting('request.jwt.claims', true) as jwt;
+select position('if not public.is_owner() then' in prosrc) > 0
+         as old_owner_only_guard_present_expect_t
+  from pg_proc where proname = 'submit_goal_decomposition';
+
+\echo ===== APPLY 0024 =====
+\i supabase/migrations/0024_submit_goal_runtime_service.sql
+
+\echo ===== POST: new guard present, invoker kept, grants unchanged =====
+select position('if not (public.is_owner() or public.is_runtime_service()) then'
+                in prosrc) > 0 as new_guard_present_expect_t,
+       position('if not public.is_owner() then' in prosrc) > 0
+         as old_guard_present_expect_f,
+       prosecdef as security_definer_expect_f
+  from pg_proc where proname = 'submit_goal_decomposition';
+select grantee, privilege_type
+  from information_schema.routine_privileges
+ where routine_name = 'submit_goal_decomposition'
+ order by grantee;
+\echo (expect: authenticated EXECUTE present; anon absent)
+
+\echo ===== APPLY 0024 COMPLETE - paste ALL output back =====

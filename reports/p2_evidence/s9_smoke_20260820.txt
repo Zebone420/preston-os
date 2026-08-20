@@ -1,0 +1,25 @@
+S9 PRODUCTION SMOKE + DRILL-3 PREP  2026-08-20 (agent legs, no secrets)
+
+POST-C-4 RUNTIME CONTINUITY (service identity, owner sessions = 0)
+  C-4 owner report: owner sessions 11 -> 0 (deleted 11), runtime
+  service sessions 2 -> 2 untouched, tx committed.
+  timer-driven ticks after C-4: disp-132908 (21:28Z), disp-132945
+  (21:34Z) both Result=success ExecMainStatus=0; store rotated
+  21:34:09Z (600 preston-worker 12B); log errors since #608 = 0;
+  journal: 6 clean finish lines, 0 fail. CONTINUITY PASS.
+
+S-1 FAIL-CLOSED LEGS (agent, curl, no bearer) 2026-08-20 ~21:55Z
+  GET /api/health               200 {"ok":true,"mode":"connected"}
+  GET /api/os/ssot/status       401 {"ok":false,"status":"forbidden"}
+  GET /api/os/remote/status     401 {"ok":false,"status":"forbidden"}
+  S-1 authorized leg = owner-run (chatgpt-1 token, 1Password).
+S-2 intake bracket = owner-run on the n8n host (token never leaves
+  host); agent read of the host-side script classifier-denied.
+
+DRILL-3 TEXT VALIDATED OFFLINE (vitest probe, removed after run)
+  text: "Create one task to document the hermes_mode control setting
+         for the remote owner operations drill."
+  composer: ok, 1 goal, 1 task kind=documentation
+  policy (env=production): risk YELLOW tier RED requires_approval=true
+         mobile_gate=true reason=objective_names_gated_action
+  control (marker-free text): GREEN requires_approval=false

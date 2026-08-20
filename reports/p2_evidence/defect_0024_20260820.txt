@@ -1,0 +1,45 @@
+DEFECT F-2 / MIGRATION 0024  (found live 2026-08-20, prod, read-only)
+
+SYMPTOM (/var/log/preston/orchestrator.log, timer-driven ticks, service id)
+  #620 disp-133272 22:42Z remote_intake selected=1 consumed=[]
+       rejected=[{n8n-20260820-01,
+                  confirm:persist_failed:owner_required,goal:g1}]
+  #641 disp-133710 ~22:52Z remote_intake selected=1 consumed=[]
+       rejected=[{rops-prod-drill-3, same reason}]
+  Both intakes were ACCEPTED at the gateway (owner evidence: n8n-1
+  accepted+duplicate; owner-remote-1 accepted) - the gateway legs PASS.
+  Rejection happened at composer-persist (runtime side), not at intake.
+
+ROOT CAUSE
+  composer-persist.ts:198 commits every composed goal graph through the
+  SECURITY INVOKER RPC public.submit_goal_decomposition (0010, re-created
+  by 0018). Its first statement is "if not public.is_owner() then raise
+  exception 'owner_required'". Migration 0020 widened the TABLE policies
+  to (is_owner() or is_runtime_service()) but never re-pointed this RPC.
+  On the owner session (pre-C-3) the guard passed, so Gate 1 / R-1 / R-2
+  worked. On the non-owner runtime@service.preston session (post-C-3)
+  every intake is rejected. Staging Stage 3 (service-identity re-seed on
+  staging) had not been executed as a live runtime, so the matrix's
+  psql-simulated identity never exercised this RPC.
+  Checked all other RPCs the runtime calls: clear_approval_gate (0022)
+  already admits is_runtime_service(); remaining runtime writes are direct
+  table ops covered by 0020. Only this one RPC is affected.
+
+FIX (minimal, no redesign)
+  supabase/migrations/0024_submit_goal_runtime_service.sql
+    = 0018 body with exactly ONE line changed (diff-proven, 1 hunk):
+      if not (public.is_owner() or public.is_runtime_service()) then
+    SECURITY INVOKER kept (RLS still governs inserts); grants unchanged;
+    decide RPC + system_controls untouched (least privilege preserved).
+  apps/dashboard/test/migration-0024.test.ts  static pins (5) PASS;
+    0018 + 0020 pins still PASS (27/27).
+  reports/p2_evidence/rollback/rollback_0024.sql.txt = 0018 verbatim.
+  reports/p2_evidence/apply_0024.sql.txt  owner psql, staging then prod.
+
+CONSEQUENCES
+  request ids n8n-20260820-01 and rops-prod-drill-3 are terminal
+  (rejected). Re-run uses NEW ids: n8n-20260820-02, rops-prod-drill-4.
+  No goal/job/approval rows were created (persist failed before insert;
+  compensate() had nothing to remove). No side effects on the host:
+  worktrees 0, porcelain 0, pin promote-0020-0023, timer active.
+  Parked goal 5d25fa51 unaffected.

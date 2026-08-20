@@ -1,0 +1,79 @@
+C-3 PREP (2026-08-20 ~20:25-20:40Z)  jump chain, prod host preston-agent-prod
+
+TIMER RULING EXECUTED (owner-ruled controlled manual first tick)
+  before: preston-orchestrator.timer active+enabled, next 20:29:33Z
+  action: systemctl stop preston-orchestrator.timer  (rc=0)  NO disable/edit
+  after : timer inactive, enabled, no next-run; service inactive
+  unit file untouched: mtime 2026-08-17 22:44:26Z
+  md5(systemctl cat) 591d66a37dd866611561bdfcd693ab18
+BASELINE (read-only)
+  /srv/preston-os describe = promote-0020-0023, porcelain clean
+  worker.env root:preston-worker 640 mtime 2026-08-18 04:52Z
+  (no SUPABASE_RUNTIME_REFRESH_TOKEN key; store path set)
+  token-store.json preston-worker 600, 12 bytes, rotated 20:24:30Z
+  (populated = pre-promotion owner-seeded session still in use)
+FINDING F-1: PROD RUNTIME BUILD IS STALE (deviation from package)
+  dist/ built 2026-08-18 04:52Z (pre-pin). dist/lib/ai-os/orchestration/
+  store.js has 0 rpc( calls = old direct-UPDATE clearApprovalGate.
+  Pinned src uses rpc clear_approval_gate (0022). Old binary + 0022 DB
+  = gate can never clear = drill would FAIL at approve->ready.
+  Package line "no service restart needed; next tick runs the new code"
+  was wrong for a tsc-compiled runtime. dist is NOT tracked in git.
+  Dry-run: tsc -p tsconfig.osruntime.json --outDir /root/dist-check
+  rc=0; 43 js files both; diff -rq = exactly 2 files (store.js,
+  driver.js); new store.js contains rpc.call(client,'clear_approval_gate')
+  Live dist NOT modified. Remedy proposed: owner-authorized
+  npm run build:os-runtime (tsc) as root in /srv/preston-os/apps/dashboard
+  before the C-3 manual tick, then verify dist == dist-check.
+C-3 NOT STARTED. Awaiting owner credential entry (off-chat).
+
+F-1 REBUILD EXECUTED (owner YES, 2026-08-20 20:37Z, root via jump chain)
+  pre: pin promote-0020-0023 e4511f4; timer inactive; service inactive
+  backup: cp -a dist /root/dist-old ; md5 manifest /root/dist-before.md5
+  cmd: node_modules/.bin/tsc -p tsconfig.osruntime.json   rc=0
+  diff -rq dist /root/dist-check -> IDENTICAL to dry-run
+  content changed (md5) = exactly 2 files:
+    03723d22b4a14d9e0a0fcda406798a1a dist/lib/ai-os/orchestration/store.js
+    181c0c027bceb4b3f4af60131b914dea dist/lib/ai-os/orchestration/driver.js
+  (tsc rewrote mtimes of all 43 js files; 41 byte-identical)
+  store.js: rpc.call(client,'clear_approval_gate') count=1;
+            casStatus inside clearApprovalGate count=0 (revoked path gone)
+  owner/perms unchanged: root:preston-worker 644
+  worktree porcelain=0, HEAD e4511f44b9e1161d2b9477ac506ddd4f5ebdb861
+  source untouched; git pin untouched; no service/timer start
+  rollback: rm -rf dist && cp -a /root/dist-old dist  (if ever needed)
+  F-1 = PASS. C-3 still NOT STARTED (awaiting owner seed).
+
+C-3 OWNER SEED (owner-run off-chat, reported 2026-08-20 ~21:21Z)
+  store-based db-health ok:true rows:1 exit 0; store preston-worker 600
+  mtime 21:21:39Z; token never printed; timer+service inactive.
+  retired owner store kept: /root/token-store.owner.bak 600 (20:24Z copy)
+
+C-3 SINGLE MANUAL TICK (agent, 2026-08-20 21:23:33Z)
+  pre : timer inactive, service inactive, log lines 607,
+        store mtime 21:21:39Z, /srv/worktrees empty
+  cmd : systemctl start preston-orchestrator.service   rc=0
+  unit: Result=success ExecMainStatus=0 start 21:23:33Z exit 21:23:36Z
+  store rotated -> mtime 21:23:34Z, 600, preston-worker:preston-worker,
+        12 bytes (refresh on service-seeded token succeeded)
+  log : +2 lines only (disp-132754): orchestrate_once goal 5d25fa51
+        stoppedReason awaiting_owner_approval skipped=true (same bounded
+        outcome as all prior ticks; nothing executed)
+        no config_error / auth / token error in the new lines
+        (3 historical error lines: #5,#6 sim-pin 08-17; #593 controls
+        unreadable transient, pre-session - none from this tick)
+  env : SUPABASE_RUNTIME_ENV=production, SUPABASE_URL=
+        https://hiqsymsiwonmvrbbqhhe.supabase.co (prod ref),
+        ORCH_REQUIRE_REAL_EXECUTION=true, DISABLE_REMOTE_RUNNER=false,
+        ORCH_BASE_COMMIT=f55e146 (job-base pin, unchanged by package)
+  side effects: none (worktrees 0, porcelain 0, pin promote-0020-0023)
+  identity: store seeded by owner from runtime@service.preston token;
+        owner store retired before seed; refresh succeeded => session is
+        the service user by construction. DB-level proof (auth.uid =
+        7efd5d40...) deferred to owner psql in S-3 verification.
+  C-3 = PASS
+
+TIMER RESTORED 21:24:07Z: systemctl start preston-orchestrator.timer rc=0
+  active+enabled, next 21:28:36Z; unit md5 591d66a37dd866611561bdfcd693ab18
+  unchanged; file mtime 2026-08-17 unchanged.
+C-4 NOT PERFORMED (owner action).
