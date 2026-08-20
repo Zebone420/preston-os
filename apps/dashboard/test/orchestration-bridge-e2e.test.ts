@@ -10,6 +10,7 @@ import {
 import { decomposeGoal, type TaskSpec } from '../src/lib/ai-os/orchestration/decomposition';
 import { driveGoal, driverStep, loadGoalState } from '../src/lib/ai-os/orchestration/driver';
 import { loadBridgeReadiness, loadOrchestrationReadModel } from '../src/lib/ai-os/orchestration/read-model';
+import { clearGateRpc } from './_clear-gate-rpc';
 
 // ===========================================================================
 // BRIDGE END-TO-END (item 14): one traceable owner command flows through the
@@ -70,6 +71,7 @@ function makeFakeDb(controls?: Record<string, unknown>) {
       };
     },
   };
+  (client as unknown as { rpc?: unknown }).rpc = clearGateRpc(rowsOf);
   return { client, rowsOf };
 }
 

@@ -369,7 +369,7 @@ export async function driverStep(
         id: job.id, goal_id: job.goal_id, approval_id: job.approval_id,
         kind: job.kind, objective: job.objective, title: job.title,
         risk_class: job.risk_class, assigned_role: job.assigned_role ?? null,
-      }, nowIso, job.status === 'pending' ? 'pending' : 'awaiting_approval');
+      }, job.status === 'pending' ? 'pending' : 'awaiting_approval');
       if (t.ok) { job.requires_approval = false; job.status = 'ready'; }
     } else {
       // not authoritatively approved => stays gated (fail-closed). Surface

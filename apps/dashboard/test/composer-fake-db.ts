@@ -7,6 +7,7 @@
 // durability/RLS/CHECK/locking are proven on the migrated staging DB.
 
 import type { ComposerClient } from '../src/lib/ai-os/orchestration/composer-persist';
+import { clearGateRpc } from './_clear-gate-rpc';
 
 export interface FakeDbOptions {
   controls?: Record<string, unknown> | null;
@@ -133,6 +134,7 @@ export function makeComposerFakeDb(opts: FakeDbOptions = {}) {
       };
     },
     rpc(fn: string, args: Record<string, unknown>) {
+      if (fn === 'clear_approval_gate') return clearGateRpc(rowsOf)(fn, args);
       if (fn !== 'submit_goal_decomposition') {
         return Promise.resolve({ data: null, error: { message: `unknown rpc ${fn}` } });
       }

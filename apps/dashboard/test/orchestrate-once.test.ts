@@ -8,6 +8,7 @@ import {
 } from '../src/lib/ai-os/orchestration/store';
 import { decomposeGoal, type TaskSpec } from '../src/lib/ai-os/orchestration/decomposition';
 import { DEFAULT_BUDGET, type MasterGoal } from '../src/lib/ai-os/orchestration/model';
+import { clearGateRpc } from './_clear-gate-rpc';
 
 // ===========================================================================
 // orchestrate-once: the deployed Phase-7 goal-driving dispatcher command.
@@ -89,6 +90,7 @@ function makeFakeDb(controls?: Record<string, unknown> | null) {
       };
     },
   };
+  (client as unknown as { rpc?: unknown }).rpc = clearGateRpc(rowsOf);
   return { client, rowsOf, calls, errors };
 }
 

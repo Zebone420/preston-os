@@ -224,33 +224,53 @@ export function parkApprovalGate(
 // later change to master_goals.requested_by cannot retroactively make this
 // frozen approval authorize a different owner. A belt-and-suspenders atomic
 // three-row RPC is a documented follow-up, not required for correctness here.
-export function clearApprovalGate(
+// DB-ENFORCED approval-gate clearing (migration 0022). The gate is NO LONGER
+// cleared by a direct goal_jobs UPDATE: the runtime identity has no privilege
+// to set requires_approval=false (column revoke) and a CHECK forbids a gated
+// job from holding a runnable status. The ONLY sanctioned clearer is the
+// SECURITY DEFINER RPC public.clear_approval_gate, which re-verifies - inside
+// the DB transaction - that the job's linked approval is a genuine, owner-
+// decided 'approved' record scoped to this exact job/goal, CAS-binds the
+// action fields, and clears atomically. So even a COMPROMISED runtime binary
+// (holding only the runtime-service session) cannot make a gated job runnable
+// without a real owner approval.
+//
+// FAIL CLOSED: if the client cannot reach the RPC, this returns an error and
+// NEVER falls back to a direct update - the job stays gated/non-runnable.
+export async function clearApprovalGate(
   client: RuntimeClient,
   job: {
     id: string; goal_id: string; approval_id: string; kind: string;
     objective: string; title: string; risk_class: string; assigned_role: string | null;
   },
-  nowIso: string,
   // Gate D A7 live finding (2026-08-06): an owner can decide the approval
   // BEFORE the job is ever driven (approve-before-park), leaving the job
-  // 'pending' with a verified record. The CAS must clear from that status
-  // too; default preserves the original awaiting_approval shape.
+  // 'pending' with a verified record. The RPC clears from that status too;
+  // default preserves the original awaiting_approval shape.
   fromStatus: 'awaiting_approval' | 'pending' = 'awaiting_approval',
 ): Promise<WriteOutcome> {
-  return casStatus(
-    client, ORCH_TABLES.jobs, job.id, fromStatus,
-    { status: 'ready', requires_approval: false }, canTransitionJob, nowIso,
-    [
-      { col: 'approval_id', val: job.approval_id },
-      { col: 'goal_id', val: job.goal_id },
-      { col: 'kind', val: job.kind },
-      { col: 'objective', val: job.objective },
-      { col: 'title', val: job.title },
-      { col: 'risk_class', val: job.risk_class },
-      { col: 'assigned_role', val: String(job.assigned_role ?? '') },
-      { col: 'requires_approval', val: 'true' },
-    ],
-  );
+  const rpc = (client as unknown as {
+    rpc?: (fn: string, args: Record<string, unknown>) =>
+      PromiseLike<{ data: unknown; error: { message: string } | null }>;
+  }).rpc;
+  if (typeof rpc !== 'function') {
+    return { ok: false, error: 'clear_approval_gate_rpc_unavailable' };
+  }
+  const res = await rpc.call(client, 'clear_approval_gate', {
+    p_job_id: job.id,
+    p_from_status: fromStatus,
+    p_approval_id: job.approval_id,
+    p_goal_id: job.goal_id,
+    p_kind: job.kind,
+    p_objective: job.objective,
+    p_title: job.title,
+    p_risk_class: job.risk_class,
+    p_assigned_role: String(job.assigned_role ?? ''),
+  });
+  if (res.error) return { ok: false, error: res.error.message };
+  const out = (res.data ?? {}) as { ok?: boolean; reason?: string; job_id?: string };
+  if (out.ok === true) return { ok: true, id: String(out.job_id ?? job.id) };
+  return { ok: false, error: 'gate_' + (out.reason ?? 'refused') };
 }
 
 // --- approvals -------------------------------------------------------------

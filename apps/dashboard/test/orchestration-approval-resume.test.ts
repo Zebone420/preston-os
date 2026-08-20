@@ -26,6 +26,7 @@ import {
   insertMasterGoal,
 } from '../src/lib/ai-os/orchestration/store';
 import { DEFAULT_BUDGET, type MasterGoal } from '../src/lib/ai-os/orchestration/model';
+import { clearGateRpc } from './_clear-gate-rpc';
 
 const NOW = '2026-08-07T00:00:00.000Z';
 const HOUR = 60 * 60 * 1000;
@@ -78,6 +79,7 @@ function makeFakeDb(controls?: Record<string, unknown>) {
       };
     },
   };
+  (client as unknown as { rpc?: unknown }).rpc = clearGateRpc(rowsOf);
   return { client, rowsOf };
 }
 

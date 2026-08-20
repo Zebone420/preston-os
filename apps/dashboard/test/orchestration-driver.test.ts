@@ -18,6 +18,7 @@ import {
   transitionJobOwned,
 } from '../src/lib/ai-os/orchestration/store';
 import { decomposeGoal, type TaskSpec } from '../src/lib/ai-os/orchestration/decomposition';
+import { clearGateRpc } from './_clear-gate-rpc';
 import { canonicalActionHash, jobApprovalEnvelope } from '../src/lib/ai-os/orchestration/crypto-binding';
 import { DEFAULT_BUDGET, type MasterGoal } from '../src/lib/ai-os/orchestration/model';
 
@@ -70,6 +71,7 @@ function makeFakeDb(controls?: Record<string, unknown>) {
       };
     },
   };
+  (client as unknown as { rpc?: unknown }).rpc = clearGateRpc(rowsOf);
   return { client, rowsOf };
 }
 

@@ -87,7 +87,34 @@ function makeFakeDb() {
         },
       };
     },
-  };
+    // Faithful stand-in for the migration-0022 SECURITY DEFINER RPC: verifies
+    // the job's CAS binding AND that its linked approval is owner-'approved'
+    // and scoped to this job/goal, then clears the gate atomically.
+    rpc(fn: string, a: Record<string, unknown>) {
+      if (fn !== 'clear_approval_gate') return Promise.resolve({ data: null, error: { message: 'unknown_fn' } });
+      const s = (v: unknown) => (v === null || v === undefined ? '' : String(v));
+      const job = rowsOf('goal_jobs').find((r) => String(r.id) === s(a.p_job_id));
+      if (!job) return Promise.resolve({ data: { ok: false, reason: 'job_not_found' }, error: null });
+      const cas = String(job.status) === s(a.p_from_status)
+        && job.requires_approval === true
+        && s(job.approval_id) === s(a.p_approval_id)
+        && s(job.goal_id) === s(a.p_goal_id)
+        && String(job.kind) === s(a.p_kind)
+        && s(job.objective) === s(a.p_objective)
+        && String(job.title) === s(a.p_title)
+        && String(job.risk_class) === s(a.p_risk_class)
+        && s(job.assigned_role) === s(a.p_assigned_role);
+      if (!cas) return Promise.resolve({ data: { ok: false, reason: 'stale_cas' }, error: null });
+      const appr = rowsOf('orchestration_approvals').find((r) => String(r.approval_id) === s(job.approval_id));
+      if (!appr) return Promise.resolve({ data: { ok: false, reason: 'approval_not_found' }, error: null });
+      if (String(appr.status) !== 'approved') return Promise.resolve({ data: { ok: false, reason: 'not_approved' }, error: null });
+      if (s(appr.job_id) !== s(job.id) || s(appr.goal_id) !== s(job.goal_id)) {
+        return Promise.resolve({ data: { ok: false, reason: 'scope_mismatch' }, error: null });
+      }
+      job.requires_approval = false; job.status = 'ready';
+      return Promise.resolve({ data: { ok: true, job_id: job.id }, error: null });
+    },
+  } as RuntimeClient & { rpc: (fn: string, a: Record<string, unknown>) => Promise<{ data: unknown; error: { message: string } | null }> };
   return { client, rowsOf };
 }
 
@@ -274,20 +301,60 @@ describe('durable approval creation boundary (audit BLOCKER/MAJOR)', () => {
       requires_approval: true, approval_id: 'apr-9', kind: 'migration',
       objective: 'apply 0011', title: 'apply', risk_class: 'RED', assigned_role: 'claude',
     });
+    // the RPC also requires a genuine owner-'approved' record scoped to the job
+    db.rowsOf('orchestration_approvals').push({
+      approval_id: 'apr-9', job_id: 'job-0000-g', goal_id: 'goal-00000001', status: 'approved',
+    });
     const verified = {
       id: 'job-0000-g', goal_id: 'goal-00000001', approval_id: 'apr-9', kind: 'migration',
       objective: 'apply 0011', title: 'apply', risk_class: 'RED', assigned_role: 'claude',
     };
     // a concurrent writer swaps the title AFTER verification, BEFORE clearance
     db.rowsOf('goal_jobs')[0].title = 'swapped-title';
-    const r = await clearApprovalGate(db.client, verified, NOW); // verified fields != row
+    const r = await clearApprovalGate(db.client, verified); // verified fields != row
     expect(r.ok).toBe(false);
     expect(db.rowsOf('goal_jobs')[0].status).toBe('awaiting_approval'); // not cleared
     // clearing with the CURRENT (matching) fields works
-    const r2 = await clearApprovalGate(db.client, { ...verified, title: 'swapped-title' }, NOW);
+    const r2 = await clearApprovalGate(db.client, { ...verified, title: 'swapped-title' });
     expect(r2.ok).toBe(true);
     expect(db.rowsOf('goal_jobs')[0].status).toBe('ready');
     expect(db.rowsOf('goal_jobs')[0].requires_approval).toBe(false);
+  });
+
+  it('clearApprovalGate refuses when the linked approval is NOT owner-approved (pending/denied)', async () => {
+    const db = makeFakeDb();
+    db.rowsOf('goal_jobs').push({
+      id: 'job-0000-h', goal_id: 'goal-00000002', status: 'awaiting_approval',
+      requires_approval: true, approval_id: 'apr-10', kind: 'migration',
+      objective: 'o', title: 't', risk_class: 'RED', assigned_role: 'claude',
+    });
+    const verified = {
+      id: 'job-0000-h', goal_id: 'goal-00000002', approval_id: 'apr-10', kind: 'migration',
+      objective: 'o', title: 't', risk_class: 'RED', assigned_role: 'claude',
+    };
+    // pending approval -> refuse
+    db.rowsOf('orchestration_approvals').push({ approval_id: 'apr-10', job_id: 'job-0000-h', goal_id: 'goal-00000002', status: 'pending' });
+    const rp = await clearApprovalGate(db.client, verified);
+    expect(rp.ok).toBe(false);
+    expect(rp.error).toBe('gate_not_approved');
+    expect(db.rowsOf('goal_jobs')[0].requires_approval).toBe(true); // still gated
+    // approval for a DIFFERENT job -> scope refuse
+    db.rowsOf('orchestration_approvals')[0].status = 'approved';
+    db.rowsOf('orchestration_approvals')[0].job_id = 'some-other-job';
+    const rs = await clearApprovalGate(db.client, verified);
+    expect(rs.ok).toBe(false);
+    expect(rs.error).toBe('gate_scope_mismatch');
+    expect(db.rowsOf('goal_jobs')[0].requires_approval).toBe(true);
+  });
+
+  it('clearApprovalGate FAILS CLOSED when the client cannot reach the RPC (no direct-update fallback)', async () => {
+    const noRpc = { from() { throw new Error('no direct writes'); } } as unknown as Parameters<typeof clearApprovalGate>[0];
+    const r = await clearApprovalGate(noRpc, {
+      id: 'j', goal_id: 'g', approval_id: 'a', kind: 'migration',
+      objective: 'o', title: 't', risk_class: 'RED', assigned_role: 'claude',
+    });
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe('clear_approval_gate_rpc_unavailable');
   });
 });
 
