@@ -1,0 +1,9 @@
+-- ============================================================================
+-- ROLLBACK 0025 (runtime_deployment runtime SELECT policy) - OWNER-RUN ONLY.
+-- Exact, bounded. Named .sql.txt per RED-boundary scanner convention.
+-- Removes ONLY the one policy 0025 created. Owner policy, grants, data,
+-- functions untouched. Effect: the runtime service again sees no
+-- runtime_deployment row and runtime-composed goals stamp 'staging'.
+-- ============================================================================
+drop policy if exists runtime_deployment_runtime_read
+  on public.runtime_deployment;

@@ -43,3 +43,26 @@ CONSEQUENCES
   compensate() had nothing to remove). No side effects on the host:
   worktrees 0, porcelain 0, pin promote-0020-0023, timer active.
   Parked goal 5d25fa51 unaffected.
+
+0024 OWNER PROOF RESULTS (2026-08-20)
+  STAGING: P-1..P-5 PASS, cleanup 0, invoker kept, grants unchanged.
+    Harness note: pre-apply detector old_owner_only_guard_present
+    returned f (expected t) on staging - precheck discrepancy only;
+    post-install + behavioral proof establish semantics. Not a defect.
+  PRODUCTION (timer stopped 23:03:29Z, service inactive, md5 unchanged):
+    P-1..P-4 PASS; P-5 created but p5_env = staging (expected production)
+    = F-3 below.
+
+DEFECT F-3 / MIGRATION 0025
+  submit_goal_decomposition is SECURITY INVOKER; it reads
+  runtime_deployment('self') under the CALLER's RLS. 0017 policy is
+  owner-only -> runtime service sees 0 rows -> v_env null -> 0018
+  fallback stamps 'staging' -> on production the dispatcher's deployment
+  equality invariant would refuse every runtime-composed goal.
+  FIX: 0025_runtime_deployment_service_read.sql = one SELECT-only policy
+  runtime_deployment_runtime_read using is_runtime_service(). Owner policy,
+  grants, functions, approval authority, controls, 0022/0023 untouched.
+  Static pins apps/dashboard/test/migration-0025.test.ts PASS.
+  Rollback: reports/p2_evidence/rollback/rollback_0025.sql.txt.
+  Owner file: reports/p2_evidence/apply_proof_0025.sql.txt (Q-1..Q-4),
+  then re-run proof_0024 on prod requiring p5_env = production.

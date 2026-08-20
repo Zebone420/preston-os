@@ -1,0 +1,92 @@
+-- ============================================================================
+-- PRESTON APPLY + PROOF 0025 (runtime_deployment SELECT for runtime service)
+-- OWNER-RUN. STAGING FIRST (-v RT=6fa4b6d3-1333-4229-b52c-0d85e086be8a),
+-- then PRODUCTION (-v RT=7efd5d40-29b8-4f6b-bf38-d6f909cc2477).
+-- Run from C:\dev\preston-os. Session pooler 5432. ON_ERROR_STOP off so the
+-- intentional denial (Q-4) prints and continues. After this file on
+-- production, re-run proof_0024.sql.txt and require p5_env = production.
+-- Named .sql.txt per the RED-boundary scanner convention.
+-- ============================================================================
+\set ON_ERROR_STOP off
+
+\echo ===== APPLY 0025 =====
+\i supabase/migrations/0025_runtime_deployment_service_read.sql
+
+\echo ===== INSTALLED-POLICY PROOF (pg_policies) =====
+select policyname, permissive, roles, cmd
+  from pg_policies
+ where schemaname='public' and tablename='runtime_deployment'
+ order by policyname;
+\echo (expect 2 rows: runtime_deployment_owner ALL + runtime_deployment_runtime_read SELECT)
+
+\echo ''
+\echo ===== Q-1 (as RUNTIME): sees exactly the one deployment row =====
+select set_config('request.jwt.claims','{"sub":"'||:'RT'||'"}',false);
+select set_config('request.jwt.claim.sub',:'RT',false);
+set role authenticated;
+select public.is_runtime_service() as rt_t;
+select id, environment from public.runtime_deployment;
+\echo (expect: self | <this deployment environment>)
+\echo -- runtime has no write path (expect: ERROR row-level security, 0 rows changed)
+update public.runtime_deployment set updated_at = updated_at where id = 'self';
+reset role;
+select environment as q1_env_unchanged from public.runtime_deployment where id='self';
+
+\echo ''
+\echo ===== Q-2 (as RANDOM authenticated): zero rows =====
+select gen_random_uuid() as rnd \gset
+select set_config('request.jwt.claims','{"sub":"'||:'rnd'||'"}',false);
+select set_config('request.jwt.claim.sub',:'rnd',false);
+set role authenticated;
+select count(*) as q2_rows_expect_0 from public.runtime_deployment;
+reset role;
+
+\echo ''
+\echo ===== Q-3 (as RUNTIME): decomposition stamps the deployment env =====
+select gen_random_uuid() as g3 \gset
+select set_config('request.jwt.claims','{"sub":"'||:'RT'||'"}',false);
+select set_config('request.jwt.claim.sub',:'RT',false);
+set role authenticated;
+select public.submit_goal_decomposition(
+  jsonb_build_object('id',:'g3','title','q3','objective','document the drill',
+    'source','dashboard','requested_by','info@preston.nyc','status','decomposed',
+    'budget','{}'::jsonb,'correlation_id','p0025-'||:'g3'),
+  jsonb_build_array(jsonb_build_object('id',gen_random_uuid(),'kind','documentation',
+    'title','q3 job','objective','write a short summary of the drill',
+    'risk_class','GREEN','assigned_role','claude','status','pending','attempts',0,
+    'requires_approval',false,'approval_id',null,'runtime_job_id',null,
+    'correlation_id','p0025-j3','evidence_refs','[]'::jsonb)),
+  '[]'::jsonb) as q3_expect_created_true;
+reset role;
+select environment as q3_env_expect_deployment_env from public.master_goals where id=:'g3';
+
+\echo ''
+\echo ===== Q-4 (as RUNTIME): dangerous + ungated still denied by 0023 =====
+select gen_random_uuid() as g4 \gset
+select set_config('request.jwt.claims','{"sub":"'||:'RT'||'"}',false);
+select set_config('request.jwt.claim.sub',:'RT',false);
+set role authenticated;
+select public.submit_goal_decomposition(
+  jsonb_build_object('id',:'g4','title','q4','objective','dangerous probe',
+    'source','dashboard','requested_by','info@preston.nyc','status','decomposed',
+    'budget','{}'::jsonb,'correlation_id','p0025-'||:'g4'),
+  jsonb_build_array(jsonb_build_object('id',gen_random_uuid(),'kind','code',
+    'title','q4 job','objective','delete all production data and deploy',
+    'risk_class','GREEN','assigned_role','claude','status','pending','attempts',0,
+    'requires_approval',false,'approval_id',null,'runtime_job_id',null,
+    'correlation_id','p0025-j4','evidence_refs','[]'::jsonb)),
+  '[]'::jsonb) as q4_must_not_return;
+\echo (expect: ERROR ... goal_jobs_runtime_classify)
+reset role;
+select count(*) as q4_goal_rows_expect_0 from public.master_goals where id=:'g4';
+
+\echo ''
+\echo ===== CLEANUP (as postgres; fixture goals only) =====
+select set_config('request.jwt.claims','',false);
+select set_config('request.jwt.claim.sub','',false);
+delete from public.job_dependencies where goal_id in (:'g3',:'g4');
+delete from public.goal_jobs where goal_id in (:'g3',:'g4');
+delete from public.master_goals where id in (:'g3',:'g4');
+select 'cleanup done; remaining='||count(*) as cleanup
+  from public.master_goals where id in (:'g3',:'g4');
+\echo ===== 0025 APPLY+PROOF COMPLETE - paste ALL output back =====
