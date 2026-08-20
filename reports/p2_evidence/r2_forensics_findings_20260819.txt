@@ -1,0 +1,70 @@
+R-2 approval anomaly - attribution investigation findings
+Captured 2026-08-20 ~00:40-01:10 UTC (agent, browser read-only over
+owner-logged Vercel + Supabase consoles). No secret values below.
+
+QUESTION: who/what called decide_orchestration_approval for
+apr-df39913f3a529546551071e0 at 2026-08-19 23:40:34 UTC? The owner
+did not tap Approve (owner statement + supporting log evidence below).
+
+ESTABLISHED (machine evidence):
+1. DB forensics (owner psql, r2_forensics_*.txt): status=approved,
+   decided_at=23:40:34.387Z, nonce=dash-d1481a76-e66c-4cef-be99-
+   2f097b901289, owner_identity=info@preston.nyc.
+   audit_log rows 23:30-23:59 = ZERO (see defect D2 below).
+2. Vercel preston-os-prod runtime logs, window 23:36-23:44 UTC:
+   ZERO requests. The deployed prod dashboard did NOT serve the
+   decision. (Owner's phone activity appears later, 00:08-00:10 UTC:
+   GETs to /os/orchestration, /approvals, /login only - read-only,
+   no POST, consistent with the owner's account.)
+3. Vercel preston-os-staging runtime logs, same window: ZERO requests.
+4. Supabase prod edge (API gateway) logs: EXACTLY ONE matching event -
+   id a4f8f17b-7f76-4252-870a-b897f8362561
+   19 Aug 26 23:40:34 | POST | 200 |
+   /rest/v1/rpc/decide_orchestration_approval | user_agent "node".
+   => a DIRECT REST call to Supabase from a Node.js process, not a
+   browser and not either Vercel deployment. Gateway log schema
+   retains no source IP (headers carry user_agent only).
+5. decide_orchestration_approval (0010) grants execute only to
+   authenticated and internally enforces is_owner() = auth.uid() in
+   the owners table => the caller presented a VALID owner-user JWT.
+6. Prod host process timeline (systemd journal): orchestrator runs
+   ended 23:38:04 and started 23:43:09; hermes ran 23:35:49-54 and
+   23:41:09-13; worker: no entries. NO prod unit was alive at
+   23:40:34. Deployed revision f55e146 contains no decide caller in
+   the runtime bundle (only the dashboard server action).
+7. The nonce prefix "dash-" is CLIENT-SUPPLIED (p_nonce parameter);
+   it does not prove the dashboard action ran - any direct caller
+   can choose it.
+
+DEFECTS CONFIRMED SO FAR (independent of attribution):
+D1. Approval-decision audit gap: actions.ts ignores logAudit's
+    return; a failed audit insert is swallowed silently. Whatever
+    the decide path was, NO audit row landed for this decision.
+D2. Stale "SIMULATION-ONLY" / coordinator-ladder presentation text
+    (page.tsx) - separate cosmetic defect, already logged s21.
+
+LEADING HYPOTHESES for the caller (a Node process holding an
+owner-user JWT, in likelihood order):
+H1. Legacy automation hub gmail-dev-n8n (188.245.80.146 /
+    automation.prestonwd.com): n8n = Node; inventory records 7
+    workflows with credentials stored in n8n from the owner-era
+    config; a polling workflow explains the ~2.5-min delay after
+    approval creation and the between-ticks timing. Inventory
+    already flags it "RETAIN short-term; harden" with MEDIUM risk.
+H2. A local `next dev` dashboard with prod .env pointing at prod
+    Supabase under an owner login (apps/dashboard/.env.local exists
+    on Zpc26, but no node process is running there now).
+H3. Some other stored owner credential/automation (unknown device).
+NOTE: the prod host itself legitimately holds owner-identity runtime
+sessions (SUPABASE_RUNTIME_TOKEN_STORE; remote-intake.ts: the host
+runtime runs "under the owner identity") - but no unit ran at the
+decision instant, and the runtime code contains no decide call.
+
+DISCRIMINATOR: auth-schema metadata (auth.sessions ip/user_agent,
+auth.audit_log_entries 22:30-23:45) identifies the session that
+minted/refreshed the deciding JWT -> scripts/p2/p2_r2_forensics2.ps1
+(SELECT-only, no token values).
+
+R-2 STATUS: INVALIDATED (not PASS, not counted). No re-drill until
+the deciding session is identified and, if it is an automation,
+disabled/revoked by the owner.
