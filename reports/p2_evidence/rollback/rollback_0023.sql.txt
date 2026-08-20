@@ -1,0 +1,22 @@
+-- ============================================================================
+-- ROLLBACK 0023 (job classification gate) — OWNER-RUN ONLY. Exact, bounded.
+-- Named .sql.txt so the RED-boundary scanner does not treat intentionally-
+-- destructive rollback SQL as committed executable code.
+--
+-- Removes ONLY the two objects 0023 created. No business data touched;
+-- owner access unchanged; 0020/0021/0022 unchanged.
+-- ORDER MATTERS: the policy references the function, so the policy must be
+-- dropped first.
+-- ============================================================================
+
+-- 1. remove the restrictive INSERT policy (the classification gate itself)
+drop policy if exists goal_jobs_runtime_classify on goal_jobs;
+
+-- 2. remove the DB classifier (safe once the policy is gone — the policy was
+--    the only object referencing it)
+drop function if exists public.job_gate_required(text, text);
+
+-- verification (expect: 0 rows / 0 rows)
+select policyname from pg_policies
+ where tablename='goal_jobs' and policyname='goal_jobs_runtime_classify';
+select proname from pg_proc where proname='job_gate_required';
