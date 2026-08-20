@@ -58,7 +58,8 @@ select conname from pg_constraint
   where conname='goal_jobs_gate_not_runnable';                          -- 0 rows
 select policyname from pg_policies
   where tablename='goal_jobs' and policyname='goal_jobs_runtime_classify'; -- 0 rows
-select proname from pg_proc where proname='read_ssot_audit_recent';     -- 0019 present
+select position('ssot-read' in prosrc)>0
+  from pg_proc where proname='read_ssot_status';                        -- t (0019 present: 0019 re-creates read_ssot_status with the 'ssot-read' audit INSERT; it creates no new function)
 select count(*) from public.owners;                                     -- >= 1
 ```
 P-2 (host, via jump chain): `git -C /srv/preston-os rev-parse HEAD` =

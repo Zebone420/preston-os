@@ -26,8 +26,16 @@ select count(*) as runtime_services_table_expected_0
 
 \echo ''
 \echo ===== P-1c parity floor: 0019 present =====
-select count(*) as fn_0019_expected_1 from pg_proc
- where proname='read_ssot_audit_recent';
+-- 0019 creates NO new function: it re-creates read_ssot_status(text)
+-- (0013 -> 0017) adding one access_events INSERT with the distinctive
+-- system marker 'ssot-read'. Detect 0019 from the INSTALLED body, not by
+-- function name. (A prior preflight revision wrongly probed for a
+-- nonexistent 'read_ssot_audit_recent' — that query returns 0 on EVERY
+-- correctly-migrated database, staging included.)
+select count(*) as fn_read_ssot_status_expected_1 from pg_proc
+ where proname='read_ssot_status';
+select position('ssot-read' in prosrc)>0 as fn_0019_read_audit_expected_t
+  from pg_proc where proname='read_ssot_status';
 
 \echo ''
 \echo ===== P-1d decide RPC exists but WITHOUT the 0021 audit yet =====
