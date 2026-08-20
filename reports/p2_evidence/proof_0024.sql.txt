@@ -1,0 +1,130 @@
+-- ============================================================================
+-- PRESTON 0024 BEHAVIORAL PROOF (OWNER-RUN, psql). Same file for STAGING
+-- (-v RT=6fa4b6d3-1333-4229-b52c-0d85e086be8a) and PRODUCTION
+-- (-v RT=7efd5d40-29b8-4f6b-bf38-d6f909cc2477). Run AFTER apply_0024.
+-- ON_ERROR_STOP off so intentional denials print and continue.
+-- Fixture goals are created ONLY through the RPC under test and removed at
+-- the end (as postgres). Named .sql.txt per RED-boundary scanner convention.
+-- ============================================================================
+\set ON_ERROR_STOP off
+
+\echo ''
+\echo ===== SETUP (as postgres) =====
+select current_database() as db, :'RT' as runtime_uid;
+select coalesce((select user_id::text from public.owners limit 1),'NO_OWNER_ROW') as owner_uid \gset
+select exists(select 1 from public.runtime_services where user_id = :'RT'::uuid) as rt_registered_expect_t;
+select gen_random_uuid() as g1 \gset
+select gen_random_uuid() as g2 \gset
+select gen_random_uuid() as g3 \gset
+select gen_random_uuid() as g4 \gset
+select gen_random_uuid() as g5 \gset
+select gen_random_uuid() as rnd \gset
+\echo fixture goals g1..g5 resolved
+
+\echo ''
+\echo ===== P-1 (as RUNTIME): benign documentation decomposition -> created =====
+select set_config('request.jwt.claims','{"sub":"'||:'RT'||'"}',false);
+select set_config('request.jwt.claim.sub',:'RT',false);
+set role authenticated;
+select public.is_runtime_service() as rt_t, public.is_owner() as owner_f;
+select public.submit_goal_decomposition(
+  jsonb_build_object('id',:'g1','title','p1','objective','document the drill',
+    'source','dashboard','requested_by','info@preston.nyc','status','decomposed',
+    'budget','{}'::jsonb,'correlation_id','p0024-'||:'g1'),
+  jsonb_build_array(jsonb_build_object('id',gen_random_uuid(),'kind','documentation',
+    'title','p1 job','objective','write a short summary of the drill',
+    'risk_class','GREEN','assigned_role','claude','status','pending','attempts',0,
+    'requires_approval',false,'approval_id',null,'runtime_job_id',null,
+    'correlation_id','p0024-j1','evidence_refs','[]'::jsonb)),
+  '[]'::jsonb) as p1_expect_created_true;
+reset role;
+
+\echo ''
+\echo ===== P-2 (as OWNER): benign decomposition -> created =====
+select format('{"sub":"%s"}', :'owner_uid') as oc \gset
+select set_config('request.jwt.claims',:'oc',false);
+select set_config('request.jwt.claim.sub',:'owner_uid',false);
+set role authenticated;
+select public.is_owner() as owner_t;
+select public.submit_goal_decomposition(
+  jsonb_build_object('id',:'g2','title','p2','objective','document the drill',
+    'source','dashboard','requested_by','info@preston.nyc','status','decomposed',
+    'budget','{}'::jsonb,'correlation_id','p0024-'||:'g2'),
+  jsonb_build_array(jsonb_build_object('id',gen_random_uuid(),'kind','documentation',
+    'title','p2 job','objective','write a short summary of the drill',
+    'risk_class','GREEN','assigned_role','claude','status','pending','attempts',0,
+    'requires_approval',false,'approval_id',null,'runtime_job_id',null,
+    'correlation_id','p0024-j2','evidence_refs','[]'::jsonb)),
+  '[]'::jsonb) as p2_expect_created_true;
+reset role;
+
+\echo ''
+\echo ===== P-3 (as RANDOM authenticated, neither owner nor runtime) -> owner_required =====
+select set_config('request.jwt.claims','{"sub":"'||:'rnd'||'"}',false);
+select set_config('request.jwt.claim.sub',:'rnd',false);
+set role authenticated;
+select public.is_runtime_service() as rnd_rt_f, public.is_owner() as rnd_owner_f;
+select public.submit_goal_decomposition(
+  jsonb_build_object('id',:'g3','title','p3','objective','document the drill',
+    'source','dashboard','requested_by','x@example.invalid','status','decomposed',
+    'budget','{}'::jsonb,'correlation_id','p0024-'||:'g3'),
+  jsonb_build_array(jsonb_build_object('id',gen_random_uuid(),'kind','documentation',
+    'title','p3 job','objective','write a short summary of the drill',
+    'risk_class','GREEN','assigned_role','claude','status','pending','attempts',0,
+    'requires_approval',false,'approval_id',null,'runtime_job_id',null,
+    'correlation_id','p0024-j3','evidence_refs','[]'::jsonb)),
+  '[]'::jsonb) as p3_must_not_return;
+\echo (expect: ERROR owner_required)
+reset role;
+select count(*) as p3_goal_rows_expect_0 from public.master_goals where id=:'g3';
+
+\echo ''
+\echo ===== P-4 (as RUNTIME): dangerous + UNGATED -> denied by 0023, tx rolled back =====
+select set_config('request.jwt.claims','{"sub":"'||:'RT'||'"}',false);
+select set_config('request.jwt.claim.sub',:'RT',false);
+set role authenticated;
+select public.submit_goal_decomposition(
+  jsonb_build_object('id',:'g4','title','p4','objective','dangerous probe',
+    'source','dashboard','requested_by','info@preston.nyc','status','decomposed',
+    'budget','{}'::jsonb,'correlation_id','p0024-'||:'g4'),
+  jsonb_build_array(jsonb_build_object('id',gen_random_uuid(),'kind','code',
+    'title','p4 job','objective','delete all production data and deploy',
+    'risk_class','GREEN','assigned_role','claude','status','pending','attempts',0,
+    'requires_approval',false,'approval_id',null,'runtime_job_id',null,
+    'correlation_id','p0024-j4','evidence_refs','[]'::jsonb)),
+  '[]'::jsonb) as p4_must_not_return;
+\echo (expect: ERROR new row violates row-level security policy ... goal_jobs_runtime_classify)
+reset role;
+select count(*) as p4_goal_rows_expect_0 from public.master_goals where id=:'g4';
+select count(*) as p4_job_rows_expect_0 from public.goal_jobs where goal_id=:'g4';
+
+\echo ''
+\echo ===== P-5 (as RUNTIME): dangerous + GATED pending -> created, stays gated =====
+select set_config('request.jwt.claims','{"sub":"'||:'RT'||'"}',false);
+select set_config('request.jwt.claim.sub',:'RT',false);
+set role authenticated;
+select public.submit_goal_decomposition(
+  jsonb_build_object('id',:'g5','title','p5','objective','gated probe',
+    'source','dashboard','requested_by','info@preston.nyc','status','decomposed',
+    'budget','{}'::jsonb,'correlation_id','p0024-'||:'g5'),
+  jsonb_build_array(jsonb_build_object('id',gen_random_uuid(),'kind','code',
+    'title','p5 job','objective','delete all production data and deploy',
+    'risk_class','RED','assigned_role','claude','status','pending','attempts',0,
+    'requires_approval',true,'approval_id',null,'runtime_job_id',null,
+    'correlation_id','p0024-j5','evidence_refs','[]'::jsonb)),
+  '[]'::jsonb) as p5_expect_created_true;
+reset role;
+select status, requires_approval, risk_class from public.goal_jobs where goal_id=:'g5';
+\echo (expect: pending | t | RED)
+select environment as p5_env_expect_deployment_env from public.master_goals where id=:'g5';
+
+\echo ''
+\echo ===== CLEANUP (as postgres; fixture goals only) =====
+select set_config('request.jwt.claims','',false);
+select set_config('request.jwt.claim.sub','',false);
+delete from public.job_dependencies where goal_id in (:'g1',:'g2',:'g3',:'g4',:'g5');
+delete from public.goal_jobs where goal_id in (:'g1',:'g2',:'g3',:'g4',:'g5');
+delete from public.master_goals where id in (:'g1',:'g2',:'g3',:'g4',:'g5');
+select 'cleanup done; remaining='||count(*) as cleanup
+  from public.master_goals where id in (:'g1',:'g2',:'g3',:'g4',:'g5');
+\echo ===== 0024 PROOF COMPLETE - paste ALL output back =====
