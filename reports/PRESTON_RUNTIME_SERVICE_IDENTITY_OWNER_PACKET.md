@@ -125,13 +125,91 @@ Reply "prod promoted" — the agent verifies the prod runtime baseline is
 intact, the runtime holds a NON-owner session (cannot decide / cannot
 write controls), and the decide-audit row lands on a real owner approval.
 
-## ROLLBACK
+## EFFECTIVE PRIVILEGE MATRIX (GRANT ∩ RLS, runtime identity)
 
-- 0020/0021 are CREATE-OR-REPLACE / additive policies. Rollback =
-  re-apply 0010's original decide function and re-run 0010's policy
-  block (owner-only predicates), and `delete from public.runtime_services`.
-- Re-seeding is reversible by seeding the owner refresh token again
-  (not recommended — that reinstates the defect).
+Runtime identity = authenticated role, is_runtime_service()=true,
+is_owner()=false. Effective op = table GRANT to authenticated AND a
+permissive policy the runtime satisfies. (RLS-enabled: an op with a
+grant but no matching policy is a 0-row no-op for UPDATE, or a
+with-check ERROR for INSERT.)
+
+| Table | Runtime need | GRANT→authenticated | Runtime policy | Effective |
+|---|---|---|---|---|
+| master_goals | ins/upd/sel | select,insert,update (del revoked) | owner_all (owner OR rt) | S/I/U |
+| goal_jobs | ins/upd/sel | select,insert,update (del revoked) | owner_all (owner OR rt) | S/I/U |
+| job_dependencies | ins/sel | select,insert (upd/del revoked) | ins+sel (owner OR rt) | S/I |
+| orchestration_approvals | ins(pending)/sel | select,insert (UPD revoked, del revoked) | ins pending-only + sel | S/I(pending) — **no UPDATE** |
+| orchestration_decisions | ins/sel | select,insert (upd/del revoked) | ins+sel | S/I |
+| os_jobs | ins/upd/sel | select,insert,update | owner_all (owner OR rt) | S/I/U |
+| worker_leases | ins/upd/sel | select,insert,update | owner_all | S/I/U |
+| job_attempts | ins/sel | select,insert (upd/del revoked) | ins+sel | S/I |
+| job_checkpoints | ins/sel | select,insert (upd/del revoked) | ins+sel | S/I |
+| dead_letters | ins/sel | select,insert (upd/del revoked) | ins+sel | S/I |
+| runtime_command_packets | ins/upd/sel | select,insert,update | owner_all | S/I/U |
+| repository_worktrees | ins/upd/sel | select,insert,update | owner_all | S/I/U |
+| agents | ins/upd/sel | select,insert,update,DELETE | runtime ins+upd+sel (no del policy) | S/I/U — **del = 0-row no-op** |
+| os_events | ins/sel | select,insert (upd/del revoked) | ins+sel | S/I |
+| remote_intake_requests | sel/upd | select,insert,update (del revoked) | runtime sel+upd (no ins policy) | S/U — **insert = RLS error** |
+| system_controls | **SELECT only** | select,insert,update | runtime_sel ONLY | **S only** (upd = 0-row no-op; owner_stop unchanged) |
+| owners | none | (no auth write policy) | none | denied |
+| runtime_services | none | writes revoked + no policy | select=owner-only | denied |
+| agent_contracts / locks / agent_memory / execution_queue / telegram_updates | none | owner-only RLS | none (is_owner only) | RLS-filtered → 0 rows / rejected |
+
+## ADVERSARIAL FINDING — approval-gate bypass via goal_jobs (RESIDUAL, pre-existing)
+
+The runtime legitimately needs UPDATE on goal_jobs (status transitions,
+leases). clearApprovalGate (store.ts) clears the gate via a DIRECT
+goal_jobs UPDATE (CAS), not a SECURITY DEFINER function. So a
+COMPROMISED runtime BINARY could set goal_jobs.requires_approval=false
++ status=ready directly, causing an approval-gated job to execute
+without ever touching orchestration_approvals or decide (both blocked).
+
+- This is NOT introduced by 0020/0021 and is NOT the R-2 vector
+  (R-2 = the runtime holding a human-OWNER identity → could DECIDE +
+  flip controls; 0020/0021 close exactly that).
+- It is an IDENTITY design that trusts the runtime BINARY, not a
+  privilege the fix grants. Invariant A's DIRECT clauses PASS (approvals
+  UPDATE revoked; decide is_owner-only); the INDIRECT clause is only
+  PARTIALLY met at the DB level because of this pre-existing path.
+- PROPOSED FOLLOW-UP (migration 0022, separate gate): column-level
+  revoke UPDATE(requires_approval) on goal_jobs from authenticated +
+  a SECURITY DEFINER clear_approval_gate() that performs the CAS ONLY
+  after verifying an approved orchestration_approvals record; driver
+  calls the RPC instead of the direct update. Do NOT bundle into
+  0020/0021 — it needs its own analysis of every goal_jobs write site.
+
+## ROLLBACK (exact, bounded; restores prior authorization state only)
+
+Preconditions: touches ONLY the objects 0020/0021 created/replaced; no
+business data deleted; owner access unchanged; production untouched.
+
+0021 rollback (decide audit): re-apply the ORIGINAL decide function
+verbatim from 0010 lines 462-522 (`create or replace function
+public.decide_orchestration_approval ...` through its grant) — this
+removes the in-transaction access_events insert. is_owner gate + grants
+identical, so no authz change.
+
+0020 rollback (runtime identity), in order:
+1. `drop policy if exists` then leave DROPPED the ADDED policies:
+   runtime_services_select_owner, agents_runtime_ins/upd/sel,
+   remote_intake_requests_runtime_sel/upd, system_controls_runtime_sel.
+2. Re-create the WIDENED policies with their ORIGINAL owner-only
+   predicate (revert `is_owner() or is_runtime_service()` back to
+   `is_owner()` — verbatim from 0010 for master_goals, goal_jobs,
+   job_dependencies(ins/sel), orch_approvals(ins pending + sel); from
+   0004 for os_jobs, worker_leases, runtime_command_packets,
+   repository_worktrees, orch_decisions(ins/sel), job_attempts(ins/sel),
+   job_checkpoints(ins/sel), dead_letters(ins/sel); from 0003 for
+   os_events(ins/sel)). agents_owner_all and remote_intake_requests_owner
+   were NEVER dropped by 0020, so nothing to restore there.
+3. `revoke insert, update, delete on public.runtime_services from
+   authenticated;` is harmless to leave, but to fully revert:
+   `drop function if exists public.is_runtime_service();` then
+   `drop table if exists public.runtime_services;` (cascade-safe: only
+   the dropped policies referenced the function).
+No re-seeding needed — the runtime keeps whatever refresh token it holds
+until the owner explicitly re-seeds. A ready-to-run 0020_rollback.sql /
+0021_rollback.sql can be generated on request before staging apply.
 
 ## AFTER PROMOTION — FRESH R-2 DRILL (new ids, fully instrumented)
 
