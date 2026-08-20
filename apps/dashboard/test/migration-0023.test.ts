@@ -32,7 +32,10 @@ describe('migration 0023 - job classification gate', () => {
   });
 
   it('adds an INSERT-only RESTRICTIVE policy with the EXACT approved predicate', () => {
-    expect(sql).toMatch(/create policy goal_jobs_runtime_classify as restrictive\s+for insert to authenticated/);
+    // MUST include "on goal_jobs": CREATE POLICY without ON <table> is a
+    // PostgreSQL syntax error (the staging D-1 FAIL: the policy was never
+    // installed, so the runtime insert was never restricted).
+    expect(sql).toMatch(/create policy goal_jobs_runtime_classify on goal_jobs as restrictive\s+for insert to authenticated/);
     const chk = sql.slice(sql.indexOf('with check', sql.indexOf('goal_jobs_runtime_classify')));
     // all three OR-terms present, including the load-bearing classifier call
     expect(chk).toMatch(/not public\.is_runtime_service\(\)/);
@@ -43,7 +46,19 @@ describe('migration 0023 - job classification gate', () => {
   it('policy is INSERT-only (never for-all/for-update) so the clear path is untouched', () => {
     expect(sql).not.toMatch(/goal_jobs_runtime_classify[\s\S]*for all/);
     expect(sql).not.toMatch(/goal_jobs_runtime_classify[\s\S]*for update/);
-    expect(sql).toMatch(/goal_jobs_runtime_classify as restrictive\s+for insert/);
+    expect(sql).toMatch(/goal_jobs_runtime_classify on goal_jobs as restrictive\s+for insert/);
+  });
+
+  // PARSE REGRESSION (staging D-1 FAIL root cause): CREATE POLICY grammar is
+  // `create policy <name> ON <table> ...` — the ON clause is mandatory. The
+  // original 0023 omitted it, the statement errored on apply, and the policy
+  // silently did not exist. Pin that every create policy names its table.
+  it('every create policy statement names its target table (ON <table>)', () => {
+    const stmts = sql.match(/create policy\s+\w+\s+\w+/g) ?? [];
+    expect(stmts.length).toBeGreaterThan(0);
+    for (const s of stmts) {
+      expect(s, `create policy missing ON <table>: "${s}"`).toMatch(/create policy\s+\w+\s+on\b/);
+    }
   });
 
   it('does NOT enforce risk_class consistency (kept out of scope)', () => {

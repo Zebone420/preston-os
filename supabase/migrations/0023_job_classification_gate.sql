@@ -74,7 +74,7 @@ grant execute on function public.job_gate_required(text, text) to authenticated;
 -- goal_jobs_owner_all (0010/0020). Owner & non-runtime authenticated: the first
 -- OR-term short-circuits true, so they are unaffected.
 drop policy if exists goal_jobs_runtime_classify on goal_jobs;
-create policy goal_jobs_runtime_classify as restrictive
+create policy goal_jobs_runtime_classify on goal_jobs as restrictive
   for insert to authenticated
   with check (
     not public.is_runtime_service()

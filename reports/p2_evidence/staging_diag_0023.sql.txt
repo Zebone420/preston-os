@@ -1,0 +1,67 @@
+-- ============================================================================
+-- PRESTON STAGING DIAGNOSTIC — why did 0023 D-1 succeed? (OWNER-RUN, psql)
+-- STAGING ONLY (postgres.vcqtlmlaxxankxyezlul). READ-ONLY: no writes, no DDL.
+-- Run BEFORE re-applying 0023. Paste the ENTIRE output back.
+-- Named .sql.txt so the RED-boundary scanner does not treat fixture SQL as
+-- committed executable code.
+--
+-- HYPOTHESIS UNDER TEST: the committed 0023 create-policy statement is missing
+-- the mandatory ON <table> clause (`create policy ... as restrictive` with no
+-- `on goal_jobs`), which is a PostgreSQL syntax error. psql applies statement
+-- by statement (autocommit), so job_gate_required() was created but the policy
+-- statement failed => goal_jobs_runtime_classify was NEVER INSTALLED => no
+-- restrictive policy => D-1 INSERT allowed by the permissive owner/runtime
+-- policies alone.
+-- PREDICTED OUTPUT: [2] returns 0 rows for goal_jobs_runtime_classify;
+-- [1]=t, [3]=t (RLS enabled), [4] runtime context sane, [5]=f.
+-- ============================================================================
+\set ON_ERROR_STOP off
+\set RT 6fa4b6d3-1333-4229-b52c-0d85e086be8a
+
+\echo ''
+\echo ===== [2] INSTALLED policies on goal_jobs (pg_policies, not source) =====
+select policyname, permissive, roles, cmd, qual, with_check
+  from pg_policies where schemaname='public' and tablename='goal_jobs'
+ order by policyname;
+\echo (expected if hypothesis holds: NO goal_jobs_runtime_classify row at all)
+select count(*) as runtime_classify_rows_expected_0
+  from pg_policies
+ where schemaname='public' and tablename='goal_jobs'
+   and policyname='goal_jobs_runtime_classify';
+
+\echo ''
+\echo ===== [3] RLS enabled on goal_jobs? =====
+select relname, relrowsecurity as rls_enabled_expected_t,
+       relforcerowsecurity as force_rls
+  from pg_class where oid='public.goal_jobs'::regclass;
+
+\echo ''
+\echo ===== become the RUNTIME (non-owner) identity, as in the matrix =====
+select set_config('request.jwt.claims','{"sub":"'||:'RT'||'"}',false);
+select set_config('request.jwt.claim.sub',:'RT',false);
+set role authenticated;
+
+\echo ''
+\echo ===== [4] runtime session context during the test =====
+select current_user, session_user,
+       current_setting('row_security', true) as row_security,
+       public.is_runtime_service() as is_runtime_service_expected_t,
+       public.is_owner() as is_owner_expected_f;
+
+\echo ''
+\echo ===== [1] classifier on the EXACT D-1 kind/objective (expected: t) =====
+select public.job_gate_required('code','delete all production data and deploy')
+       as d1_job_gate_required_expected_t;
+
+\echo ''
+\echo ===== [5] exact intended policy expression on the D-1 candidate =====
+\echo (requires_approval=false for D-1, so that OR-term is literal false)
+select (not public.is_runtime_service()
+        or false
+        or not public.job_gate_required('code','delete all production data and deploy'))
+       as d1_with_check_expected_f;
+
+reset role;
+select set_config('request.jwt.claims','',false);
+select set_config('request.jwt.claim.sub','',false);
+\echo ===== 0023 DIAGNOSTIC COMPLETE — paste ALL output back =====

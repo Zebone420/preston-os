@@ -14,18 +14,33 @@
 \echo ===== SETUP (as postgres) =====
 select coalesce((select user_id::text from public.owners limit 1),'NO_OWNER_ROW') as owner_uid \gset
 \echo owner_uid = :owner_uid
+-- NB: \gset variable names come from the COLUMN aliases, and unquoted SQL
+-- identifiers fold to lowercase (jL3 -> jl3). psql variables are case-
+-- sensitive, so all fixture vars are lowercase-only, and the echo below
+-- proves they resolved before first use.
 select gen_random_uuid() as g1 \gset
-select gen_random_uuid() as jL3 \gset
-select 'apr-cls-L3' as aL3 \gset
+select gen_random_uuid() as jl3 \gset
+select 'apr-cls-L3' as al3 \gset
+\echo fixture vars resolved: g1=:'g1' jl3=:'jl3' al3=:'al3'
 insert into public.master_goals (id,title,objective,source,requested_by,status,environment,correlation_id)
   values (:'g1','cls matrix','o','dashboard','info@preston.nyc','running','staging','cls-'||:'g1');
 -- L-3 fixture (FK-safe): gated RED job + pending approval, linked. For the
 -- approved-clear regression under 0023.
 insert into public.goal_jobs (id,goal_id,kind,title,objective,risk_class,assigned_role,status,attempts,requires_approval,approval_id,correlation_id)
-  values (:'jL3',:'g1','documentation','tL3','oL3','RED','claude','pending',0,true,null,'cL3');
+  values (:'jl3',:'g1','documentation','tL3','oL3','RED','claude','pending',0,true,null,'cL3');
 insert into public.orchestration_approvals (approval_id,goal_id,job_id,action,environment,affected_resource,reason,risk_class,rollback_plan,action_hash,owner_identity,status,expires_at)
-  values (:'aL3',:'g1',:'jL3','documentation: oL3','staging','goal_job:'||:'jL3','r','RED','rb','h','info@preston.nyc','pending', now()+interval '1 day');
-update public.goal_jobs set approval_id=:'aL3' where id=:'jL3';
+  values (:'al3',:'g1',:'jl3','documentation: oL3','staging','goal_job:'||:'jl3','r','RED','rb','h','info@preston.nyc','pending', now()+interval '1 day');
+update public.goal_jobs set approval_id=:'al3' where id=:'jl3';
+
+\echo ''
+\echo ===== INSTALLED-POLICY PROOF (pg_policies, not migration source) =====
+select policyname, permissive, roles, cmd
+  from pg_policies
+ where schemaname='public' and tablename='goal_jobs'
+   and policyname='goal_jobs_runtime_classify';
+\echo (expect: 1 row -> goal_jobs_runtime_classify | RESTRICTIVE | {authenticated} | INSERT)
+select relrowsecurity as goal_jobs_rls_enabled_expected_t
+  from pg_class where oid='public.goal_jobs'::regclass;
 
 \echo ''
 \echo ===== CLASSIFIER DIRECT CHECK (job_gate_required) =====
@@ -40,6 +55,16 @@ select set_config('request.jwt.claims','{"sub":"'||:'RT'||'"}',false);
 select set_config('request.jwt.claim.sub',:'RT',false);
 set role authenticated;
 select public.is_runtime_service() as rt_is_runtime_t, public.is_owner() as rt_is_owner_f;
+\echo -- runtime session context (diagnostic protocol item 4)
+select current_user, session_user,
+       current_setting('row_security', true) as row_security;
+\echo -- exact D-1 classifier + intended WITH CHECK expression (items 1 and 5)
+select public.job_gate_required('code','delete all production data and deploy')
+         as d1_gate_required_expected_t,
+       (not public.is_runtime_service()
+        or false
+        or not public.job_gate_required('code','delete all production data and deploy'))
+         as d1_with_check_expected_f;
 
 \echo ''
 \echo ===== D-1: dangerous + GREEN + ungated + runnable -> DENIED by 0023 =====
@@ -81,7 +106,7 @@ select format('{"sub":"%s"}', :'owner_uid') as oc \gset
 select set_config('request.jwt.claims',:'oc',false);
 select set_config('request.jwt.claim.sub',:'owner_uid',false);
 set role authenticated;
-select status as l3_decide_should_be_approved from public.decide_orchestration_approval(:'aL3','approved','cls-owner-nonce');
+select status as l3_decide_should_be_approved from public.decide_orchestration_approval(:'al3','approved','cls-owner-nonce');
 
 \echo ''
 \echo ===== L-3b (as RUNTIME): clear the approved RED job -> P3/P5 remain PASS =====
@@ -89,9 +114,9 @@ reset role;
 select set_config('request.jwt.claims','{"sub":"'||:'RT'||'"}',false);
 select set_config('request.jwt.claim.sub',:'RT',false);
 set role authenticated;
-select public.clear_approval_gate(:'jL3','pending',:'aL3',:'g1','documentation','oL3','tL3','RED','claude') as l3_clear_should_be_ok_true;
+select public.clear_approval_gate(:'jl3','pending',:'al3',:'g1','documentation','oL3','tL3','RED','claude') as l3_clear_should_be_ok_true;
 reset role;
-select id,status,requires_approval,risk_class from public.goal_jobs where id=:'jL3';
+select id,status,requires_approval,risk_class from public.goal_jobs where id=:'jl3';
 \echo (expect: ready | f | RED  -- approved RED job cleared; 0023 did not block the UPDATE)
 
 \echo ''
