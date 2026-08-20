@@ -1,0 +1,98 @@
+R-2 RECONCILIATION after owner correction (read-only, no containment)
+Captured 2026-08-20 ~01:30 UTC. Owner corrected: "I may actually have
+tapped Approve on the phone around 7:40 PM ET; I am no longer certain
+I did NOT approve it." Re-evaluated below. No secrets in this file.
+
+========================================================
+CORRECTED MECHANISM UNDERSTANDING (fixes an earlier over-read)
+========================================================
+- user_agent="node" on the Supabase decide event is NOT evidence of a
+  host process. A Next.js SERVER ACTION (the dashboard's
+  decideOrchestrationApproval) runs on a Node runtime and its
+  supabase-js call presents user_agent "node" too. So node UA is
+  fully CONSISTENT with a dashboard approval.
+- The decided nonce prefix "dash-" is generated ONLY by the dashboard
+  server action (actions.ts:145  `dash-${randomUUID()}`). Nothing else
+  in the codebase emits a dash- nonce. => the decision was produced by
+  DASHBOARD CODE running with an owner session, not by a hand-rolled
+  RPC call. This is the strongest single signal and it points AT an
+  owner-driven dashboard approval, away from "compromise".
+
+========================================================
+WHAT FITS an owner phone/dashboard approval
+========================================================
++ Timing: decided_at 23:40:34 UTC = 7:40:34 PM ET = the owner's
+  corrected recollection.
++ dash- nonce = dashboard server action signature.
++ node UA = normal for that server action.
++ is_owner() passed = a genuine owner login (only owners can decide).
++ One-time-nonce + fail-closed decide RPC behaved exactly as designed;
+  no policy was bypassed. The gate WORKED; the question is only WHO
+  authorised it.
+
+========================================================
+WHAT DOES NOT CLEANLY FIT (the open gap)
+========================================================
+- Vercel PROD request logs show ZERO requests in 7:36-7:42 PM ET, re-
+  checked twice at second granularity. Vercel IS logging this project
+  (the owner's later 8:08-8:10 PM prod dashboard hits DO appear) - so
+  a POST to the prod Vercel dashboard at 7:40:34 would be expected to
+  appear, and none does.
+- Those 8:08-8:10 PM prod hits were GET /os/orchestration -> 307 ->
+  /login (i.e. NO valid dashboard session at 8:10 PM).
+- forensics2 surfaced only TWO owner sessions, both IP 46.224.68.139
+  (prod host), user_agent node - no phone-browser session was called
+  out.
+These three are more consistent with dashboard CODE running
+server-side OFF Vercel than with a live phone-browser tap on
+preston-os-prod.vercel.app. Candidate paths that produce a dash-
+nonce + node UA + NO Vercel request:
+  (i)  a LOCAL dashboard (next dev/start on some machine) pointed at
+       PROD Supabase under an owner login - approve in a localhost
+       browser; source IP = that machine, not the prod host; or
+  (ii) a Vercel request-log gap / server-action not surfaced in the
+       request-log view (possible but unverified).
+NONE of these is a compromise; all are owner-attributable tooling.
+
+========================================================
+REVISED R-2 VERDICT
+========================================================
+DOWNGRADED from "confirmed unauthorized approval / possible
+compromise" to: OWNER-ATTRIBUTABLE, MECHANISM-CONSISTENT, NOT YET
+PROVEN. An owner-initiated approval is now the leading explanation
+(dash- nonce + timing + is_owner). It is NOT proven only because the
+corroborating request log was not located and the session inventory
+seen so far shows host-origin sessions rather than a phone-browser
+session. This is NOT to be treated as a security compromise.
+R-2 as a DRILL still cannot be marked PASS: the packet requires a
+PROVEN phone-tap -> timer-execution chain, and the approving surface
+is not yet pinned. Re-run with instrumentation once A is closed.
+
+========================================================
+B. STANDING OWNER RUNTIME CREDENTIAL - INDEPENDENT VERDICT
+========================================================
+UNCHANGED and SEPARATE. Even if the owner personally approved R-2, the
+production runtime still holds a STANDING HUMAN-OWNER Supabase session
+(seeded SUPABASE_RUNTIME_REFRESH_TOKEN -> persisted, auto-refreshed).
+That session PASSES is_owner() and therefore CAN call
+decide_orchestration_approval and write any owner-gated table
+unattended. This violates least privilege whether or not it was used
+on 2026-08-19. It should be replaced by a dedicated NON-owner service
+identity (grants for goals/jobs/status/controls only; NO execute on
+decide; cannot pass is_owner()). This finding does not depend on the
+R-2 verdict and remains a real defect to fix. Audit defect D1
+(logAudit failure swallowed in actions.ts) also stands, and in fact
+EXPLAINS the zero audit_log rows for a genuine dashboard approval.
+
+========================================================
+ONE NEXT ACTION (owner)
+========================================================
+Resolve attribution with the surface you used: send the phone
+screenshot of the R-2 approval (with its visible time), AND state
+which surface you approved on -
+  (a) https://preston-os-prod.vercel.app on the phone,
+  (b) a local/other dashboard (localhost / a different URL), or
+  (c) a saved shortcut / ChatGPT-side action.
+That single fact closes A. Do NOT revoke/rotate anything on an
+"unauthorized" assumption in the meantime; the standing-credential
+fix (B) is real but is a planned change, not an incident response.
