@@ -1,0 +1,39 @@
+R-2 FINAL DISPOSITION (read-only forensics closed). 2026-08-20.
+Owner confirms: NO R-2 approval screenshot exists.
+
+VERDICT: R-2 = INCONCLUSIVE. Not PASS. Not a confirmed compromise.
+
+WHAT THE EVIDENCE SUPPORTS (documented, bounded):
+1. The approval GATE BEHAVED CORRECTLY. decide_orchestration_approval
+   enforced is_owner(), one-time nonce, expiry, fail-closed; direct
+   UPDATE on orchestration_approvals is revoked; the job executed only
+   AFTER the row was 'approved'. No policy was bypassed or weakened.
+2. OWNER APPROVAL IS PLAUSIBLE. The decided nonce dash-d1481a76-... is
+   produced only by the dashboard server action (actions.ts:145); the
+   decided_at 23:40:34 UTC = 7:40:34 PM ET matches the owner's
+   recollected tap time; is_owner() passed (a real owner login). All
+   consistent with a phone approval at preston-os-prod.vercel.app.
+3. ATTRIBUTION CANNOT BE PROVEN. No independent artifact ties the
+   decision to the owner's phone: no screenshot exists; Vercel prod
+   request logs show no request at 7:36-7:42 PM ET; the enumerated
+   owner sessions were the runtime's own host-IP/node sessions, not a
+   phone-browser session. The decision is owner-ATTRIBUTABLE by
+   mechanism but not owner-PROVEN by evidence. Left INCONCLUSIVE.
+4. No compromise indicators found anywhere (no rogue SSH/cron/MCP/
+   injected code/unexpected grants).
+
+TWO SEPARATE ARCHITECTURE DEFECTS (independent of the R-2 verdict):
+A) STANDING HUMAN-OWNER RUNTIME CREDENTIAL. The unattended runtime is
+   seeded with an owner refresh token (SUPABASE_RUNTIME_REFRESH_TOKEN)
+   -> persists an owner USER session -> passes is_owner() -> CAN call
+   decide and write owner-gated tables unattended. Least-privilege
+   violation regardless of whether it acted on 2026-08-19.
+   FIX: replace with a dedicated NON-owner service identity.
+B) SWALLOWED APPROVAL AUDIT. decideOrchestrationApproval ignores
+   logAudit's result; a real decision can leave zero audit rows (as
+   happened for R-2). FIX: guarantee a decision audit record
+   (fail-closed or an in-transaction audit write).
+
+The previous R-2 run is NOT PASS. A fresh, fully instrumented R-2
+drill with NEW ids follows the two fixes (staging-validated, then
+owner-promoted to prod).

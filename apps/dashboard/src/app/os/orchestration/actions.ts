@@ -163,7 +163,12 @@ export async function decideOrchestrationApproval(formData: FormData) {
     resultMsg = 'approval decision refused: decide_failed';
   }
 
-  await logAudit(
+  // Defense-in-depth app-level audit. The AUTHORITATIVE decision audit is
+  // now written inside decide_orchestration_approval itself (migration 0021,
+  // atomic + fail-closed), so a failure here no longer means the decision
+  // went unaudited. We still must NOT swallow it silently (the pre-0021
+  // defect): surface a failure so a degraded app-level sink is visible.
+  const audit = await logAudit(
     {
       actor: 'orchestration', action: 'orchestration_approval_decision',
       action_class: 'GREEN', environment: 'staging',
@@ -171,6 +176,14 @@ export async function decideOrchestrationApproval(formData: FormData) {
     },
     { supabase: ctx.audit },
   );
+  if (ok && audit && !audit.logged) {
+    // The DB row (0021) still exists; this only flags the redundant app sink.
+    console.error(
+      'orchestration_approval_decision: app-level audit sink failed (DB audit still recorded)',
+      { approval_id: approvalId },
+    );
+    resultMsg += ' (note: app audit-sink degraded; DB audit intact)';
+  }
   revalidatePath('/os/orchestration');
   redirect('/os/orchestration?msg=' + encodeURIComponent(resultMsg));
 }
