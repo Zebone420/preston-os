@@ -418,6 +418,11 @@ describe('bridge diagnostics + upstream error mapping', () => {
     const probe = buildCredentialProbe(ENV_ON)!;
     expect(probe.url).toBe('https://proj.supabase.co/auth/v1/oauth/token');
     expect(probe.body.get('grant_type')).toBe('refresh_token');
+    expect(probe.body.get('client_id')).toBe(GPT_CLIENT);
+    expect(probe.headers['authorization']).toBeUndefined();
+    const basic = buildCredentialProbe(ENV_ON, 'basic')!;
+    expect(basic.headers['authorization']).toMatch(/^Basic /);
+    expect(basic.body.get('client_secret')).toBeNull();
     expect(buildCredentialProbe({ ...ENV_ON, PRESTON_CONTROL_GPT_BRIDGE_KEY: 'short' })).toBeNull();
   });
 

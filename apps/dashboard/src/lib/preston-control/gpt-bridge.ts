@@ -264,14 +264,28 @@ export function upstreamErrorTag(upstream: unknown): string {
 // refresh token on purpose; the answer distinguishes "credentials refused"
 // (invalid_credentials) from "credentials accepted, grant refused"
 // (invalid_grant / other). No secret leaves the server.
-export function buildCredentialProbe(env: Env): TokenForward | null {
+export interface CredentialProbe extends TokenForward {
+  headers: Record<string, string>;
+}
+
+// method 'post' = client_secret_post (what the bridge forwards);
+// method 'basic' = HTTP Basic, probed ONLY by the diagnostic so an auth-method
+// mismatch at the authorization server is distinguishable from a wrong secret.
+export function buildCredentialProbe(env: Env, method: 'post' | 'basic' = 'post'): CredentialProbe | null {
   if (!bridgeConfigured(env)) return null;
+  const id = String(env[GPT_CLIENT_ID_ENV]);
+  const secret = String(env[GPT_CLIENT_SECRET_ENV]);
   const body = new URLSearchParams();
   body.set('grant_type', 'refresh_token');
   body.set('refresh_token', 'preston-control-credential-probe');
-  body.set('client_id', String(env[GPT_CLIENT_ID_ENV]));
-  body.set('client_secret', String(env[GPT_CLIENT_SECRET_ENV]));
-  return { url: supabaseAuthBase(env) + '/oauth/token', body };
+  const headers: Record<string, string> = { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' };
+  if (method === 'basic') {
+    headers['authorization'] = 'Basic ' + Buffer.from(`${encodeURIComponent(id)}:${encodeURIComponent(secret)}`, 'utf8').toString('base64');
+  } else {
+    body.set('client_id', id);
+    body.set('client_secret', secret);
+  }
+  return { url: supabaseAuthBase(env) + '/oauth/token', body, headers };
 }
 
 export function classifyCredentialProbe(status: number, upstream: unknown): 'valid' | 'invalid' | 'unknown' {
