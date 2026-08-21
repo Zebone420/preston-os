@@ -18,7 +18,9 @@
 | 6 | Client A (MCP) token on `/api/control/*` → 403 `wrong_client`; client B (GPT) token on `/mcp` → 403 `wrong_client`; bridge refuses client A's id | **PASS** | AUDIT 6; `preston-control-gpt.test.ts` |
 | 7 | `PRESTON_CONTROL_ENABLED=false` → all 14 Preston Control endpoints answer 503/404 with valid owner tokens, nothing written; runtime (`src/os-runtime/**`, `src/lib/ai-os/**`) and existing `api/os/*` routes contain no reference to Preston Control or its flags | **PASS** | AUDIT 7 |
 
-Suite: `test/preston-control-{auth,tools,route,gpt,audit}.test.ts` = **78 tests passing**; `tsc --noEmit` clean; `eslint` clean; repo secret scan + RED boundary scan = 0 findings (pre-commit hook). Full dashboard suite: see the audit commit message for the run result.
+| 8 | **Callback pin (final patch):** the bridge redirects only to the exact configured `PRESTON_CONTROL_GPT_CALLBACK_URL`; wrong host, alternate domain (`chat.openai.com` vs `chatgpt.com`), wrong GPT id, modified path, modified query, scheme, fragment, case and whitespace variants all → `invalid_redirect`; invalid/missing configuration → `unconfigured`; a signed state minted for a previous callback value cannot redirect after reconfiguration | **PASS** | `preston-control-gpt.test.ts` › callback pin |
+
+Suite: `test/preston-control-{auth,tools,route,gpt,audit}.test.ts` = **79 tests passing**; `tsc --noEmit` clean; `eslint` clean; repo secret scan + RED boundary scan = 0 findings (pre-commit hook). Full dashboard suite: see the audit commit message for the run result.
 
 ---
 
@@ -31,6 +33,7 @@ Suite: `test/preston-control-{auth,tools,route,gpt,audit}.test.ts` = **78 tests 
 | OAuth client **B** id (GPT) | no | Vercel `PRESTON_CONTROL_GPT_OAUTH_CLIENT_ID`; GPT editor | Supabase issues it |
 | OAuth client **B** secret | **yes** | Vercel `PRESTON_CONTROL_GPT_OAUTH_CLIENT_SECRET`; GPT editor; 1Password | Supabase issues it (shown once) |
 | Bridge HMAC key | **yes** | Vercel `PRESTON_CONTROL_GPT_BRIDGE_KEY`; 1Password | **You**, see below |
+| GPT OAuth callback URL | no | Vercel `PRESTON_CONTROL_GPT_CALLBACK_URL` | the GPT editor shows it (copy verbatim) |
 | `PRESTON_CONTROL_ENABLED` | no | Vercel | `true` |
 | `PRESTON_CONTROL_PUBLIC_ORIGIN` | no | Vercel (optional) | the staging origin, only if aliased |
 
@@ -58,7 +61,7 @@ Rule: every secret is typed only into Supabase, Vercel, ChatGPT, or 1Password. I
    - Type: **Confidential**
    - Redirect URIs (exact): `https://<staging-host>/oauth/gpt/callback`
    - Save → copy **client id** and **client secret** (both go to Vercel; secret also to 1Password and the GPT editor).
-   - Note: ChatGPT's own callback (`https://chatgpt.com/aip/g-…/oauth/callback`) is **not** registered in Supabase — Supabase only ever talks to the bridge; the bridge allowlists ChatGPT's callback by exact shape.
+   - Note: ChatGPT's own callback is **not** registered in Supabase — Supabase only ever talks to the bridge. The bridge redirects only to the exact string you put in `PRESTON_CONTROL_GPT_CALLBACK_URL` (§5 step 4).
 4. (Recommended, not required for v1) **Authentication → JWT Signing Keys** → migrate to an asymmetric key (ES256). Revisit if you later add the `openid` scope.
 5. Confirm the owner auth user is still present in `public.owners` (it is: the dashboard owner).
 
@@ -74,8 +77,10 @@ PRESTON_CONTROL_OAUTH_CLIENT_ID=<client A id>
 PRESTON_CONTROL_GPT_OAUTH_CLIENT_ID=<client B id>
 PRESTON_CONTROL_GPT_OAUTH_CLIENT_SECRET=<client B secret>     (mark Sensitive)
 PRESTON_CONTROL_GPT_BRIDGE_KEY=<48-char random>              (mark Sensitive)
+PRESTON_CONTROL_GPT_CALLBACK_URL=<exact callback URL from the GPT editor, §5 step 4>
 PRESTON_CONTROL_PUBLIC_ORIGIN=<only if the deployment is reached through an alias>
 ```
+Ordering note: `PRESTON_CONTROL_GPT_CALLBACK_URL` is only known after the GPT is saved (§5). Until it is set, the GPT bridge answers 503 `unconfigured` while MCP and the REST routes already work — intended.
 Already present: `SUPABASE_RUNTIME_ENV=staging`, `OWNER_EMAIL_ALLOWLIST`, `NEXT_PUBLIC_SUPABASE_URL/ANON_KEY`.
 
 Deploy the audit commit to staging (after you push — agent push remains blocked). Smoke (no secrets involved; run from any browser/curl you operate):
@@ -111,7 +116,7 @@ Deploy the audit commit to staging (after you push — agent push remains blocke
    - Authorization URL `https://<staging-host>/oauth/gpt/authorize`
    - Token URL `https://<staging-host>/oauth/gpt/token`
    - Scope `email` · Token Exchange Method **Default (POST request)**
-4. Save. The editor now shows the **Callback URL** `https://chat.openai.com/aip/g-<id>/oauth/callback` (and/or `https://chatgpt.com/aip/g-<id>/oauth/callback`). Nothing to paste anywhere — the bridge accepts exactly that shape. Record the `g-<id>` for the evidence log.
+4. Save. The editor now shows the **Callback URL** (of the form `https://chat.openai.com/aip/g-<id>/oauth/callback`, or the `chatgpt.com` form). **Copy it verbatim** → Vercel staging `PRESTON_CONTROL_GPT_CALLBACK_URL` → redeploy. The bridge redirects to that exact string only: a different host, GPT id, path or query is refused. If the editor later shows a different callback (it changes when OAuth settings change), update the variable and redeploy.
 5. Privacy policy URL: not required for **Only me**. Save GPT with visibility **Only me**.
 6. Editor preview: "Check Preston status." → "Sign in with <staging-host>" → consent → `getPrestonStatus` card → summary. If the preview shows an OAuth error, see §8.
 
@@ -145,7 +150,8 @@ The help-center text fetched on 2026-08-20 says creation is unavailable on perso
 
 ## 8. If the OAuth sign-in fails in the GPT preview
 
-- `invalid_redirect` JSON from the bridge → the editor's callback URL is not `https://chat.openai.com|chatgpt.com/aip/g-<id>/oauth/callback`; send me the *shape* (not the id) and I will widen the allowlist precisely.
+- `invalid_redirect` JSON from the bridge → `PRESTON_CONTROL_GPT_CALLBACK_URL` in Vercel is not byte-identical to the callback the editor shows (re-copy; watch for trailing spaces and the `chat.openai.com` vs `chatgpt.com` form).
+- `unconfigured` JSON from `/oauth/gpt/authorize` → the callback variable (or another bridge variable) is missing/invalid (must be an `https://` URL, no fragment).
 - Supabase error page → client B's redirect URI is not exactly `https://<staging-host>/oauth/gpt/callback`.
 - Consent page "client_not_allowed" → `PRESTON_CONTROL_GPT_OAUTH_CLIENT_ID` in Vercel ≠ client B id.
 - Token step fails → client B secret in the GPT editor ≠ the one in Vercel, or Token Exchange Method is not "Default (POST)".

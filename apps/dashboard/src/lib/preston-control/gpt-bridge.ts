@@ -20,8 +20,10 @@
 // auth.ts validates exactly as for the MCP surface.
 //
 // Security properties:
-//   - redirect_uri to ChatGPT is allowlisted by EXACT shape (aip/g-<id>/oauth/callback)
-//     so the callback can never become an open redirect;
+//   - redirect_uri to ChatGPT must EQUAL the configured
+//     PRESTON_CONTROL_GPT_CALLBACK_URL (the exact URL the GPT editor shows);
+//     no host/id/path/query pattern matching, so the callback can never
+//     become an open redirect and no other GPT can reuse the bridge;
 //   - state is HMAC-signed; a tampered/forged callback is refused;
 //   - client_id must equal the GPT surface's registered client; the presented
 //     client secret is compared in constant time against the configured one
@@ -34,9 +36,26 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 export const GPT_BRIDGE_KEY_ENV = 'PRESTON_CONTROL_GPT_BRIDGE_KEY';
 export const GPT_CLIENT_SECRET_ENV = 'PRESTON_CONTROL_GPT_OAUTH_CLIENT_SECRET';
 export const GPT_CLIENT_ID_ENV = 'PRESTON_CONTROL_GPT_OAUTH_CLIENT_ID';
+// Non-secret configuration: the exact OAuth callback URL the GPT editor
+// displays for the Preston Control GPT (e.g. https://chat.openai.com/aip/g-<id>/oauth/callback).
+export const GPT_CALLBACK_URL_ENV = 'PRESTON_CONTROL_GPT_CALLBACK_URL';
 
-export const CHATGPT_REDIRECT_RE =
-  /^https:\/\/(chat\.openai\.com|chatgpt\.com)\/aip\/g-[A-Za-z0-9]{6,64}\/oauth\/callback$/;
+// The configured callback, normalised only by trimming whitespace. It must be
+// an absolute https URL with no fragment; otherwise the bridge is unconfigured.
+export function configuredCallback(env: Env): string | null {
+  const raw = String(env[GPT_CALLBACK_URL_ENV] ?? '').trim();
+  if (!raw || raw.length > 512) return null;
+  let u: URL;
+  try { u = new URL(raw); } catch { return null; }
+  if (u.protocol !== 'https:' || u.hash || u.username || u.password) return null;
+  return raw;
+}
+
+// Exact string equality - no host, GPT-id, path or query variation.
+export function callbackMatches(env: Env, presented: string | undefined): boolean {
+  const cfg = configuredCallback(env);
+  return cfg !== null && typeof presented === 'string' && safeEq(presented, cfg);
+}
 // Exactly base64url(32 random bytes) = 43 chars; anything else is tampering.
 const NONCE_RE = /^[A-Za-z0-9_-]{43}$/;
 const CODE_RE = /^[A-Za-z0-9._~-]{8,512}$/;
@@ -60,7 +79,8 @@ function safeEq(a: string, b: string): boolean {
 export function bridgeConfigured(env: Env): boolean {
   return Boolean(
     env[GPT_BRIDGE_KEY_ENV] && env[GPT_BRIDGE_KEY_ENV]!.length >= 32
-    && env[GPT_CLIENT_ID_ENV] && env[GPT_CLIENT_SECRET_ENV] && env['NEXT_PUBLIC_SUPABASE_URL'],
+    && env[GPT_CLIENT_ID_ENV] && env[GPT_CLIENT_SECRET_ENV] && env['NEXT_PUBLIC_SUPABASE_URL']
+    && configuredCallback(env) !== null,
   );
 }
 
@@ -103,7 +123,9 @@ export function unpackState(env: Env, packed: string): BridgeState | null {
     const arr = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as unknown;
     if (!Array.isArray(arr) || arr.length !== 3 || !arr.every((x) => typeof x === 'string')) return null;
     const [nonce, chatgptRedirect, chatgptState] = arr as string[];
-    if (!NONCE_RE.test(nonce) || !CHATGPT_REDIRECT_RE.test(chatgptRedirect) || chatgptState.length > STATE_MAX) return null;
+    // The redirect inside the state must STILL equal the current configuration
+    // (a state minted before a config change cannot redirect elsewhere).
+    if (!NONCE_RE.test(nonce) || !callbackMatches(env, chatgptRedirect) || chatgptState.length > STATE_MAX) return null;
     return { nonce, chatgptRedirect, chatgptState };
   } catch {
     return null;
@@ -125,7 +147,7 @@ export function buildAuthorizeRedirect(
   if ((q.response_type ?? 'code') !== 'code') return { ok: false, error: 'invalid_request' };
   if ((q.client_id ?? '') !== env[GPT_CLIENT_ID_ENV]) return { ok: false, error: 'unauthorized_client' };
   const redirect = q.redirect_uri ?? '';
-  if (!CHATGPT_REDIRECT_RE.test(redirect)) return { ok: false, error: 'invalid_redirect' };
+  if (!callbackMatches(env, redirect)) return { ok: false, error: 'invalid_redirect' };
   const state = q.state ?? '';
   if (!state || state.length > STATE_MAX) return { ok: false, error: 'invalid_request' };
   const scopes = (q.scope ?? 'email').split(/\s+/).filter(Boolean);

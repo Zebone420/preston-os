@@ -37,7 +37,7 @@ Other facts: "Actions are not available for Pro mode" refers to Pro *models* (th
 | `apps/dashboard/src/app/oauth/consent/{page.tsx,actions.ts}` | owner consent UI (both clients) |
 | `apps/dashboard/src/proxy.ts` | matcher excludes `/mcp`, `/api/control`, `/oauth/gpt/`, `/.well-known/`; carries `next` for consent |
 | `apps/dashboard/src/app/login/page.tsx`, `components/nav/nav-config.ts` | consent continuation; non-nav route |
-| `env.template` | `PRESTON_CONTROL_ENABLED`, `PRESTON_CONTROL_OAUTH_CLIENT_ID`, `PRESTON_CONTROL_GPT_OAUTH_CLIENT_ID`, `PRESTON_CONTROL_GPT_OAUTH_CLIENT_SECRET`, `PRESTON_CONTROL_GPT_BRIDGE_KEY`, `PRESTON_CONTROL_PUBLIC_ORIGIN` |
+| `env.template` | `PRESTON_CONTROL_ENABLED`, `PRESTON_CONTROL_OAUTH_CLIENT_ID`, `PRESTON_CONTROL_GPT_OAUTH_CLIENT_ID`, `PRESTON_CONTROL_GPT_OAUTH_CLIENT_SECRET`, `PRESTON_CONTROL_GPT_BRIDGE_KEY`, `PRESTON_CONTROL_GPT_CALLBACK_URL` (non-secret, exact editor value), `PRESTON_CONTROL_PUBLIC_ORIGIN` |
 | `apps/dashboard/test/preston-control-{auth,tools,route,gpt}.test.ts` | 63 tests |
 | `docs/PRESTON_CONTROL_THREAT_MODEL_v1.md` | threat model |
 
@@ -86,7 +86,7 @@ Excluded by construction on both surfaces: shell, SSH, SQL, table mutation, file
 
 Gates on every request (both surfaces): enabled flag → env allowlisted → surface client id configured → bearer bounded → **Supabase verifies the token** → `client_id` == this surface's client, `aud` authenticated → `OWNER_EMAIL_ALLOWLIST` → **`is_owner()` in DB** → tools run RLS-bound as the owner. No static owner bearer exists anywhere; no secret enters model context; errors are tag-only.
 
-**Security comparison.** Authorization is identical (same gates, same DB authority, same projections, same RPC). Differences: (a) the GPT surface keeps client B's secret in Vercel env — one more place a secret lives (env-only, constant-time compared, never returned, rotatable); (b) ChatGPT's confirmation comes from `x-openai-isConsequential` instead of MCP annotations — both write ops are flagged; (c) the bridge is an extra public OAuth endpoint — stateless, signed state, exact-shape ChatGPT redirect allowlist (`^https://(chat\.openai\.com|chatgpt\.com)/aip/g-<id>/oauth/callback$`), forwards only to the configured Supabase project, strips `id_token`/user objects. Net: no weaker on authorization; slightly larger surface, pinned by tests.
+**Security comparison.** Authorization is identical (same gates, same DB authority, same projections, same RPC). Differences: (a) the GPT surface keeps client B's secret in Vercel env — one more place a secret lives (env-only, constant-time compared, never returned, rotatable); (b) ChatGPT's confirmation comes from `x-openai-isConsequential` instead of MCP annotations — both write ops are flagged; (c) the bridge is an extra public OAuth endpoint — stateless, signed state, ChatGPT redirect pinned by exact equality to the configured `PRESTON_CONTROL_GPT_CALLBACK_URL` (no host/id/path/query patterns), forwards only to the configured Supabase project, strips `id_token`/user objects. Net: no weaker on authorization; slightly larger surface, pinned by tests.
 
 ### GPT Actions flow
 1. GPT shows "Sign in" → browser → `<origin>/oauth/gpt/authorize?client_id=B&redirect_uri=https://chatgpt.com/aip/g-…/oauth/callback&state=…` → bridge validates, adds PKCE, 302 → Supabase `/auth/v1/oauth/authorize`.
@@ -122,7 +122,7 @@ Settings → Security and login → Developer mode → chatgpt.com/plugins → *
 1. Open an **existing** GPT you own (creation is closed on personal plans; if none exists, a Business workspace is required) → Edit → Configure → Actions → **Create new action**.
 2. Import schema from URL `<origin>/api/control/openapi.json`.
 3. Authentication → OAuth: Client ID = B id, Client Secret = B secret, Authorization URL `<origin>/oauth/gpt/authorize`, Token URL `<origin>/oauth/gpt/token`, Scope `email`, Token exchange method **Default (POST request)**. Save.
-4. Copy the callback URL the editor shows (`https://chat.openai.com/aip/g-<id>/oauth/callback` / `https://chatgpt.com/aip/g-<id>/oauth/callback`) — the bridge already allowlists this exact shape; nothing to configure in Supabase for it (Supabase only sees the bridge callback).
+4. Copy the callback URL the editor shows verbatim into Vercel `PRESTON_CONTROL_GPT_CALLBACK_URL` and redeploy; the bridge redirects only to that exact string (Supabase only ever sees the bridge callback).
 5. Visibility **Only me**. Save. In the editor preview: "Check Preston status" → Sign in → consent → the action calls `getPrestonStatus`.
 
 ### 6.5 Galaxy acceptance (Phase G, first-class gate) — exact procedure

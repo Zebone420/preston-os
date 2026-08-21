@@ -69,6 +69,7 @@ const ENV_ON: Record<string, string> = {
   PRESTON_CONTROL_GPT_OAUTH_CLIENT_ID: GPT_CLIENT,
   PRESTON_CONTROL_GPT_OAUTH_CLIENT_SECRET: CONF,
   PRESTON_CONTROL_GPT_BRIDGE_KEY: BRIDGE_KEY,
+  PRESTON_CONTROL_GPT_CALLBACK_URL: 'https://chatgpt.com/aip/g-abc123DEF/oauth/callback',
   SUPABASE_RUNTIME_ENV: 'staging',
   OWNER_EMAIL_ALLOWLIST: OWNER,
   NEXT_PUBLIC_SUPABASE_URL: 'https://proj.supabase.co',
@@ -271,6 +272,36 @@ describe('PKCE bridge (pure)', () => {
     expect(buildAuthorizeRedirect({ ...env, PRESTON_CONTROL_GPT_BRIDGE_KEY: 'short' }, { client_id: GPT_CLIENT, redirect_uri: CHATGPT_CB, state: 's' }, ORIGIN)).toMatchObject({ ok: false, error: 'unconfigured' });
   });
 
+  it('callback pin: ONLY the exact configured GPT editor URL is accepted - wrong host, alternate domain, wrong GPT id, modified path, modified query, scheme, fragment all fail closed', () => {
+    const q = (redirect_uri: string) => ({ client_id: GPT_CLIENT, redirect_uri, state: 's' });
+    const cases: Record<string, string> = {
+      alternate_domain: 'https://chat.openai.com/aip/g-abc123DEF/oauth/callback',
+      wrong_host: 'https://chatgpt.com.evil.example/aip/g-abc123DEF/oauth/callback',
+      wrong_gpt_id: 'https://chatgpt.com/aip/g-abc123DEE/oauth/callback',
+      modified_path: 'https://chatgpt.com/aip/g-abc123DEF/oauth/callback/',
+      modified_path2: 'https://chatgpt.com/aip/g-abc123DEF/oauth/callbackx',
+      modified_query: 'https://chatgpt.com/aip/g-abc123DEF/oauth/callback?x=1',
+      scheme: 'http://chatgpt.com/aip/g-abc123DEF/oauth/callback',
+      fragment: 'https://chatgpt.com/aip/g-abc123DEF/oauth/callback#f',
+      case_variant: 'https://ChatGPT.com/aip/g-abc123DEF/oauth/callback',
+      trailing_space: 'https://chatgpt.com/aip/g-abc123DEF/oauth/callback ',
+      empty: '',
+    };
+    for (const [name, uri] of Object.entries(cases)) {
+      expect(buildAuthorizeRedirect(env, q(uri), ORIGIN), name).toMatchObject({ ok: false, error: 'invalid_redirect' });
+    }
+    expect(buildAuthorizeRedirect(env, q(CHATGPT_CB), ORIGIN).ok).toBe(true);
+    // The configured value itself must be a clean https URL, else the bridge is unconfigured.
+    for (const bad of ['http://chatgpt.com/aip/g-abc123DEF/oauth/callback', 'https://chatgpt.com/aip/g-abc123DEF/oauth/callback#x', 'not a url', '']) {
+      expect(buildAuthorizeRedirect({ ...env, PRESTON_CONTROL_GPT_CALLBACK_URL: bad }, q(CHATGPT_CB), ORIGIN), bad).toMatchObject({ ok: false, error: 'unconfigured' });
+    }
+    // If the configuration changes, a state minted for the OLD callback cannot redirect anywhere.
+    const packed = packState(env, { nonce: 'n'.repeat(43), chatgptRedirect: CHATGPT_CB, chatgptState: 'x' });
+    const reconfigured = { ...env, PRESTON_CONTROL_GPT_CALLBACK_URL: 'https://chatgpt.com/aip/g-other999/oauth/callback' };
+    expect(unpackState(reconfigured, packed)).toBeNull();
+    expect(buildCallbackRedirect(reconfigured, { code: 'supa-code-ABC', state: packed })).toMatchObject({ ok: false, error: 'invalid_state' });
+  });
+
   it('state: tampering or a foreign key is refused', () => {
     const packed = packState(env, { nonce: 'n'.repeat(43), chatgptRedirect: CHATGPT_CB, chatgptState: 'x' });
     expect(unpackState(env, packed)).toBeTruthy();
@@ -358,7 +389,7 @@ describe('wiring', () => {
   });
   it('env.template lists the GPT-surface names', () => {
     const tpl = readFileSync(join(__dirname, '..', '..', '..', 'env.template'), 'utf8');
-    for (const n of ['PRESTON_CONTROL_GPT_OAUTH_CLIENT_ID=', 'PRESTON_CONTROL_GPT_OAUTH_CLIENT_SECRET=', 'PRESTON_CONTROL_GPT_BRIDGE_KEY=']) {
+    for (const n of ['PRESTON_CONTROL_GPT_OAUTH_CLIENT_ID=', 'PRESTON_CONTROL_GPT_OAUTH_CLIENT_SECRET=', 'PRESTON_CONTROL_GPT_BRIDGE_KEY=', 'PRESTON_CONTROL_GPT_CALLBACK_URL=']) {
       expect(tpl).toContain('\n' + n + '\n');
     }
   });
