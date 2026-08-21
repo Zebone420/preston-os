@@ -363,6 +363,13 @@ describe('PKCE bridge (pure)', () => {
     expect(buildTokenForward(envColon, { grant_type: 'refresh_token', refresh_token: 'rt' }, rawBasic, ORIGIN).ok).toBe(true);
     const encBasic = 'Basic ' + Buffer.from(`${encodeURIComponent(GPT_CLIENT)}:${encodeURIComponent('a:b%c:' + 'x'.repeat(20))}`).toString('base64');
     expect(buildTokenForward(envColon, { grant_type: 'refresh_token', refresh_token: 'rt' }, encBasic, ORIGIN).ok).toBe(true);
+    // '+' in the secret posted raw arrives as ' ' after form decoding: accepted and canonicalised.
+    const envPlus = { ...env, PRESTON_CONTROL_GPT_OAUTH_CLIENT_SECRET: 'ab+cd+' + 'y'.repeat(20) };
+    const plusAsSpace = buildTokenForward(envPlus, { grant_type: 'refresh_token', refresh_token: 'rt', client_id: GPT_CLIENT, client_secret: 'ab cd ' + 'y'.repeat(20) }, null, ORIGIN);
+    expect(plusAsSpace.ok).toBe(true);
+    if (plusAsSpace.ok) expect(plusAsSpace.forward.body.get('client_secret')).toBe('ab+cd+' + 'y'.repeat(20));
+    // but a genuinely different secret of the same length is still refused
+    expect(buildTokenForward(envPlus, { grant_type: 'refresh_token', refresh_token: 'rt', client_id: GPT_CLIENT, client_secret: 'ab-cd-' + 'y'.repeat(20) }, null, ORIGIN).ok).toBe(false);
     const none = buildTokenForward(env, { grant_type: 'refresh_token', refresh_token: 'rt' }, null, ORIGIN);
     expect(none.ok).toBe(false);
     if (!none.ok) expect(none.diag?.method).toBe('none');

@@ -240,6 +240,13 @@ export function buildTokenForward(
       basicDecodeError = true;
     }
   }
+  // Form decoding maps '+' to ' '. A client that posts a '+'-bearing secret
+  // without percent-encoding therefore arrives with spaces where the secret
+  // has pluses. Accept that one well-defined variant (still constant-time;
+  // nothing else is loosened) and canonicalise it for the upstream forward.
+  if (secret && !safeEq(secret, expectedSecret) && secret.includes(' ') && safeEq(secret.replace(/ /g, '+'), expectedSecret)) {
+    secret = secret.replace(/ /g, '+');
+  }
   const diag: ClientAuthDiagnostic = {
     method,
     basic_decode_error: basicDecodeError,
