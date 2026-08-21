@@ -37,7 +37,8 @@ export const GPT_CLIENT_ID_ENV = 'PRESTON_CONTROL_GPT_OAUTH_CLIENT_ID';
 
 export const CHATGPT_REDIRECT_RE =
   /^https:\/\/(chat\.openai\.com|chatgpt\.com)\/aip\/g-[A-Za-z0-9]{6,64}\/oauth\/callback$/;
-const NONCE_RE = /^[A-Za-z0-9_-]{32,64}$/;
+// Exactly base64url(32 random bytes) = 43 chars; anything else is tampering.
+const NONCE_RE = /^[A-Za-z0-9_-]{43}$/;
 const CODE_RE = /^[A-Za-z0-9._~-]{8,512}$/;
 const STATE_MAX = 1024;
 export const ALLOWED_SCOPES = new Set(['email', 'openid', 'profile']);
