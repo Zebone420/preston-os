@@ -1,0 +1,29 @@
+ACTION C RECOVERY / STATE RECONCILIATION  (read-only)  2026-08-20 ~06:50Z
+Context: prior session froze mid OWNER ACTION C. No production-changing action repeated.
+
+LOCAL REPO
+  HEAD            60eca6c14e1e207e7014d9fcd8de24d9f6ebe7a0 (master)
+  tracked tree    clean (only untracked evidence files under reports/p2_evidence + scripts/p1/p1_diagnose.local.ps1)
+  tag promote-0020-0023 -> e4511f44b9e1161d2b9477ac506ddd4f5ebdb861 (docs-only commits follow it; code identical)
+ORIGIN (git ls-remote + GitHub REST)
+  refs/heads/master             60eca6c14e1e207e7014d9fcd8de24d9f6ebe7a0
+  refs/tags/promote-0020-0023   e4511f44b9e1161d2b9477ac506ddd4f5ebdb861
+  => C-1 push COMPLETE
+VERCEL (GitHub Deployments API 5996848720 + dashboard, read-only)
+  preston-os-prod  dpl_9XfDrPWSWy3gSBDqaPSj9MDvzcBX  commit 60eca6c  Ready  Production/Current
+  alias preston-os-prod.vercel.app serves dpl_9XfDrPWSWy3gSBDqaPSj9MDvzcBX (Link ?dpl= capture)
+  /api/health 200 {"ok":true,"mode":"connected"}; /api/os/remote/status 401; /api/os/ssot/status 401 (fail-closed)
+  => C-1 deploy COMPLETE (no manual deploy needed)
+PROD HOST preston-agent-prod (jump chain, read-only)
+  /srv/preston-os HEAD e4511f44b9e1161d2b9477ac506ddd4f5ebdb861 = promote-0020-0023 (describe exact), porcelain clean
+  reflog: 2026-08-20 06:17:33Z checkout f55e146 -> promote-0020-0023
+  => C-2 COMPLETE (not repeated)
+  DEVIATION: preston-orchestrator.timer ENABLED+active since 2026-08-19 23:06:13Z (ticks every ~5 min;
+  last ticks: orchestrate_once skipped, awaiting_owner_approval goal 5d25fa51). Package assumed manual-tick posture
+  (hermes-observe only). Not introduced by Action C. Owner decision needed (see report).
+C-3 (R-2 re-seed) evidence, non-secret only
+  worker.env mtime 2026-08-18 04:52Z (unchanged); no SUPABASE_RUNTIME_REFRESH_TOKEN key present
+  token-store.json 12 bytes, rotates each tick (normal populated store); NO config_error/empty-store event in orchestrator.log
+  root history: no worker --bootstrap / read -s sequence for preston-worker (only older hermes bootstrap)
+  => C-3 NOT STARTED. Runtime still holds the pre-promotion (owner-seeded) session.
+C-4 (R-3 owner sign-out): NOT PERFORMED (correct - requires C-3 PASS first).

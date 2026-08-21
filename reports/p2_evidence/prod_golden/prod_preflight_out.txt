@@ -1,0 +1,83 @@
+
+===== P-1a deployment identity =====
+ deployment_env_expected_production 
+------------------------------------
+ production
+(1 row)
+
+
+===== P-1b 0020-0023 objects must be ABSENT (not yet applied) =====
+ fns_0020_0022_0023_expected_0 
+-------------------------------
+                             0
+(1 row)
+
+ check_0022_expected_0 
+-----------------------
+                     0
+(1 row)
+
+ policy_0023_expected_0 
+------------------------
+                      0
+(1 row)
+
+ runtime_services_table_expected_0 
+-----------------------------------
+                                 0
+(1 row)
+
+
+===== P-1c parity floor: 0019 present =====
+ fn_read_ssot_status_expected_1 
+--------------------------------
+                              1
+(1 row)
+
+ fn_0019_read_audit_expected_t 
+-------------------------------
+ t
+(1 row)
+
+
+===== P-1d decide RPC exists but WITHOUT the 0021 audit yet =====
+ decide_fn_expected_1 
+----------------------
+                    1
+(1 row)
+
+ decide_has_audit_expected_f 
+-----------------------------
+ f
+(1 row)
+
+
+===== P-1e owners intact; the new runtime UID is NOT an owner =====
+ owners_expected_gte_1 
+-----------------------
+                     1
+(1 row)
+
+ runtime_uid_in_owners_expected_0 
+----------------------------------
+                                0
+(1 row)
+
+ runtime_auth_user_expected_1 
+------------------------------
+                            1
+(1 row)
+
+
+===== P-1f pre-0022 goal_jobs baseline =====
+ goal_jobs_rls_expected_t 
+--------------------------
+ t
+(1 row)
+
+ gj_tablewide_update_grant_expected_1 
+--------------------------------------
+                                    1
+(1 row)
+
+===== PREFLIGHT COMPLETE — proceed ONLY if every expected value matches =====

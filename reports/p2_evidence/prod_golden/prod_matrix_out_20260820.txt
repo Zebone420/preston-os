@@ -1,0 +1,214 @@
+
+===== S-0 SETUP + INSTALLED-STATE PROOF (as postgres) =====
+ deployment_env_expected_production 
+------------------------------------
+ production
+(1 row)
+
+            proname            
+-------------------------------
+ clear_approval_gate
+ decide_orchestration_approval
+ is_runtime_service
+ job_gate_required
+(4 rows)
+
+(expect: all 4 functions)
+           conname           
+-----------------------------
+ goal_jobs_gate_not_runnable
+(1 row)
+
+(expect: 1 row -- 0022 CHECK)
+         policyname         | permissive  |      roles      |  cmd   
+----------------------------+-------------+-----------------+--------
+ goal_jobs_runtime_classify | RESTRICTIVE | {authenticated} | INSERT
+(1 row)
+
+(expect: goal_jobs_runtime_classify | RESTRICTIVE | {authenticated} | INSERT)
+ goal_jobs_rls_enabled_expected_t 
+----------------------------------
+ t
+(1 row)
+
+ runtime_services_rows_expected_1 
+----------------------------------
+                                1
+(1 row)
+
+                                                             gj_update_cols_must_exclude_gate_and_action_fields                                                             
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ approval_id,assigned_role,attempts,correlation_id,created_at,evidence_refs,executed,failure_reason,goal_id,id,run_id,run_lease_expires_at,runtime_job_id,status,updated_at
+(1 row)
+
+(expect: list EXCLUDES requires_approval, kind, objective, title, risk_class)
+ clf_dangerous_t | clf_benign_f | clf_migrate_t | clf_helper_f 
+-----------------+--------------+---------------+--------------
+ t               | f            | t             | f
+(1 row)
+
+owner_uid = 9bd1b05d-1236-4338-8b9b-5f02aa552505
+fixture vars resolved: g1='9d9964bc-9c54-4bd5-a725-c11b026ff750' jl3='e887cd57-b77b-4adb-adb5-b7b67440dd90' al3='apr-prodmx-L3'
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+UPDATE 1
+
+===== become the RUNTIME (non-owner) identity =====
+                   set_config                   
+------------------------------------------------
+ {"sub":"7efd5d40-29b8-4f6b-bf38-d6f909cc2477"}
+(1 row)
+
+              set_config              
+--------------------------------------
+ 7efd5d40-29b8-4f6b-bf38-d6f909cc2477
+(1 row)
+
+SET
+ rt_is_runtime_t | rt_is_owner_f 
+-----------------+---------------
+ t               | f
+(1 row)
+
+ current_user  | session_user | row_security 
+---------------+--------------+--------------
+ authenticated | postgres     | on
+(1 row)
+
+
+===== I-0020a: runtime CANNOT write system_controls (expect: UPDATE 0) =====
+UPDATE 0
+===== I-0020b: runtime CAN read system_controls (expect: 1 row) =====
+ controls_readable_expected_1 
+------------------------------
+                            1
+(1 row)
+
+===== I-0020c: runtime CANNOT write runtime_services (expect: permission denied) =====
+psql:reports/p2_evidence/prod_matrix_0020_0023.sql.txt:90: ERROR:  permission denied for table runtime_services
+HINT:  Grant the required privileges to the current role with: GRANT INSERT ON public.runtime_services TO authenticated;
+===== I-0020d: runtime CANNOT decide (expect: owner_required error; approval stays pending) =====
+psql:reports/p2_evidence/prod_matrix_0020_0023.sql.txt:92: ERROR:  owner_required
+CONTEXT:  PL/pgSQL function decide_orchestration_approval(text,text,text) line 7 at RAISE
+ l3_approval_still_pending 
+---------------------------
+ pending
+(1 row)
+
+
+===== I-0022n1: runtime CANNOT flip the gate column (expect: permission denied for column) =====
+psql:reports/p2_evidence/prod_matrix_0020_0023.sql.txt:97: ERROR:  permission denied for table goal_jobs
+HINT:  Grant the required privileges to the current role with: GRANT UPDATE ON public.goal_jobs TO authenticated;
+
+===== D-1 (0023): dangerous + GREEN + ungated + runnable -> DENIED by RLS goal_jobs_runtime_classify =====
+ d1_gate_required_expected_t | d1_with_check_expected_f 
+-----------------------------+--------------------------
+ t                           | f
+(1 row)
+
+psql:reports/p2_evidence/prod_matrix_0020_0023.sql.txt:108: ERROR:  new row violates row-level security policy "goal_jobs_runtime_classify" for table "goal_jobs"
+(expect: new row violates row-level security policy goal_jobs_runtime_classify)
+
+===== D-2 (0023): dangerous + gated + pending -> ALLOWED =====
+                  id                  | status  | requires_approval 
+--------------------------------------+---------+-------------------
+ c45db2d1-d682-40f5-8b93-d1b603873723 | pending | t
+(1 row)
+
+INSERT 0 1
+(expect: 1 row -> pending | t)
+
+===== D-3 (0022): dangerous + gated + runnable -> DENIED by CHECK =====
+psql:reports/p2_evidence/prod_matrix_0020_0023.sql.txt:121: ERROR:  new row for relation "goal_jobs" violates check constraint "goal_jobs_gate_not_runnable"
+(expect: violates check constraint goal_jobs_gate_not_runnable)
+
+===== L-1 (0023): benign + GREEN + ungated + runnable -> ALLOWED =====
+                  id                  | status | requires_approval 
+--------------------------------------+--------+-------------------
+ 42ad25f7-a509-499b-bcf2-7febb94183ee | ready  | f
+(1 row)
+
+INSERT 0 1
+(expect: 1 row -> ready | f)
+
+===== L-2 (0023): honest RED gated pending -> ALLOWED =====
+                  id                  | status  | requires_approval 
+--------------------------------------+---------+-------------------
+ 094da754-a0db-414d-93f4-e3542153838c | pending | t
+(1 row)
+
+INSERT 0 1
+(expect: 1 row -> pending | t)
+
+===== L-3a (as OWNER): decide the L-3 approval =====
+RESET
+                   set_config                   
+------------------------------------------------
+ {"sub":"9bd1b05d-1236-4338-8b9b-5f02aa552505"}
+(1 row)
+
+              set_config              
+--------------------------------------
+ 9bd1b05d-1236-4338-8b9b-5f02aa552505
+(1 row)
+
+SET
+ l3_decide_should_be_approved 
+------------------------------
+ approved
+(1 row)
+
+
+===== I-0021 (fail-closed audit): decide wrote exactly one audit_log row =====
+psql:reports/p2_evidence/prod_matrix_0020_0023.sql.txt:151: ERROR:  permission denied for table audit_log
+HINT:  Grant the required privileges to the current role with: GRANT SELECT ON public.audit_log TO authenticated;
+
+===== L-3b (as RUNTIME): clear the approved RED job (0022 clear path live) =====
+RESET
+                   set_config                   
+------------------------------------------------
+ {"sub":"7efd5d40-29b8-4f6b-bf38-d6f909cc2477"}
+(1 row)
+
+              set_config              
+--------------------------------------
+ 7efd5d40-29b8-4f6b-bf38-d6f909cc2477
+(1 row)
+
+SET
+                   l3_clear_should_be_ok_true                   
+----------------------------------------------------------------
+ {"ok": true, "job_id": "e887cd57-b77b-4adb-adb5-b7b67440dd90"}
+(1 row)
+
+RESET
+                  id                  | status | requires_approval | risk_class 
+--------------------------------------+--------+-------------------+------------
+ e887cd57-b77b-4adb-adb5-b7b67440dd90 | ready  | f                 | RED
+(1 row)
+
+(expect: ready | f | RED)
+
+===== CLEANUP (as postgres; fixture graph + its one fixture audit row ONLY) =====
+ set_config 
+------------
+ 
+(1 row)
+
+ set_config 
+------------
+ 
+(1 row)
+
+UPDATE 4
+DELETE 1
+DELETE 1
+DELETE 4
+DELETE 1
+          cleanup          
+---------------------------
+ cleanup done; remaining=0
+(1 row)
+
+===== PROD MATRIX COMPLETE — paste ALL output back =====

@@ -1,0 +1,59 @@
+-- ============================================================================
+-- rops-prod-drill-4 FINAL VERIFICATION (OWNER-RUN, READ-ONLY, PRODUCTION)
+-- postgres.hiqsymsiwonmvrbbqhhe, session pooler 5432. SELECT only. Never
+-- selects token/secret values (auth.sessions: id/user/ip/ua/timestamps only).
+-- Run with: -v GOAL=ffa104f4-3e74-4b82-abd4-e0ca73162f88 (drill-4 goal,
+-- from orchestrator log disp-135469). Owner uid resolved by email in-file.
+-- ============================================================================
+\set ON_ERROR_STOP off
+\echo ===== 1. intake rows (both fresh ids) =====
+select request_id, source, actor_id, status, reject_reason, created_at, consumed_at
+  from remote_intake_requests
+ where request_id in ('n8n-20260820-02','rops-prod-drill-4') order by created_at;
+\echo ===== 2. drill goal + jobs (environment must be production) =====
+select id, status, environment, source, requested_by, created_at, updated_at
+  from master_goals where id = :'GOAL';
+select id, kind, risk_class, status, requires_approval, approval_id, executed,
+       attempts, failure_reason
+  from goal_jobs where goal_id = :'GOAL';
+\echo ===== 3. approval row (decided once, owner identity) =====
+select approval_id, job_id, action, status, owner_identity, decided_at,
+       left(nonce,5) as nonce_prefix, expires_at
+  from orchestration_approvals where goal_id = :'GOAL';
+\echo ===== 4. FAIL-CLOSED AUDIT: exactly one decision row, is_owner=true, owner uid =====
+select id, created_at, actor, environment,
+       detail->>'outcome' as outcome, detail->>'is_owner' as is_owner,
+       detail->>'approval_id' as approval_id
+  from audit_log
+ where action = 'orchestration_approval_decision'
+   and detail->>'goal_id' = :'GOAL';
+select (actor = (select id::text from auth.users where email='info@preston.nyc'))
+         as actor_is_owner_uid_expect_t,
+       exists(select 1 from owners o where o.user_id::text = actor)
+         as actor_in_owners_expect_t,
+       (actor <> '7efd5d40-29b8-4f6b-bf38-d6f909cc2477')
+         as actor_is_not_runtime_expect_t
+  from audit_log
+ where action = 'orchestration_approval_decision'
+   and detail->>'goal_id' = :'GOAL';
+\echo ===== 5. RUNTIME SERVICE IDENTITY / NO STANDING OWNER CREDENTIAL =====
+select u.email, count(s.id) as sessions
+  from auth.users u left join auth.sessions s on s.user_id = u.id
+ where u.email in ('runtime@service.preston','info@preston.nyc')
+ group by u.email order by u.email;
+\echo (expect: runtime@service.preston >= 1; info@preston.nyc = only the phone/dashboard sessions you opened today, none older than the C-4 revocation)
+select u.email, s.created_at, s.updated_at, s.ip, left(coalesce(s.user_agent,''),60) as ua
+  from auth.sessions s join auth.users u on u.id = s.user_id
+ where u.email in ('runtime@service.preston','info@preston.nyc')
+ order by s.updated_at desc limit 10;
+\echo (expect: the runtime session updated_at advancing every ~5 min from the prod host IP 46.224.68.139 / node UA; owner rows = phone browser only)
+select user_id, note from runtime_services;
+\echo ===== 6. evidence refs of the executed approval-gated job =====
+\echo (column executed is pinned false by the 0010 CHECK; real execution is the evidence ref ...:completed:executed:true)
+select id, status, executed, evidence_refs from goal_jobs where goal_id = :'GOAL';
+\echo ===== 7. open approvals (expect 0: legacy 5d25fa51 approvals were rejected 2026-08-18) / failed jobs (expect 0) =====
+select count(*) as approvals_pending from orchestration_approvals where status='pending';
+select count(*) as jobs_failed from goal_jobs where status='failed';
+select id, execution_enabled, remote_runner_enabled, owner_stop, paused, hermes_mode
+  from system_controls;
+\echo ===== DRILL-4 VERIFY COMPLETE - paste ALL output back =====

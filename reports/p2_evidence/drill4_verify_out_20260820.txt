@@ -1,0 +1,79 @@
+===== 1. intake rows (both fresh ids) =====
+    request_id     | source |    actor_id    |  status  | reject_reason |          created_at           |        consumed_at         
+-------------------+--------+----------------+----------+---------------+-------------------------------+----------------------------
+ n8n-20260820-02   | api    | n8n-1          | consumed |               | 2026-08-20 23:18:47.699886+00 | 2026-08-20 23:23:10.708+00
+ rops-prod-drill-4 | phone  | owner-remote-1 | consumed |               | 2026-08-20 23:24:18.982458+00 | 2026-08-20 23:33:05.2+00
+(2 rows)
+
+===== 2. drill goal + jobs (environment must be production) =====
+                  id                  |  status   | environment |  source   |   requested_by   |          created_at           |        updated_at         
+--------------------------------------+-----------+-------------+-----------+------------------+-------------------------------+---------------------------
+ ffa104f4-3e74-4b82-abd4-e0ca73162f88 | completed | production  | dashboard | info@preston.nyc | 2026-08-20 23:33:05.450107+00 | 2026-08-20 23:46:41.61+00
+(1 row)
+
+                  id                  |     kind      | risk_class |  status   | requires_approval |         approval_id          | executed | attempts | failure_reason 
+--------------------------------------+---------------+------------+-----------+-------------------+------------------------------+----------+----------+----------------
+ 83a791f0-e401-448c-b01a-a2c712a188ec | documentation | YELLOW     | completed | f                 | apr-341d69288c9fa2b1e4ed2f34 | f        |        1 | 
+(1 row)
+
+===== 3. approval row (decided once, owner identity) =====
+         approval_id          |                job_id                |                                             action                                             |  status  |  owner_identity  |          decided_at           | nonce_prefix |        expires_at        
+------------------------------+--------------------------------------+------------------------------------------------------------------------------------------------+----------+------------------+-------------------------------+--------------+--------------------------
+ apr-341d69288c9fa2b1e4ed2f34 | 83a791f0-e401-448c-b01a-a2c712a188ec | documentation: document the hermes_mode control setting for the remote owner operations drill. | approved | info@preston.nyc | 2026-08-20 23:39:03.119987+00 | dash-        | 2026-08-21 23:33:05.2+00
+(1 row)
+
+===== 4. FAIL-CLOSED AUDIT: exactly one decision row, is_owner=true, owner uid =====
+                  id                  |          created_at           |                actor                 | environment | outcome  | is_owner |         approval_id          
+--------------------------------------+-------------------------------+--------------------------------------+-------------+----------+----------+------------------------------
+ 3b65cdb4-385f-43b2-a109-fb0c69c930b3 | 2026-08-20 23:39:03.103748+00 | 9bd1b05d-1236-4338-8b9b-5f02aa552505 | production  | approved | true     | apr-341d69288c9fa2b1e4ed2f34
+(1 row)
+
+ actor_is_owner_uid_expect_t | actor_in_owners_expect_t | actor_is_not_runtime_expect_t 
+-----------------------------+--------------------------+-------------------------------
+ t                           | t                        | t
+(1 row)
+
+===== 5. RUNTIME SERVICE IDENTITY / NO STANDING OWNER CREDENTIAL =====
+          email          | sessions 
+-------------------------+----------
+ info@preston.nyc        |        1
+ runtime@service.preston |        2
+(2 rows)
+
+(expect: runtime@service.preston >= 1; info@preston.nyc = only the phone/dashboard sessions you opened today, none older than the C-4 revocation)
+          email          |          created_at           |          updated_at           |      ip       |                              ua                              
+-------------------------+-------------------------------+-------------------------------+---------------+--------------------------------------------------------------
+ runtime@service.preston | 2026-08-20 21:18:36.544821+00 | 2026-08-21 00:08:09.913968+00 | 46.224.68.139 | node
+ info@preston.nyc        | 2026-08-20 23:37:14.707115+00 | 2026-08-20 23:37:14.707115+00 | 108.54.91.145 | Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML
+ runtime@service.preston | 2026-08-20 21:08:59.039057+00 | 2026-08-20 21:08:59.039057+00 | 46.224.68.139 | Python-urllib/3.12
+(3 rows)
+
+(expect: the runtime session updated_at advancing every ~5 min from the prod host IP 46.224.68.139 / node UA; owner rows = phone browser only)
+               user_id                |                  note                   
+--------------------------------------+-----------------------------------------
+ 7efd5d40-29b8-4f6b-bf38-d6f909cc2477 | preston runtime (non-owner, production)
+(1 row)
+
+===== 6. evidence refs of the executed RED job =====
+                  id                  |  status   | executed |                                                                                                                                                                                                                                                    evidence_refs                                                                                                                                                                                                                                                    
+--------------------------------------+-----------+----------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 83a791f0-e401-448c-b01a-a2c712a188ec | completed | f        | ["real:goal:ffa104f4-3e74-4b82-abd4-e0ca73162f88:job:83a791f0-e401-448c-b01a-a2c712a188ec:run:83a791f0-e401-448c-b01a-a2c712a188ec:a34701bf-1981-4b80-8530-1c0fa7d6c75f:attempt:1:completed:executed:true", "real-audit:job:83a791f0-e401-448c-b01a-a2c712a188ec:run:83a791f0-e401-448c-b01a-a2c712a188ec:a34701bf-1981-4b80-8530-1c0fa7d6c75f:paths_ok:clean", "real-provider:job:83a791f0-e401-448c-b01a-a2c712a188ec:run:83a791f0-e401-448c-b01a-a2c712a188ec:a34701bf-1981-4b80-8530-1c0fa7d6c75f:role:claude"]
+(1 row)
+
+===== 7. no open unexpected approvals / failed jobs =====
+ approvals_pending 
+-------------------
+                 0
+(1 row)
+
+ jobs_failed 
+-------------
+           0
+(1 row)
+
+   id   | execution_enabled | remote_runner_enabled | owner_stop | paused | hermes_mode  
+--------+-------------------+-----------------------+------------+--------+--------------
+ global | t                 | t                     | f          | f      | observe_only
+(1 row)
+
+===== DRILL-4 VERIFY COMPLETE - paste ALL output back =====

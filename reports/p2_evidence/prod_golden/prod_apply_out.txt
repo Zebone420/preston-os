@@ -1,0 +1,96 @@
+===== APPLY 0020 (runtime service identity) =====
+CREATE TABLE
+ALTER TABLE
+CREATE FUNCTION
+psql:supabase/migrations/0020_runtime_service_identity.sql:74: NOTICE:  policy "runtime_services_select_owner" for relation "public.runtime_services" does not exist, skipping
+DROP POLICY
+CREATE POLICY
+REVOKE
+REVOKE
+DROP POLICY
+CREATE POLICY
+DROP POLICY
+CREATE POLICY
+DROP POLICY
+CREATE POLICY
+DROP POLICY
+CREATE POLICY
+DROP POLICY
+CREATE POLICY
+DROP POLICY
+CREATE POLICY
+psql:supabase/migrations/0020_runtime_service_identity.sql:125: NOTICE:  policy "agents_runtime_ins" for relation "agents" does not exist, skipping
+DROP POLICY
+CREATE POLICY
+psql:supabase/migrations/0020_runtime_service_identity.sql:128: NOTICE:  policy "agents_runtime_upd" for relation "agents" does not exist, skipping
+DROP POLICY
+CREATE POLICY
+psql:supabase/migrations/0020_runtime_service_identity.sql:132: NOTICE:  policy "agents_runtime_sel" for relation "agents" does not exist, skipping
+DROP POLICY
+CREATE POLICY
+psql:supabase/migrations/0020_runtime_service_identity.sql:143: NOTICE:  policy "remote_intake_requests_runtime_sel" for relation "remote_intake_requests" does not exist, skipping
+DROP POLICY
+CREATE POLICY
+psql:supabase/migrations/0020_runtime_service_identity.sql:146: NOTICE:  policy "remote_intake_requests_runtime_upd" for relation "remote_intake_requests" does not exist, skipping
+DROP POLICY
+CREATE POLICY
+DROP POLICY
+CREATE POLICY
+DROP POLICY
+CREATE POLICY
+DROP POLICY
+CREATE POLICY
+DROP POLICY
+CREATE POLICY
+DROP POLICY
+CREATE POLICY
+DROP POLICY
+CREATE POLICY
+DROP POLICY
+CREATE POLICY
+DROP POLICY
+CREATE POLICY
+DROP POLICY
+CREATE POLICY
+DROP POLICY
+CREATE POLICY
+DROP POLICY
+CREATE POLICY
+DROP POLICY
+CREATE POLICY
+DROP POLICY
+CREATE POLICY
+DROP POLICY
+CREATE POLICY
+psql:supabase/migrations/0020_runtime_service_identity.sql:228: NOTICE:  policy "system_controls_runtime_sel" for relation "system_controls" does not exist, skipping
+DROP POLICY
+CREATE POLICY
+===== REGISTER the PROD runtime service user =====
+INSERT 0 1
+ runtime_services_rows_expected_1 
+----------------------------------
+                                1
+(1 row)
+
+===== APPLY 0021 (fail-closed decide audit) =====
+CREATE FUNCTION
+REVOKE
+REVOKE
+GRANT
+===== APPLY 0022 (DB-enforced approval gate) =====
+DO
+REVOKE
+GRANT
+CREATE FUNCTION
+REVOKE
+REVOKE
+GRANT
+===== APPLY 0023 (job classification gate) =====
+CREATE FUNCTION
+REVOKE
+GRANT
+psql:supabase/migrations/0023_job_classification_gate.sql:76: NOTICE:  policy "goal_jobs_runtime_classify" for relation "goal_jobs" does not exist, skipping
+DROP POLICY
+CREATE POLICY
+(the last statement above MUST have printed CREATE POLICY)
+===== APPLY COMPLETE 0020->0023 =====

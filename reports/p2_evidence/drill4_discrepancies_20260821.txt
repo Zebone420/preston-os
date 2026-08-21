@@ -1,0 +1,62 @@
+DRILL-4 EVIDENCE DISCREPANCIES - READ-ONLY RESOLUTION (2026-08-21)
+No production row was mutated. Sources: promoted runtime source at
+promote-0020-0023 (e4511f4), migrations, prior P2 captures.
+
+D-A  goal_jobs.executed = false while evidence_refs say executed:true
+  Meaning of the column: supabase/migrations/0010 line 99-100 declares
+    executed boolean not null default false check (executed = false)
+  i.e. a SCHEMA PIN from the Phase-7 simulation contract. 0017 header
+  explicitly lists "goal_jobs.executed CHECK" as NOT touched; 0022 only
+  re-lists the column. No later migration lifts the CHECK, so the column
+  can never be true in any environment - a write of true would be
+  rejected by Postgres, not silently dropped.
+  Runtime writes: store.ts:102 inserts executed:false ("forced (DB CHECK
+  also pins it)"). driver.ts:596-603 (terminal transitionJobOwned) writes
+  status/attempts/failure_reason/evidence_refs/run lease - it does NOT
+  write executed, by design. No other writer exists (grep of
+  orchestration/* and os-runtime/*: zero writes of executed=true).
+  Where real execution IS recorded (driver.ts:588-591): "A REAL run
+  supplies its own evidence refs (they encode the real outcome and the
+  executed flag)" -> real:goal:..:attempt:N:completed:executed:true, plus
+  the dispatcher log event real_executor_result executed:true. The
+  evidence ref is therefore TRUTHFUL and the row is CONSISTENT with the
+  schema: the column is a contract pin, the ref is the execution record.
+  Prior known-good real jobs show the identical relationship: e.g.
+  p2_tmode-01_20260818_012911.txt jobs c66b5a71, 08a71218, 2e48b6ec,
+  6e354fb6, 97c7be23, 0ef04145 = status completed + evidence
+  ...:completed:executed:true (column necessarily false under the CHECK);
+  Gate-1 cbc54c47 and R-1 649e7278 likewise. The established D-P2-3 pass
+  criterion (scripts/p2/p2_drill_verify.ps1 header) was always
+  "evidence_refs contain real:* completed executed:true ... zero sim:*",
+  never the column.
+  VERDICT: intentional schema semantics, NOT a persistence defect. The
+  "executed = t" wording in this session's drill4_verify expectations
+  (agent harness text) was wrong and is corrected in drill4_verify.sql.txt.
+  Backlog (post-live, optional, NOT done): lifting the 0010 CHECK would be
+  a contract change requiring its own gate.
+
+D-B  risk_class = YELLOW while the narrative said RED
+  Offline probe of the exact objective (vitest, composer + classifyJob,
+  env=production; s9_smoke_20260820.txt) returned:
+    risk_class YELLOW, tier RED, requires_approval true, mobile_gate true,
+    reason objective_names_gated_action
+  policy.ts classifyJob: the hermes_mode MOBILE_GATE marker forces
+  tier RED + mobile_gate + requires_approval=true regardless of the
+  free-text risk score; the stored risk_class is the classifier's risk
+  score (YELLOW). The row (YELLOW, requires_approval=t) is exactly the
+  intended approval-gated mobile-gate classification; 0023's
+  job_gate_required saw the same markers and admitted the gated insert.
+  VERDICT: classification correct and unchanged. Narrative corrected:
+  "approval-gated (policy tier RED / mobile gate, risk_class YELLOW)".
+
+D-C  approvals_pending = 0 although goal 5d25fa51 is still parked
+  Already established in the go-live report s21 (R-1, 2026-08-19): the
+  approvals of 5d25fa51 / job 14b8fe28 were REJECTED on 2026-08-18
+  04:22-04:23Z during the T-mode/CX-5 fail-closed cleanup; a rejected job
+  stays parked by contract and never re-requests approval. The dashboard
+  showed "Open approvals: 0" then and the gateway agreed. The agent's
+  "expect 1 pending" in this session was a wrong expectation, not a
+  change in production. The drill-4 approval itself is 'approved'
+  (decided once), so 0 pending is the correct post-drill state.
+  VERDICT: legitimate, pre-existing; no approval was removed or expired
+  in this session.

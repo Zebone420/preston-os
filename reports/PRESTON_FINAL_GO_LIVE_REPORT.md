@@ -693,3 +693,73 @@ Verdict: NOT YET FULLY LIVE. Remaining path: apply 0020/0021 to
 staging -> agent runs the 9-point behavioral matrix -> owner promotes
 to prod + re-seeds the runtime with the non-owner identity + signs out
 the owner session -> fresh instrumented R-2 (rops-prod-drill-3).
+
+---
+
+## 23. ADDENDUM — GOLDEN SEAL (2026-08-20/21): 0020-0025 LIVE, DRILL-4 PASS
+
+Session 2026-08-20 20:24Z -> 2026-08-21 ~00:30Z. Evidence files under
+reports/p2_evidence/: c3_prep_20260820, s9_smoke_20260820,
+defect_0024_20260820, drill4_ticks_20260820, drill4_discrepancies_20260821,
+prod_golden/ (pre/post schema dumps, preflight, apply, matrix),
+actionC_reconciliation_20260820, r2_forensics*, staging_*_out.
+
+Sequence executed (all owner-ruled, all proven, none repeated):
+- Timer ruling: controlled manual first tick (stop -> tick -> restore).
+- F-1 stale prod build: dist/ rebuilt from promote-0020-0023 (tsc),
+  diff-identical to dry-run; only store.js/driver.js changed (0022 RPC).
+- C-3 PASS: runtime re-seeded from runtime@service.preston (owner, off-
+  chat; token never printed); one manual tick success; store rotates
+  600 preston-worker; env=production.
+- C-4 PASS: owner deleted 11 owner sessions, 0 remain; 2 runtime
+  sessions untouched; timer ticks continued clean unattended.
+- S9 PASS: /api/health 200; ssot+remote status 401 w/o bearer; owner
+  authorized read 200 env=production; n8n bracket accepted+duplicate.
+- F-2 (0024): first service-identity intake rejected
+  persist_failed:owner_required - submit_goal_decomposition kept an
+  is_owner()-only guard. One-line guard delta; staging+prod proofs
+  P-1..P-5 PASS (random authenticated denied; 0023 gate still denies
+  dangerous ungated; tx rollback proven).
+- F-3 (0025): SECURITY INVOKER RPC read runtime_deployment under owner-
+  only RLS -> stamped staging on prod. One SELECT-only policy for
+  is_runtime_service(); staging+prod Q-1..Q-4 PASS; prod P-5 env =
+  production.
+- n8n-20260820-02: consumed -> goal 705da1ac -> GREEN -> executed:true,
+  3 refs, completed (disp-134246), service identity.
+- rops-prod-drill-4 (phone, owner-remote-1): consumed disp-135469 ->
+  goal ffa104f4 / job 83a791f0 approval-gated (tier RED / mobile gate,
+  risk_class YELLOW), parked not_approved; still parked disp-135617;
+  owner phone Approve 23:40Z (screenshots owner-held); timer-driven
+  disp-135653 cleared via clear_approval_gate RPC, executed:true,
+  3 evidence refs, completed; 4+ clean unattended ticks after.
+  Owner DB verification (read-only psql): both intakes consumed; goal
+  environment=production; job completed attempts=1 requires_approval=f;
+  approval approved once; exactly one audit_log
+  orchestration_approval_decision row is_owner=true actor=owner uid
+  (not the runtime uid); runtime session active; owner sessions = phone
+  only; approvals_pending=0; jobs_failed=0. Three evidence
+  discrepancies resolved read-only (drill4_discrepancies_20260821):
+  executed column is the 0010 CHECK pin (not a defect); YELLOW +
+  requires_approval is the intended mobile-gate classification;
+  approvals_pending=0 because 5d25fa51's approvals were rejected
+  2026-08-18.
+
+Standing-owner-credential elimination: the runtime holds only the
+non-owner service session (cannot decide, cannot write controls); all
+owner sessions were revoked and the runtime kept ticking; the retired
+owner token copy on the host is dead (its session family was deleted).
+
+FINAL PERCENTAGES
+| Dimension | % |
+|---|---|
+| Bridge | 100 |
+| SSOT governance | 100 (0019 audit live; activation declared by this seal) |
+| Remote-Live | 100 (R-1 PASS, R-2 superseded by drill-4 PASS, R-3 kill-switch proven in CX/T-mode gates) |
+| n8n | 100 |
+| ChatGPT live read | 100 |
+| Production-Live | 100 |
+| Final multi-agent drill fmad-01 | post-live backlog (not a go-live criterion) |
+
+Golden baseline: tag prod-golden-0025 on the seal commit; production
+host pinned promote-0020-0023 (e4511f4) with rebuilt dist; DB at 0025.
+VERDICT: PRODUCTION-LIVE = 100.

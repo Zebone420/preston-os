@@ -1,0 +1,67 @@
+
+===== [2] INSTALLED policies on goal_jobs (pg_policies, not source) =====
+     policyname      | permissive |      roles      | cmd |                 qual                 |              with_check              
+---------------------+------------+-----------------+-----+--------------------------------------+--------------------------------------
+ goal_jobs_owner_all | PERMISSIVE | {authenticated} | ALL | (is_owner() OR is_runtime_service()) | (is_owner() OR is_runtime_service())
+(1 row)
+
+(expected if hypothesis holds: NO goal_jobs_runtime_classify row at all)
+ runtime_classify_rows_expected_0 
+----------------------------------
+                                0
+(1 row)
+
+
+===== [3] RLS enabled on goal_jobs? =====
+  relname  | rls_enabled_expected_t | force_rls 
+-----------+------------------------+-----------
+ goal_jobs | t                      | f
+(1 row)
+
+
+===== become the RUNTIME (non-owner) identity, as in the matrix =====
+                   set_config                   
+------------------------------------------------
+ {"sub":"6fa4b6d3-1333-4229-b52c-0d85e086be8a"}
+(1 row)
+
+              set_config              
+--------------------------------------
+ 6fa4b6d3-1333-4229-b52c-0d85e086be8a
+(1 row)
+
+SET
+
+===== [4] runtime session context during the test =====
+ current_user  | session_user | row_security | is_runtime_service_expected_t | is_owner_expected_f 
+---------------+--------------+--------------+-------------------------------+---------------------
+ authenticated | postgres     | on           | t                             | f
+(1 row)
+
+
+===== [1] classifier on the EXACT D-1 kind/objective (expected: t) =====
+ d1_job_gate_required_expected_t 
+---------------------------------
+ t
+(1 row)
+
+
+===== [5] exact intended policy expression on the D-1 candidate =====
+(requires_approval=false for D-1, so that OR-term is literal false)
+ d1_with_check_expected_f 
+--------------------------
+ f
+(1 row)
+
+RESET
+ set_config 
+------------
+ 
+(1 row)
+
+ set_config 
+------------
+ 
+(1 row)
+
+===== 0023 DIAGNOSTIC COMPLETE — paste ALL output back =====

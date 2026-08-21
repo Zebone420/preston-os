@@ -1,0 +1,27 @@
+DRILL-4 + n8n-02 ORCHESTRATOR LOG EXCERPT (prod, timer-driven, service identity)
+captured 2026-08-21 00:05Z; line numbers = /var/log/preston/orchestrator.log
+
+652:{"source":"ai-os-dispatcher","level":"info","command":"orchestrate-once","correlationId":"disp-134246-orchestrate-once","event":"remote_intake","selected":1,"consumed":[{"request_id":"n8n-20260820-02","goal_ids":["705da1ac-6a63-4146-b71b-654bb8d9a785"]}],"rejected":[]}
+655:{"source":"ai-os-dispatcher","level":"info","command":"orchestrate-once","correlationId":"disp-134246-orchestrate-once","event":"real_executor_result","outcome":"completed","executed":true,"failure_reason":null,"evidence_count":3,"job_id":"b8c706f5-d871-43c3-912b-09c98ec0afcb","goal_id":"705da1a
+656:{"source":"ai-os-dispatcher","level":"info","command":"orchestrate-once","correlationId":"disp-134246-orchestrate-once","event":"orchestrate_once","goal":"705da1ac-6a63-4146-b71b-654bb8d9a785","cycles":1,"halted":false,"reason":"completed","execution_level":"BOUNDED_CODE_EXECUTION","skippedParke
+657:{"source":"ai-os-dispatcher","level":"info","command":"orchestrate-once","correlationId":"disp-135469-orchestrate-once","event":"remote_intake","selected":1,"consumed":[{"request_id":"rops-prod-drill-4","goal_ids":["ffa104f4-3e74-4b82-abd4-e0ca73162f88"]}],"rejected":[]}
+660:{"source":"ai-os-dispatcher","level":"info","command":"orchestrate-once","correlationId":"disp-135469-orchestrate-once","event":"orchestrate_once","goal":"ffa104f4-3e74-4b82-abd4-e0ca73162f88","cycles":1,"halted":false,"reason":"awaiting_owner_approval","execution_level":"BOUNDED_CODE_EXECUTION"
+666:{"source":"ai-os-dispatcher","level":"info","command":"orchestrate-once","correlationId":"disp-135653-orchestrate-once","event":"real_executor_result","outcome":"completed","executed":true,"failure_reason":null,"evidence_count":3,"job_id":"83a791f0-e401-448c-b01a-a2c712a188ec","goal_id":"ffa104f
+667:{"source":"ai-os-dispatcher","level":"info","command":"orchestrate-once","correlationId":"disp-135653-orchestrate-once","event":"orchestrate_once","goal":"ffa104f4-3e74-4b82-abd4-e0ca73162f88","cycles":1,"halted":false,"reason":"completed","execution_level":"BOUNDED_CODE_EXECUTION","skippedParke
+
+2026-08-20T23:17:43+00:00 preston-agent-prod systemd[1]: preston-orchestrator.service: Deactivated successfull
+2026-08-20T23:17:43+00:00 preston-agent-prod systemd[1]: Finished preston-orchestrator.service - Preston AI OS
+2026-08-20T23:28:01+00:00 preston-agent-prod systemd[1]: preston-orchestrator.service: Deactivated successfull
+2026-08-20T23:28:01+00:00 preston-agent-prod systemd[1]: Finished preston-orchestrator.service - Preston AI OS
+2026-08-20T23:33:09+00:00 preston-agent-prod systemd[1]: preston-orchestrator.service: Deactivated successfull
+2026-08-20T23:33:09+00:00 preston-agent-prod systemd[1]: Finished preston-orchestrator.service - Preston AI OS
+2026-08-20T23:38:13+00:00 preston-agent-prod systemd[1]: preston-orchestrator.service: Deactivated successfull
+2026-08-20T23:38:13+00:00 preston-agent-prod systemd[1]: Finished preston-orchestrator.service - Preston AI OS
+2026-08-20T23:46:41+00:00 preston-agent-prod systemd[1]: preston-orchestrator.service: Deactivated successfull
+2026-08-20T23:46:41+00:00 preston-agent-prod systemd[1]: Finished preston-orchestrator.service - Preston AI OS
+2026-08-20T23:52:11+00:00 preston-agent-prod systemd[1]: preston-orchestrator.service: Deactivated successfull
+2026-08-20T23:52:11+00:00 preston-agent-prod systemd[1]: Finished preston-orchestrator.service - Preston AI OS
+2026-08-20T23:57:42+00:00 preston-agent-prod systemd[1]: preston-orchestrator.service: Deactivated successfull
+2026-08-20T23:57:42+00:00 preston-agent-prod systemd[1]: Finished preston-orchestrator.service - Preston AI OS
+2026-08-21T00:02:52+00:00 preston-agent-prod systemd[1]: preston-orchestrator.service: Deactivated successfull
+2026-08-21T00:02:52+00:00 preston-agent-prod systemd[1]: Finished preston-orchestrator.service - Preston AI OS
