@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { controlSurfaceEnabled } from '@/lib/preston-control/auth';
-import { buildTokenForward, filterTokenResponse } from '@/lib/preston-control/gpt-bridge';
+import { buildTokenForward, filterTokenResponse, upstreamErrorTag } from '@/lib/preston-control/gpt-bridge';
 import { publicOrigin } from '@/lib/preston-control/metadata';
 
 // Preston Control - GPT Actions PKCE bridge: token endpoint. ChatGPT's
@@ -50,9 +50,9 @@ export async function POST(request: Request) {
   let json: unknown = null;
   try { json = await upstream.json(); } catch { json = null; }
   if (!upstream.ok) {
-    const err = json && typeof json === 'object' && typeof (json as Record<string, unknown>).error === 'string'
-      ? String((json as Record<string, unknown>).error) : 'invalid_grant';
-    return NextResponse.json({ error: /^[a-z_]{1,40}$/.test(err) ? err : 'invalid_grant' }, { status: 400 });
+    // Supabase Auth answers in two shapes: OAuth ({error}) and GoTrue
+    // ({error_code, msg}). Surface only the sanitized TAG (never msg/body).
+    return NextResponse.json({ error: upstreamErrorTag(json) }, { status: 400 });
   }
   const filtered = filterTokenResponse(json);
   if (!filtered) return NextResponse.json({ error: 'invalid_grant' }, { status: 400 });

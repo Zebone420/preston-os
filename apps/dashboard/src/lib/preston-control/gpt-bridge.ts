@@ -246,6 +246,42 @@ export function buildTokenForward(
   return { ok: true, forward: { url: supabaseAuthBase(env) + '/oauth/token', body } };
 }
 
+// Upstream (Supabase Auth) error bodies come in two shapes: OAuth
+// `{error}` and GoTrue `{error_code, msg}`. Reduce either to a sanitized tag;
+// never forward `msg`/`error_description` or any other body content.
+export function upstreamErrorTag(upstream: unknown): string {
+  if (upstream && typeof upstream === 'object') {
+    const u = upstream as Record<string, unknown>;
+    const raw = typeof u.error === 'string' ? u.error
+      : typeof u.error_code === 'string' ? u.error_code : '';
+    if (/^[a-z_]{1,40}$/.test(raw)) return raw;
+  }
+  return 'invalid_grant';
+}
+
+// Owner-facing diagnostic (see app/oauth/gpt/diag): does the configured client
+// id/secret pair authenticate at the Supabase token endpoint? Sends a bogus
+// refresh token on purpose; the answer distinguishes "credentials refused"
+// (invalid_credentials) from "credentials accepted, grant refused"
+// (invalid_grant / other). No secret leaves the server.
+export function buildCredentialProbe(env: Env): TokenForward | null {
+  if (!bridgeConfigured(env)) return null;
+  const body = new URLSearchParams();
+  body.set('grant_type', 'refresh_token');
+  body.set('refresh_token', 'preston-control-credential-probe');
+  body.set('client_id', String(env[GPT_CLIENT_ID_ENV]));
+  body.set('client_secret', String(env[GPT_CLIENT_SECRET_ENV]));
+  return { url: supabaseAuthBase(env) + '/oauth/token', body };
+}
+
+export function classifyCredentialProbe(status: number, upstream: unknown): 'valid' | 'invalid' | 'unknown' {
+  const tag = upstreamErrorTag(upstream);
+  if (status === 200) return 'valid';
+  if (tag === 'invalid_credentials' || tag === 'invalid_client') return 'invalid';
+  if (status === 400 || status === 401) return 'valid'; // credentials passed; bogus grant refused
+  return 'unknown';
+}
+
 // Only the fields ChatGPT needs pass through; nothing else (id_token, user
 // objects, provider tokens) is forwarded into ChatGPT's token store.
 export function filterTokenResponse(upstream: unknown): Record<string, unknown> | null {

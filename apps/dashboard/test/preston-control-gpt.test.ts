@@ -234,6 +234,9 @@ describe('GPT Actions REST surface', () => {
     expect(flow.tokenUrl).toBe(ORIGIN + '/oauth/gpt/token');
     expect(JSON.stringify(doc)).not.toContain(CONF);
     expect(JSON.stringify(doc).length).toBeLessThan(100_000);
+    for (const o of ops as unknown as Array<{ responses: Record<string, { content?: Record<string, { schema: { $ref?: string } }> }> }>) {
+      expect(o.responses['200'].content!['application/json'].schema.$ref).toBe('#/components/schemas/Result');
+    }
     delete process.env.PRESTON_CONTROL_GPT_OAUTH_CLIENT_ID;
     expect((await mod.GET(req('/api/control/openapi.json'))).status).toBe(404);
   });
@@ -398,5 +401,44 @@ describe('wiring', () => {
     for (const f of ['lib/preston-control/http.ts', 'lib/preston-control/gpt-bridge.ts', 'lib/preston-control/openapi.ts']) {
       expect(readFileSync(join(root, f), 'utf8')).not.toMatch(/child_process|execSync|spawn\(|SERVICE_KEY|service_role/);
     }
+  });
+});
+
+describe('bridge diagnostics + upstream error mapping', () => {
+  it('upstreamErrorTag handles OAuth and GoTrue shapes and never leaks msg', async () => {
+    const { upstreamErrorTag, classifyCredentialProbe, buildCredentialProbe } = await import('../src/lib/preston-control/gpt-bridge');
+    expect(upstreamErrorTag({ error: 'invalid_grant', error_description: 'secret stuff' })).toBe('invalid_grant');
+    expect(upstreamErrorTag({ code: 400, error_code: 'invalid_credentials', msg: 'invalid client credentials' })).toBe('invalid_credentials');
+    expect(upstreamErrorTag({ error_code: 'Bad Thing!' })).toBe('invalid_grant');
+    expect(upstreamErrorTag('<html>')).toBe('invalid_grant');
+    expect(classifyCredentialProbe(400, { error_code: 'invalid_credentials' })).toBe('invalid');
+    expect(classifyCredentialProbe(400, { error_code: 'invalid_grant' })).toBe('valid');
+    expect(classifyCredentialProbe(200, { access_token: 'x' })).toBe('valid');
+    expect(classifyCredentialProbe(503, null)).toBe('unknown');
+    const probe = buildCredentialProbe(ENV_ON)!;
+    expect(probe.url).toBe('https://proj.supabase.co/auth/v1/oauth/token');
+    expect(probe.body.get('grant_type')).toBe('refresh_token');
+    expect(buildCredentialProbe({ ...ENV_ON, PRESTON_CONTROL_GPT_BRIDGE_KEY: 'short' })).toBeNull();
+  });
+
+  it('token route returns the GoTrue error_code tag (not msg) on upstream refusal', async () => {
+    const tok = await import('../src/app/oauth/gpt/token/route');
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(JSON.stringify({ code: 400, error_code: 'invalid_credentials', msg: 'invalid client credentials' }), { status: 400 }));
+    const body = new URLSearchParams({ grant_type: 'refresh_token', refresh_token: 'rt', client_id: GPT_CLIENT, client_secret: CONF }).toString();
+    const r = await tok.POST(new Request(`${ORIGIN}/oauth/gpt/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'content-length': String(body.length) }, body }));
+    expect(r.status).toBe(400);
+    const t = await r.text();
+    expect(t).toBe('{"error":"invalid_credentials"}');
+    vi.restoreAllMocks();
+  });
+
+  it('diag route: 403 without an owner session; never includes secret values', async () => {
+    vi.doMock('@/lib/ai-os/owner-context', () => ({ resolveOwner: async () => null }));
+    const diag = await import('../src/app/oauth/gpt/diag/route');
+    const r = await diag.GET(new Request(`${ORIGIN}/oauth/gpt/diag`));
+    expect(r.status).toBe(403);
+    vi.doUnmock('@/lib/ai-os/owner-context');
+    const src = readFileSync(join(__dirname, '..', 'src', 'app', 'oauth', 'gpt', 'diag', 'route.ts'), 'utf8');
+    expect(src).not.toMatch(/CLIENT_SECRET|BRIDGE_KEY/);
   });
 });

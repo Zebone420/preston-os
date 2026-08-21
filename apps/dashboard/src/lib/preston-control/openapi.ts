@@ -50,6 +50,14 @@ export function buildOpenApiDocument(origin: string): Record<string, unknown> {
       },
       schemas: {
         Error: okError,
+        // Response bodies are Preston's projected objects; exact fields vary by
+        // operation, so they are documented as open objects (the GPT editor
+        // requires a `properties` block for object schemas).
+        Result: {
+          type: 'object',
+          properties: { ok: { type: 'boolean' }, status: { type: 'string' } },
+          additionalProperties: true,
+        },
         SubmitGoalRequest: {
           type: 'object',
           additionalProperties: false,
@@ -82,7 +90,7 @@ export function buildOpenApiDocument(origin: string): Record<string, unknown> {
             'approvals, failures, dead letters, needs_attention. Use for: is Preston live, what is running, ' +
             'what failed, what is waiting, what needs my attention, what did Claude finish.',
           'x-openai-isConsequential': false,
-          responses: { '200': { description: 'Status snapshot', content: { 'application/json': { schema: { type: 'object' } } } }, '401': { description: 'Not authenticated' }, '403': { description: 'Not the owner' } },
+          responses: { '200': { description: 'Status snapshot', content: { 'application/json': { schema: { $ref: '#/components/schemas/Result' } } } }, '401': { description: 'Not authenticated' }, '403': { description: 'Not the owner' } },
         },
       },
       '/api/control/goals': {
@@ -95,7 +103,7 @@ export function buildOpenApiDocument(origin: string): Record<string, unknown> {
             'Idempotent on request_id. Returns accepted | duplicate | rejected with goal and job ids.',
           'x-openai-isConsequential': true,
           requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/SubmitGoalRequest' } } } },
-          responses: { '200': { description: 'Intake result', content: { 'application/json': { schema: { type: 'object' } } } }, '400': { description: 'Invalid input' }, '401': { description: 'Not authenticated' }, '403': { description: 'Not the owner' } },
+          responses: { '200': { description: 'Intake result', content: { 'application/json': { schema: { $ref: '#/components/schemas/Result' } } } }, '400': { description: 'Invalid input' }, '401': { description: 'Not authenticated' }, '403': { description: 'Not the owner' } },
         },
       },
       '/api/control/goals/{goal_id}': {
@@ -105,7 +113,7 @@ export function buildOpenApiDocument(origin: string): Record<string, unknown> {
           description: 'Read-only: one goal with its jobs, status counts, pending approvals and evidence refs.',
           'x-openai-isConsequential': false,
           parameters: [{ name: 'goal_id', in: 'path', required: true, schema: uuid }],
-          responses: { '200': { description: 'Goal detail', content: { 'application/json': { schema: { type: 'object' } } } }, '400': { description: 'Invalid id' }, '401': { description: 'Not authenticated' } },
+          responses: { '200': { description: 'Goal detail', content: { 'application/json': { schema: { $ref: '#/components/schemas/Result' } } } }, '400': { description: 'Invalid id' }, '401': { description: 'Not authenticated' } },
         },
       },
       '/api/control/approvals': {
@@ -114,7 +122,7 @@ export function buildOpenApiDocument(origin: string): Record<string, unknown> {
           summary: 'List pending owner approvals',
           description: 'Read-only: pending approvals (approval_id, goal/job, action, reason, risk, environment, expiry, decision_open). Never returns credentials.',
           'x-openai-isConsequential': false,
-          responses: { '200': { description: 'Pending approvals', content: { 'application/json': { schema: { type: 'object' } } } }, '401': { description: 'Not authenticated' } },
+          responses: { '200': { description: 'Pending approvals', content: { 'application/json': { schema: { $ref: '#/components/schemas/Result' } } } }, '401': { description: 'Not authenticated' } },
         },
       },
       '/api/control/approvals/{approval_id}/decision': {
@@ -128,7 +136,7 @@ export function buildOpenApiDocument(origin: string): Record<string, unknown> {
           'x-openai-isConsequential': true,
           parameters: [{ name: 'approval_id', in: 'path', required: true, schema: { type: 'string', pattern: RUNTIME_ID_PATTERN } }],
           requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/DecideApprovalRequest' } } } },
-          responses: { '200': { description: 'Decision result', content: { 'application/json': { schema: { type: 'object' } } } }, '400': { description: 'Invalid input' }, '401': { description: 'Not authenticated' }, '403': { description: 'Not the owner' } },
+          responses: { '200': { description: 'Decision result', content: { 'application/json': { schema: { $ref: '#/components/schemas/Result' } } } }, '400': { description: 'Invalid input' }, '401': { description: 'Not authenticated' }, '403': { description: 'Not the owner' } },
         },
       },
       '/api/control/evidence': {
@@ -141,7 +149,7 @@ export function buildOpenApiDocument(origin: string): Record<string, unknown> {
             { name: 'goal_id', in: 'query', required: false, schema: uuid },
             { name: 'job_id', in: 'query', required: false, schema: uuid },
           ],
-          responses: { '200': { description: 'Evidence items', content: { 'application/json': { schema: { type: 'object' } } } }, '400': { description: 'Invalid input' }, '401': { description: 'Not authenticated' } },
+          responses: { '200': { description: 'Evidence items', content: { 'application/json': { schema: { $ref: '#/components/schemas/Result' } } } }, '400': { description: 'Invalid input' }, '401': { description: 'Not authenticated' } },
         },
       },
     },
