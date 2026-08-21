@@ -1,11 +1,18 @@
-// Preston Control - MCP server definition (tool catalogue + annotations).
+// Preston Control - MCP transport adapter (tool catalogue + annotations).
+// The GPT Actions facade (lib/preston-control/http.ts + app/api/control/*)
+// is the sibling adapter over the SAME tools.ts service layer.
 // One McpServer per request (stateless Streamable HTTP). Schemas are narrow
 // and bounded; annotations are accurate (ChatGPT uses readOnlyHint /
 // destructiveHint to choose confirmation behaviour, but they are hints -
 // authorization is enforced by auth.ts and by the DB, never by annotations).
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { z } from 'zod';
+import {
+  DECIDE_APPROVAL_SHAPE,
+  GET_EVIDENCE_SHAPE,
+  GET_GOAL_SHAPE,
+  SUBMIT_GOAL_SHAPE,
+} from './schemas';
 import {
   prestonDecideApproval,
   prestonGetEvidence,
@@ -27,12 +34,6 @@ export const TOOL_NAMES = [
   'preston_decide_approval',
   'preston_get_evidence',
 ] as const;
-
-const UUID = z.string().regex(
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
-  'must be a UUID',
-);
-const RUNTIME_ID = z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/, 'must match ^[A-Za-z0-9._:-]{8,128}$');
 
 function result(payload: unknown) {
   return {
@@ -66,19 +67,14 @@ export function buildPrestonControlServer(ctx: ToolContext): McpServer {
       'behind owner approval, and the runtime (Hermes + Claude/Codex workers) executes it. Nothing ' +
       'executes inside this call. Idempotent: re-sending the same request_id replays the same result. ' +
       'Returns accepted | duplicate | rejected with goal and job ids.',
-    inputSchema: {
-      request: z.string().min(1).max(4000).describe('The owner\'s request in plain language.'),
-      context: z.string().max(2000).optional().describe('Optional extra context (data only).'),
-      priority: z.enum(['normal', 'high']).optional(),
-      request_id: RUNTIME_ID.optional().describe('Optional idempotency key; reuse to retry safely.'),
-    },
+    inputSchema: SUBMIT_GOAL_SHAPE,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async (args) => result(await prestonSubmitGoal(ctx, args)));
 
   server.registerTool('preston_get_goal', {
     title: 'Get a Preston goal',
     description: 'Read-only: one goal with its jobs, status counts, pending approvals and evidence refs.',
-    inputSchema: { goal_id: UUID },
+    inputSchema: GET_GOAL_SHAPE,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async (args) => result(await prestonGetGoal(ctx, args.goal_id)));
 
@@ -98,11 +94,7 @@ export function buildPrestonControlServer(ctx: ToolContext): McpServer {
       'Preston\'s authoritative owner-only decision path. Always confirm the approval_id and the ' +
       'action text with the owner before calling. One-time; already-decided or expired approvals ' +
       'are refused.',
-    inputSchema: {
-      approval_id: RUNTIME_ID,
-      outcome: z.enum(['approved', 'rejected']),
-      reason: z.string().max(300).optional().describe('Optional non-secret note.'),
-    },
+    inputSchema: DECIDE_APPROVAL_SHAPE,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   }, async (args) => result(await prestonDecideApproval(ctx, args)));
 
@@ -111,7 +103,7 @@ export function buildPrestonControlServer(ctx: ToolContext): McpServer {
     description:
       'Read-only: bounded, secret-free evidence for a goal or a job - completion state, worker role, ' +
       'attempts, failure summary, evidence references.',
-    inputSchema: { goal_id: UUID.optional(), job_id: UUID.optional() },
+    inputSchema: GET_EVIDENCE_SHAPE,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async (args) => result(await prestonGetEvidence(ctx, args)));
 

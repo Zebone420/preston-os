@@ -12,12 +12,14 @@
 // Gates, in order (each one fails closed):
 //   1. PRESTON_CONTROL_ENABLED must be exactly 'true'.
 //   2. SUPABASE_RUNTIME_ENV must be on the remote-surface allowlist.
-//   3. PRESTON_CONTROL_OAUTH_CLIENT_ID must be configured (non-secret id).
+//   3. The SURFACE's OAuth client id must be configured (non-secret id):
+//      PRESTON_CONTROL_OAUTH_CLIENT_ID (MCP) / PRESTON_CONTROL_GPT_OAUTH_CLIENT_ID
+//      (Custom GPT Actions).
 //   4. A Bearer token must be present and bounded in length.
 //   5. The token must verify against Supabase Auth (signature, expiry).
-//   6. The token's claims must carry client_id == configured client id
-//      (a dashboard cookie-session JWT or a runtime-service JWT is refused:
-//      only tokens minted THROUGH the Preston Control OAuth client pass).
+//   6. The token's claims must carry client_id == THIS surface's client id
+//      (a dashboard cookie-session JWT, a runtime-service JWT, or a token
+//      minted for the OTHER surface's client is refused).
 //   7. The authenticated email must be on OWNER_EMAIL_ALLOWLIST (app layer).
 //   8. public.is_owner() must return true for the token (DB layer, the
 //      authority RLS and the decide RPC trust).
@@ -28,7 +30,27 @@ import { remoteSurfaceEnvAllowed } from '@/lib/ai-os/remote-surface-env';
 
 export const PRESTON_CONTROL_ENABLED_ENV = 'PRESTON_CONTROL_ENABLED';
 export const PRESTON_CONTROL_CLIENT_ID_ENV = 'PRESTON_CONTROL_OAUTH_CLIENT_ID';
+export const PRESTON_CONTROL_GPT_CLIENT_ID_ENV = 'PRESTON_CONTROL_GPT_OAUTH_CLIENT_ID';
 export const MAX_BEARER_LENGTH = 8192;
+
+// Two transport adapters share ONE service layer but hold SEPARATE OAuth
+// clients so either surface can be revoked independently:
+//   'mcp' - ChatGPT developer-mode MCP plugin (web/desktop)   -> /mcp
+//   'gpt' - private Custom GPT Actions facade (incl. Android) -> /api/control/*
+// A token minted for one surface's client is refused by the other.
+export type ControlSurface = 'mcp' | 'gpt';
+
+export function surfaceClientIdEnv(surface: ControlSurface): string {
+  return surface === 'gpt' ? PRESTON_CONTROL_GPT_CLIENT_ID_ENV : PRESTON_CONTROL_CLIENT_ID_ENV;
+}
+
+// Every registered Preston Control client id (both surfaces), for the
+// consent page, which may approve a grant for either of them and nothing else.
+export function registeredClientIds(env: Env): string[] {
+  return [PRESTON_CONTROL_CLIENT_ID_ENV, PRESTON_CONTROL_GPT_CLIENT_ID_ENV]
+    .map((k) => String(env[k] ?? '').trim())
+    .filter((v) => v.length > 0);
+}
 
 export type Env = Record<string, string | undefined>;
 
@@ -82,21 +104,22 @@ export function bearerFrom(authorizationHeader: string | null): string {
   return h.startsWith('Bearer ') ? h.slice('Bearer '.length).trim() : '';
 }
 
-export function controlSurfaceEnabled(env: Env): boolean {
+export function controlSurfaceEnabled(env: Env, surface: ControlSurface = 'mcp'): boolean {
   return env[PRESTON_CONTROL_ENABLED_ENV] === 'true'
     && remoteSurfaceEnvAllowed(env['SUPABASE_RUNTIME_ENV'])
-    && Boolean(env[PRESTON_CONTROL_CLIENT_ID_ENV]);
+    && Boolean(env[surfaceClientIdEnv(surface)]);
 }
 
 export async function authenticateControlRequest(
   authorizationHeader: string | null,
   env: Env,
   deps: AuthDeps,
+  surface: ControlSurface = 'mcp',
 ): Promise<AuthResult> {
   if (env[PRESTON_CONTROL_ENABLED_ENV] !== 'true') {
     return { ok: false, reason: 'disabled', httpStatus: 503 };
   }
-  const expectedClientId = String(env[PRESTON_CONTROL_CLIENT_ID_ENV] ?? '').trim();
+  const expectedClientId = String(env[surfaceClientIdEnv(surface)] ?? '').trim();
   if (!remoteSurfaceEnvAllowed(env['SUPABASE_RUNTIME_ENV']) || !expectedClientId) {
     return { ok: false, reason: 'unconfigured', httpStatus: 503 };
   }

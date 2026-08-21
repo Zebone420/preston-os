@@ -1,118 +1,148 @@
-# Preston Control — ChatGPT MCP Control Interface v1
+# Preston Control — ChatGPT Control Interface v1 (dual adapter: MCP + GPT Actions)
 
 **Status:** built + unit/E2E tested on dev; NOT enabled in any environment. Post-live workstream over golden baseline `prod-golden-0025` (`e17287b1acc413b01b3acb36f32832c74f448292`). The golden architecture is unchanged: no migration, no new identity, no new RPC.
 
-**Control path:** Owner → ChatGPT → Preston Control (`/mcp`) → Preston AI OS (composer / approvals / read model) → Hermes / orchestrator → Claude / Codex → evidence → ChatGPT.
+**Revision 2 (2026-08-20, owner-directed):** one backend, two transport adapters — the MCP plugin (web/desktop) and a private Custom GPT Actions facade (the only ChatGPT mechanism that reaches the Android app). The MCP work from revision 1 is preserved unchanged.
 
-## 1. Architecture review verdict (2026-08-20)
+**Control path:** Owner → ChatGPT → Preston Control (`/mcp` **or** `/api/control/*`) → Preston AI OS (composer / approvals / read model) → Hermes / orchestrator → Claude / Codex → evidence → ChatGPT.
 
-**APPROVED — proceed as written.** Sources: OpenAI developer docs (`developers.openai.com/plugins/*`, `/api/docs/guides/developer-mode`, `/plugins/build/auth`), OpenAI help center (articles 12584461, 11487775, 8554397, 20001256), Supabase docs (`/docs/guides/auth/oauth-server/*`).
+## 1. Architecture review (2026-08-20)
 
-| Option | Verdict | Why |
-|---|---|---|
-| **Private MCP server via ChatGPT Developer mode (chosen)** | Best | OpenAI's current single-user path: Settings → Security and login → Developer mode → chatgpt.com/plugins → add remote MCP server → personal plugin. No directory submission. Streamable HTTP at `/mcp`; OAuth 2.1 auth-code + PKCE with RFC 9728 discovery; static client credentials accepted (DCR can stay off). `search`/`fetch` no longer required. |
-| ChatGPT App / Apps SDK | Not needed | UI widgets are optional; headless tools are sufficient and recommended ("keep tools useful without the component"). |
-| Direct API / bearer | Rejected | Requires manual token handling (the thing being eliminated) and cannot act as the owner identity. |
-| Custom GPT Actions | Closed | "New GPT creation and publishing are not available on personal ChatGPT accounts, including Free, Go, Plus, and Pro." Only editing a pre-existing GPT remains. |
-| Secure MCP Tunnel (2026) | Not needed | Avoids a public endpoint but needs a persistent tunnel client; Vercel is already public and hardened. |
+**Revision 1 verdict (MCP): APPROVED — proceed as written.** OpenAI's current single-user private path is Developer mode → remote MCP server → personal plugin; Streamable HTTP at `/mcp`, OAuth 2.1 auth-code + PKCE with RFC 9728 discovery; no directory submission.
 
-**Auth:** Supabase Auth OAuth 2.1 Server (beta, all plans). Its access tokens are ordinary Supabase JWTs (`sub`, `aud: authenticated`, `client_id`), so `auth.uid()`, RLS and `is_owner()` work unchanged — `decide_orchestration_approval` runs as the real owner. No other option preserves owner attribution.
+**Revision 2 (owner review):** MCP apps are web-only, so MCP alone cannot satisfy the HARD Galaxy requirement. The dual adapter keeps MCP and adds a GPT Actions facade over the same service layer. Two facts verified against official docs on 2026-08-20 that the owner must weigh before activation:
 
-**Known product limits (not architecture defects):**
-1. Android: help center (updated 2026-08-19) — "Are MCP apps available on mobile? No — web only." See §7.
-2. Plus/Pro write tools: developer docs say read+write with confirmation; help center says writes are Business/Enterprise/Edu. Resolved empirically in Phase F.
+1. **New GPT creation on personal plans.** help.openai.com/8554397 (updated ~2026-08-15): *"New GPT creation and publishing are not available on personal ChatGPT accounts, including Free, Go, Plus, and Pro. Existing GPTs remain available to use and can still be edited if existing plan and permission requirements are met."* and 8554407: *"New GPT creation is unavailable on personal ChatGPT accounts, regardless of subscription."* → On the Pro account the Actions facade is reachable **only by editing a GPT that already exists** (the master plan's Custom GPT architect qualifies if it still exists) or from a Business workspace. Mobile use is documented: *"Mobile apps support using GPTs but do not support creating them."* Whether an OAuth-Action sign-in completes inside the Android app is **not officially stated** (a 2025 community thread reports failures) — hence the empirical Galaxy gate.
+2. **PKCE mismatch.** GPT Actions OAuth documents a plain authorization-code exchange (`client_id`, `client_secret`, `code`, `redirect_uri`; no `code_challenge`), while Supabase's OAuth server lists `code_challenge` under *Required parameters* and offers only *"Authorization Code with PKCE"*. A direct GPT→Supabase configuration is therefore expected to fail. The facade ships a **stateless PKCE bridge** (`/oauth/gpt/{authorize,callback,token}`) that adds PKCE and forwards to Supabase; the token ChatGPT receives is still the owner's real Supabase JWT.
+
+Other facts: "Actions are not available for Pro mode" refers to Pro *models* (the editor offers non-Pro models that support actions). `x-openai-isConsequential:true` = "must always prompt the user for confirmation"; GET defaults to false, other methods to true. Limits: 45 s round trip, 100 000-char payloads, 300-char summaries, 700-char parameter descriptions.
 
 ## 2. Files
 
 | Path | Role |
 |---|---|
-| `apps/dashboard/src/lib/preston-control/auth.ts` | 8 fail-closed gates → RLS-bound owner client |
-| `apps/dashboard/src/lib/preston-control/tools.ts` | 6 handlers, allowlist projections, secret screen |
-| `apps/dashboard/src/lib/preston-control/server.ts` | McpServer + zod schemas + annotations |
+| `apps/dashboard/src/lib/preston-control/auth.ts` | 8 fail-closed gates → RLS-bound owner client; `surface: 'mcp' \| 'gpt'` selects the client id |
+| `apps/dashboard/src/lib/preston-control/tools.ts` | **service layer** — 6 handlers, allowlist projections, secret screen (unchanged) |
+| `apps/dashboard/src/lib/preston-control/schemas.ts` | shared zod input schemas (MCP + REST) |
+| `apps/dashboard/src/lib/preston-control/server.ts` | MCP adapter: McpServer + annotations |
+| `apps/dashboard/src/lib/preston-control/http.ts` | REST adapter helper (gates → zod → tools), shared `clientFor` |
+| `apps/dashboard/src/lib/preston-control/openapi.ts` | bounded OpenAPI 3.1 document |
+| `apps/dashboard/src/lib/preston-control/gpt-bridge.ts` | stateless PKCE bridge logic |
 | `apps/dashboard/src/lib/preston-control/metadata.ts` | RFC 9728 document |
-| `apps/dashboard/src/lib/preston-control/consent.ts` | consent gate (client/scope/owner) + safe `next` |
-| `apps/dashboard/src/app/mcp/route.ts` | Streamable HTTP endpoint (stateless, JSON responses) |
-| `apps/dashboard/src/app/.well-known/oauth-protected-resource/{,mcp/}route.ts` | discovery |
-| `apps/dashboard/src/app/oauth/consent/{page.tsx,actions.ts}` | owner consent UI for the Supabase OAuth server |
-| `apps/dashboard/src/proxy.ts` | matcher excludes `/mcp`, `/.well-known/`; carries `next` for consent |
-| `apps/dashboard/src/app/login/page.tsx` | honours validated consent `next` |
-| `apps/dashboard/src/components/nav/nav-config.ts` | `/oauth/consent` is a non-nav route |
-| `env.template` | `PRESTON_CONTROL_ENABLED`, `PRESTON_CONTROL_OAUTH_CLIENT_ID`, `PRESTON_CONTROL_PUBLIC_ORIGIN` |
-| `apps/dashboard/test/preston-control-{auth,tools,route}.test.ts` | 46 tests |
+| `apps/dashboard/src/lib/preston-control/consent.ts` | consent gate (either registered client / scope / owner) + safe `next` |
+| `apps/dashboard/src/app/mcp/route.ts` | MCP Streamable HTTP endpoint |
+| `apps/dashboard/src/app/.well-known/oauth-protected-resource/{,mcp/}route.ts` | MCP discovery |
+| `apps/dashboard/src/app/api/control/{status,goals,goals/[goal_id],approvals,approvals/[approval_id]/decision,evidence,openapi.json}/route.ts` | GPT Actions facade |
+| `apps/dashboard/src/app/oauth/gpt/{authorize,callback,token}/route.ts` | PKCE bridge endpoints |
+| `apps/dashboard/src/app/oauth/consent/{page.tsx,actions.ts}` | owner consent UI (both clients) |
+| `apps/dashboard/src/proxy.ts` | matcher excludes `/mcp`, `/api/control`, `/oauth/gpt/`, `/.well-known/`; carries `next` for consent |
+| `apps/dashboard/src/app/login/page.tsx`, `components/nav/nav-config.ts` | consent continuation; non-nav route |
+| `env.template` | `PRESTON_CONTROL_ENABLED`, `PRESTON_CONTROL_OAUTH_CLIENT_ID`, `PRESTON_CONTROL_GPT_OAUTH_CLIENT_ID`, `PRESTON_CONTROL_GPT_OAUTH_CLIENT_SECRET`, `PRESTON_CONTROL_GPT_BRIDGE_KEY`, `PRESTON_CONTROL_PUBLIC_ORIGIN` |
+| `apps/dashboard/test/preston-control-{auth,tools,route,gpt}.test.ts` | 63 tests |
 | `docs/PRESTON_CONTROL_THREAT_MODEL_v1.md` | threat model |
 
-Dependencies added: `@modelcontextprotocol/sdk@1.30.0`, `zod@4.4.3`.
+Dependencies: `@modelcontextprotocol/sdk@1.30.0`, `zod@4.4.3`.
 
-## 3. Tool surface (v1)
+**Reused unchanged by the GPT surface:** `tools.ts`, `metadata.ts`, the consent page, every MCP file. `auth.ts` gained a `surface` parameter (logic identical); `consent.ts` accepts either registered client. No business logic was copied — each REST route is 10–20 lines calling the same handler with the same schema.
 
-| Tool | Kind | Maps onto | Annotations |
-|---|---|---|---|
-| `preston_status` | read | `readSystemControlsChecked`, `loadOrchestrationReadModel`, `loadLatestHermesStatus` | readOnly, idempotent |
-| `preston_submit_goal` | write | `composeRequest` → `confirmComposedRequest` (→ `submit_goal_decomposition`) | idempotent on `request_id` |
-| `preston_get_goal` | read | `readGoalById`, `listJobsForGoal`, `listOpenApprovals` | readOnly |
-| `preston_list_approvals` | read | `listOpenApprovals` + `decision_open` | readOnly |
-| `preston_decide_approval` | consequential write | `decide_orchestration_approval` RPC (owner-only, nonce, 0021 audit) | destructive, non-idempotent → ChatGPT confirmation |
-| `preston_get_evidence` | read | `goal_jobs.evidence_refs` / `failure_reason` | readOnly |
+## 3. Service layer and adapters
 
-Excluded by construction: shell, SSH, SQL, table mutation, filesystem, deploys, policy edits, credentials, payments, customer sends, kill-switch changes, service role.
+```
+                ┌── MCP adapter   server.ts + app/mcp/route.ts      (OAuth client A; web/desktop)
+ChatGPT ────────┤
+                └── REST adapter  http.ts + app/api/control/*       (OAuth client B; Custom GPT incl. Android)
+                         │ both: auth.ts gates 1-8 (surface-specific client_id) → RLS-bound OWNER client
+                         ▼
+                tools.ts (service layer) → composer / read model / decide RPC → runtime (unchanged)
+```
 
-## 4. Authentication flow
+| Operation | MCP tool | REST (GPT Actions) | Service handler | Consequential |
+|---|---|---|---|---|
+| status | `preston_status` (readOnly) | `GET /api/control/status` → `getPrestonStatus` | `prestonStatus` | no |
+| submit goal | `preston_submit_goal` (idempotent) | `POST /api/control/goals` → `submitPrestonGoal` | `prestonSubmitGoal` | **yes** |
+| get goal | `preston_get_goal` | `GET /api/control/goals/{goal_id}` → `getPrestonGoal` | `prestonGetGoal` | no |
+| list approvals | `preston_list_approvals` | `GET /api/control/approvals` → `listPrestonApprovals` | `prestonListApprovals` | no |
+| decide approval | `preston_decide_approval` (destructive) | `POST /api/control/approvals/{approval_id}/decision` → `decidePrestonApproval` | `prestonDecideApproval` | **yes** |
+| evidence | `preston_get_evidence` | `GET /api/control/evidence?goal_id&job_id` → `getPrestonEvidence` | `prestonGetEvidence` | no |
 
-1. ChatGPT calls `/mcp` → 401 + `WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource/mcp"`.
-2. ChatGPT reads the PRM → `authorization_servers: ["https://<ref>.supabase.co/auth/v1"]` → AS metadata (`code_challenge_methods_supported: ["S256"]`).
-3. Auth-code + PKCE: browser → Supabase `/auth/v1/oauth/authorize` → redirect to **our** `/oauth/consent?authorization_id=…` (owner signs in at `/login` if needed; `next` carries the consent URL back) → owner approves (only the Preston Control client, only allowlisted scopes) → Supabase redirects to `https://chatgpt.com/connector_platform_oauth_redirect` with the code.
-4. ChatGPT exchanges the code at `/auth/v1/oauth/token` (static client id/secret entered in ChatGPT's form) → access JWT (1h) + refresh token.
-5. Every `/mcp` request: gates 1–8 (`auth.ts`): enabled → env allowlisted → client id configured → bearer present/bounded → `auth.getUser` verifies → `client_id` == registered, `aud` authenticated → email on `OWNER_EMAIL_ALLOWLIST` → `is_owner()` true → tools run RLS-bound as the owner.
+OpenAPI document: `GET /api/control/openapi.json` — public while enabled, shapes only, security scheme = bridge URLs, 6 operations, strict bodies (`additionalProperties:false`), UUID / runtime-id patterns, `x-openai-isConsequential` explicit on every operation.
 
-Never in model context: actor tokens, runtime refresh tokens, DB/root passwords, service-role key, SSH keys, env values, raw logs. Errors are tag-only.
+Excluded by construction on both surfaces: shell, SSH, SQL, table mutation, filesystem, deploys, policy edits, credentials, payments, customer sends, kill-switch changes, service role.
 
-## 5. Tests (Phase E) — all passing on dev
+## 4. Authentication design
 
-`npx vitest run test/preston-control-*.test.ts` → 46 tests: disabled, unconfigured env, no auth, forged/expired token, wrong audience, plain dashboard JWT, other OAuth client, non-owner, empty allowlist, runtime service identity, `is_owner` RPC error, 413 before auth, stateless GET/DELETE, schema rejection of malformed args, duplicate goal (replay) and payload-mismatch, gated goal → pending approval → owner decision (one RPC call, `pc-` nonce, one audit row) → `already_decided`, `approval_not_found`, `expired`, `owner_required`, secret exclusion on input and output, allowlist projections, consent gate (client/scope/owner/mismatch/unconfigured), `next` open-redirect guard, PRM document, proxy matcher, env names, runtime isolation (no `preston-control` import in driver/coordinator/remote-intake/hermes; no shell/service-role in adapter). Full suite: 1 493 tests, green apart from two pre-existing scanner self-scan tests that exceed their 120 s timeout on this workstation (the scanners themselves report 0 findings).
+| | MCP adapter | GPT Actions adapter |
+|---|---|---|
+| Supabase OAuth client | **A** — redirect `https://chatgpt.com/connector_platform_oauth_redirect` | **B** — redirect `<origin>/oauth/gpt/callback` |
+| Env (names) | `PRESTON_CONTROL_OAUTH_CLIENT_ID` | `PRESTON_CONTROL_GPT_OAUTH_CLIENT_ID`, `PRESTON_CONTROL_GPT_OAUTH_CLIENT_SECRET`, `PRESTON_CONTROL_GPT_BRIDGE_KEY` |
+| Who holds the client secret | ChatGPT connector form | GPT editor OAuth form **and** Vercel env (the bridge forwards it) |
+| PKCE | ChatGPT does S256 natively | bridge adds S256: verifier = HMAC(bridge key, nonce); nonce travels in HMAC-signed state and in the composite code `<code>.<nonce>`; nothing stored |
+| Discovery | RFC 9728 PRM + `WWW-Authenticate` | OpenAPI `securitySchemes` (auth/token URL = bridge) |
+| Token reaching Preston | owner Supabase JWT, `client_id = A` | owner Supabase JWT, `client_id = B` |
+| `/mcp` accepts | A only (B → 403 `wrong_client`) | — |
+| `/api/control/*` accepts | — | B only (A → 403 `wrong_client`) |
+| Revocation | disable client A / remove the connector | disable client B / remove the GPT Action; rotating the bridge key breaks only in-flight logins |
+| Consent UI | `/oauth/consent` (A or B, owner only) | same |
 
-## 6. Owner activation packet (Phase D/F — STOP point)
+Gates on every request (both surfaces): enabled flag → env allowlisted → surface client id configured → bearer bounded → **Supabase verifies the token** → `client_id` == this surface's client, `aud` authenticated → `OWNER_EMAIL_ALLOWLIST` → **`is_owner()` in DB** → tools run RLS-bound as the owner. No static owner bearer exists anywhere; no secret enters model context; errors are tag-only.
 
-Nothing below has been done. Do it on **staging first**. Never paste secrets into Claude.
+**Security comparison.** Authorization is identical (same gates, same DB authority, same projections, same RPC). Differences: (a) the GPT surface keeps client B's secret in Vercel env — one more place a secret lives (env-only, constant-time compared, never returned, rotatable); (b) ChatGPT's confirmation comes from `x-openai-isConsequential` instead of MCP annotations — both write ops are flagged; (c) the bridge is an extra public OAuth endpoint — stateless, signed state, exact-shape ChatGPT redirect allowlist (`^https://(chat\.openai\.com|chatgpt\.com)/aip/g-<id>/oauth/callback$`), forwards only to the configured Supabase project, strips `id_token`/user objects. Net: no weaker on authorization; slightly larger surface, pinned by tests.
+
+### GPT Actions flow
+1. GPT shows "Sign in" → browser → `<origin>/oauth/gpt/authorize?client_id=B&redirect_uri=https://chatgpt.com/aip/g-…/oauth/callback&state=…` → bridge validates, adds PKCE, 302 → Supabase `/auth/v1/oauth/authorize`.
+2. Supabase → `/oauth/consent` (login at `/login` if needed) → owner approves client B → Supabase 302 → `<origin>/oauth/gpt/callback?code&state`.
+3. Bridge verifies signed state → 302 → ChatGPT callback with `code=<code>.<nonce>` and ChatGPT's own `state`.
+4. ChatGPT servers POST `<origin>/oauth/gpt/token` (client B id + secret, composite code) → bridge verifies credentials, re-derives the verifier, forwards to Supabase `/auth/v1/oauth/token` → returns `{access_token, refresh_token, expires_in, token_type}`.
+5. Every Action call: `Authorization: Bearer <owner JWT>` → `/api/control/*` gates 1–8.
+
+### MCP flow (unchanged)
+401 + `WWW-Authenticate` → PRM → Supabase AS metadata → auth-code + PKCE (ChatGPT) → `/oauth/consent` → `https://chatgpt.com/connector_platform_oauth_redirect` → token → `/mcp`.
+
+## 5. Tests (Phase E)
+
+`npx vitest run test/preston-control-*.test.ts` → **63 passing**: 46 MCP/service (disabled, unconfigured env, no auth, forged/expired token, wrong audience, dashboard JWT, other client, non-owner, empty allowlist, runtime identity, `is_owner` error, 413 before auth, stateless GET/DELETE, schema rejection, duplicate/replay and payload mismatch, gated goal → list → one audited decision → `already_decided`/`approval_not_found`/`expired`/`owner_required`, secret exclusion in/out, projections, consent gate, `next` guard, PRM, proxy, env names, runtime isolation) + 17 GPT surface (cross-surface token refusal both ways; REST Test B/C/D chain end-to-end; strict-body 400/413/non-JSON; guest decide 403; `openapi.json` shape, consequential flags, bridge URLs, size < 100 k, no secrets; consent accepts either client; bridge authorize/state/callback/token/filter negatives incl. foreign-origin redirect, path traversal, forged/tampered state, wrong client, unsupported grant; bridge routes 404/302/401 with upstream `fetch` never called on a bad client; proxy/env wiring; no shell/service-role in adapter files). `tsc`, `eslint`, secret + RED scanners clean.
+
+## 6. Owner activation packet — STOP point (staging first)
+
+Nothing below has been done. Never paste secrets into Claude.
 
 ### 6.1 Supabase (staging project)
-1. Authentication → **OAuth Server** → Enable. Authorization path: `/oauth/consent` (combined with Site URL = the staging dashboard origin). Leave **Dynamic Client Registration OFF**.
-2. Authentication → **OAuth Apps** → Add client: name `Preston Control (staging)`, type **Confidential**, redirect URI **exactly** `https://chatgpt.com/connector_platform_oauth_redirect` (also add `https://chatgpt.com/connector/oauth/` callback form only if ChatGPT's form shows one). Copy the **client id** (non-secret) and keep the **client secret** in 1Password — it is entered only in ChatGPT.
-3. (Recommended) JWT Signing Keys → migrate to an asymmetric key (ES256). Not required for v1 (no `openid` scope), but recommended by Supabase for OAuth.
-4. Confirm the owner auth user is in `public.owners` (already true — it is the dashboard owner).
+1. Authentication → **OAuth Server** → Enable. Authorization path `/oauth/consent`. Dynamic Client Registration **OFF**.
+2. Authentication → **OAuth Apps** → add client **A** "Preston Control MCP (staging)", Confidential, redirect URI exactly `https://chatgpt.com/connector_platform_oauth_redirect`.
+3. Add client **B** "Preston Control GPT (staging)", Confidential, redirect URI exactly `<staging origin>/oauth/gpt/callback`. Keep B's secret in 1Password.
+4. (Recommended) JWT signing keys → asymmetric (ES256).
 
-### 6.2 Vercel (staging environment) — names only
-- `PRESTON_CONTROL_ENABLED=true`
-- `PRESTON_CONTROL_OAUTH_CLIENT_ID=<client id from 6.1.2>`
-- (optional) `PRESTON_CONTROL_PUBLIC_ORIGIN=<staging origin>` if the deployment is reached through an alias.
-- `SUPABASE_RUNTIME_ENV=staging` and `OWNER_EMAIL_ALLOWLIST` already set.
-Redeploy. Verify: `GET <origin>/.well-known/oauth-protected-resource/mcp` returns JSON; `POST <origin>/mcp` without a bearer returns 401 with `WWW-Authenticate`.
+### 6.2 Vercel (staging) — names only
+`PRESTON_CONTROL_ENABLED=true` · `PRESTON_CONTROL_OAUTH_CLIENT_ID=<A id>` · `PRESTON_CONTROL_GPT_OAUTH_CLIENT_ID=<B id>` · `PRESTON_CONTROL_GPT_OAUTH_CLIENT_SECRET=<B secret>` · `PRESTON_CONTROL_GPT_BRIDGE_KEY=<random ≥32 chars, e.g. 48 from a password manager>` · optional `PRESTON_CONTROL_PUBLIC_ORIGIN`. Redeploy. Smoke: `GET /.well-known/oauth-protected-resource/mcp` → JSON; `GET /api/control/openapi.json` → JSON; `POST /mcp` and `GET /api/control/status` without bearer → 401.
 
-### 6.3 MCP Inspector (optional, dev)
-`npx @modelcontextprotocol/inspector@latest` → Streamable HTTP → `<origin>/mcp` → OAuth → completes the consent flow in the browser → `tools/list` shows six tools.
+### 6.3 ChatGPT web — MCP plugin (web/desktop)
+Settings → Security and login → Developer mode → chatgpt.com/plugins → **+** → MCP URL `<origin>/mcp`, OAuth, client A id/secret, scope `email` → consent → install → `@Preston Control` → Tests A–E.
 
-### 6.4 ChatGPT (web)
-1. Settings → **Security and login** → enable **Developer mode** (Plus/Pro/Business/Enterprise).
-2. chatgpt.com/plugins → **+** → Developer-mode app: name `Preston Control`, MCP server URL `<origin>/mcp`, auth **OAuth**, client id + client secret from 6.1.2, scope `email`. Save, complete the consent at `/oauth/consent`.
-3. Install the personal plugin; in a chat (Work tab if prompted) type `@Preston Control` and run Test A–E from the plan.
+### 6.4 ChatGPT web — Custom GPT Actions (Galaxy path)
+1. Open an **existing** GPT you own (creation is closed on personal plans; if none exists, a Business workspace is required) → Edit → Configure → Actions → **Create new action**.
+2. Import schema from URL `<origin>/api/control/openapi.json`.
+3. Authentication → OAuth: Client ID = B id, Client Secret = B secret, Authorization URL `<origin>/oauth/gpt/authorize`, Token URL `<origin>/oauth/gpt/token`, Scope `email`, Token exchange method **Default (POST request)**. Save.
+4. Copy the callback URL the editor shows (`https://chat.openai.com/aip/g-<id>/oauth/callback` / `https://chatgpt.com/aip/g-<id>/oauth/callback`) — the bridge already allowlists this exact shape; nothing to configure in Supabase for it (Supabase only sees the bridge callback).
+5. Visibility **Only me**. Save. In the editor preview: "Check Preston status" → Sign in → consent → the action calls `getPrestonStatus`.
 
-### 6.5 Rollback / kill
-- Instant: set `PRESTON_CONTROL_ENABLED=false` (surface → 503) or delete the ChatGPT app.
-- Revoke: Supabase → OAuth Apps → disable/delete the client (all grants and refresh tokens die); or owner-side `revokeGrant`.
-- Code: revert the single commit; no migration to roll back.
+### 6.5 Galaxy acceptance (Phase G, first-class gate) — exact procedure
+1. On the Galaxy, update the ChatGPT Android app; sign in as the owner.
+2. Sidebar → GPTs → open the Preston Control GPT (no `@` mention on mobile).
+3. Say **"Check Preston status."** Expected: a sign-in prompt the first time (completes in the in-app browser via `/oauth/consent`), then an action card for `getPrestonStatus`, then a status summary. **Proof:** `status` JSON shows `generated_at` within the last minute; Vercel logs show `GET /api/control/status 200`.
+4. Say **"Have Preston create a harmless documentation goal describing the golden baseline."** Expected: confirmation card (consequential) → `submitPrestonGoal` → `accepted` with `goal_id`. **Proof:** the goal appears in `/os/orchestration`; the runtime consumes it on the next 5-min tick; `getPrestonGoal` shows jobs progressing; `getPrestonEvidence` returns refs.
+5. Say **"Have Preston prepare the Phase 7 schema evidence with a migration plan for my review."** Expected: `accepted`, `approvals_required ≥ 1`; `listPrestonApprovals` shows it; the runtime does **not** self-approve.
+6. Say **"Approve that."** Expected: confirmation card → `decidePrestonApproval` → `ok:true`, `decided_by = owner email`. **Proof:** `audit_log` has exactly one `orchestration_approval_decision` row with `actor = owner auth.uid()`; the job clears and runs on the next tick.
+7. Negative: sign into the GPT with a non-owner test user → sign-in completes but every action returns 403 `not_owner`; approval denied.
+8. Record: screenshots of each card, Vercel request ids, the audit row, and the product result (works / sign-in fails / action blocked). If the OAuth sign-in cannot complete inside the Android app, capture the exact screen/message — that is the product limitation to document; do not weaken Preston to work around it.
 
-### 6.6 Security effect on existing users/sessions
-None. Enabling the OAuth server adds endpoints under `/auth/v1/oauth/*`; existing password sessions, cookies, RLS and the runtime service identity are unaffected. Dashboard JWTs carry no `client_id` and are refused by `/mcp`.
+### 6.6 Rollback / kill
+- Instant: `PRESTON_CONTROL_ENABLED=false` (all surfaces → 503/404).
+- Per surface: disable client A (MCP) or client B (GPT) in Supabase; remove the connector / the GPT Action.
+- Rotate `PRESTON_CONTROL_GPT_BRIDGE_KEY` to invalidate in-flight GPT logins.
+- Code: revert the commits; no migration to roll back.
 
-## 7. Galaxy / Android (Phase G) — product-surface finding
+### 6.7 Security effect on existing users/sessions
+None. New endpoints only; existing password sessions, cookies, RLS, and the runtime service identity are unaffected. Dashboard JWTs carry no `client_id` and are refused by both surfaces.
 
-Official position today: developer-mode MCP apps are **web (and desktop) only**; the Android app shows the plugins menu for first-party/published plugins. Therefore "Check Preston status" from the Galaxy ChatGPT app will not invoke a personal developer-mode plugin until OpenAI extends the surface. Preston security is **not** weakened to compensate.
-
-Narrowest paths that reach Android without weakening Preston, in order of preference, to be chosen by the owner after Phase F:
-1. **Wait for OpenAI** — Plugin Directory is already on Android; personal plugins are the announced direction (ChatGPT Work syncs across web/mobile). Zero Preston work.
-2. **Mobile browser**: chatgpt.com in Samsung Internet/Chrome on the Galaxy (web surface, full plugin support). Zero Preston work; acceptable interim.
-3. **Business plan + Custom GPT Actions facade**: an OpenAPI facade over the same six handlers (same auth module) would be reachable from the Android app's GPTs. Moderate work; only if 1–2 are unacceptable.
-4. **Public Plugin Directory submission** — explicitly out of scope for v1.
-
-## 8. Production promotion (Phase H) — not started
-
-Bounded package to be assembled only after staging Test A–E pass: exact commit, Vercel prod env names, Supabase prod OAuth client (separate id/secret), PRM smoke, 401 smoke, consent smoke, Test A/B on prod with a harmless documentation goal, rollback = `PRESTON_CONTROL_ENABLED=false` + client disable, golden evidence under `reports/`. Requires an owner-approved RED gate.
+## 7. Production promotion (Phase H) — not started
+After staging Tests A–E (MCP) and the Galaxy gate pass: separate prod OAuth clients A'/B', prod Vercel env names, PRM/OpenAPI/401 smokes, consent smoke, Test A/B on prod with a harmless documentation goal, Galaxy re-run, rollback = flag off + client disable, golden evidence under `reports/`. Requires an owner-approved RED gate.

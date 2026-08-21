@@ -43,6 +43,18 @@ Authority stays where it was: the DB decides ownership (`public.owners`), the co
 | T15 | **Consent-page abuse (open redirect, CSRF, wrong client)** | `next` continuation admits only `/oauth/consent?...` same-origin; consent approves only `PRESTON_CONTROL_OAUTH_CLIENT_ID` (DCR clients denied), only allowlisted scopes, only the signed-in owner; redirects follow the Supabase-returned `redirect_url` (exact-match registered URIs). Server actions re-check the owner. A failed gate always *denies* upstream. | `consent.ts`; `actions.ts`; proxy |
 | T16 | **MCP outage affecting Preston** | Nothing in the runtime, timer, dashboard, intake, or approvals imports `preston-control` (tested). The adapter is read-through; if Vercel is down, the DB and host runtime continue. | test `outage isolation` |
 
+## Revision 2 additions — GPT Actions surface and PKCE bridge
+
+| # | Threat | Control(s) | Where |
+|---|--------|-----------|-------|
+| T17 | **Cross-surface token reuse** (a GPT-surface token used on `/mcp`, or vice-versa) | Each surface has its own OAuth client; gate 6 compares `client_id` to the surface's configured id → 403 `wrong_client`. Revoking one client leaves the other intact. | `auth.ts` `surface` |
+| T18 | **Open redirect via the bridge callback** | ChatGPT redirect must match `^https://(chat\.openai\.com\|chatgpt\.com)/aip/g-[A-Za-z0-9]{6,64}/oauth/callback$` at authorize time and is carried only inside HMAC-signed state; callback refuses any unsigned/tampered state. | `gpt-bridge.ts` |
+| T19 | **Forged or replayed bridge state / code** | State signed with `PRESTON_CONTROL_GPT_BRIDGE_KEY`; composite code binds the Supabase code to the nonce whose verifier only the bridge can derive; Supabase codes are single-use, 10 min. | `gpt-bridge.ts` |
+| T20 | **Bridge token endpoint abused as an oracle** | Client B id + secret verified in constant time before any upstream call (tested: `fetch` never invoked on a bad client); only `authorization_code` and `refresh_token` grants; 8 KiB body cap; tag-only errors; response filtered to OAuth fields. | `token/route.ts` |
+| T21 | **Client B secret in Vercel env** | Env-only, never logged/returned, constant-time compared, rotatable in Supabase; compromise scope = ability to complete an OAuth exchange that still requires the owner's live consent + Supabase code — no token can be minted without the owner's browser session. | env policy |
+| T22 | **GPT Actions confirmation bypass** | `x-openai-isConsequential:true` on both writes forces a prompt; approvals remain one-time/owner-only/audited in the DB regardless of client behaviour. | `openapi.ts`; 0021 |
+| T23 | **OpenAPI document exposure** | Public only while enabled; describes shapes and the bridge URLs; contains no ids or secrets (tested). | `openapi.json/route.ts` |
+
 ## Residual risks / notes
 
 - Supabase OAuth 2.1 Server is **beta**. If it is withdrawn, the adapter's gates 5–8 are unchanged; only the token issuance path would need a replacement.

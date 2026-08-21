@@ -3,8 +3,8 @@
 // page with ?authorization_id=...; this module decides whether the page may
 // proceed. Fail-closed on every axis:
 //   - the authorization id must be a bounded, plain token
-//   - the requesting OAuth client must be the registered Preston Control
-//     client (PRESTON_CONTROL_OAUTH_CLIENT_ID); any other client is denied,
+//   - the requesting OAuth client must be one of the registered Preston
+//     Control clients (MCP or GPT Actions surface); any other client is denied,
 //     so even a mistakenly enabled dynamic-registration client cannot obtain
 //     an owner grant through this page
 //   - the requested scope must be a subset of the small allowlist
@@ -12,6 +12,7 @@
 //     through resolveOwner(); this module re-checks the email it is handed)
 
 import { isOwnerEmail } from '@/lib/owner-auth';
+import { registeredClientIds } from './auth';
 
 export const ALLOWED_SCOPES = new Set(['email', 'openid', 'profile', 'offline_access']);
 export const AUTHORIZATION_ID_RE = /^[A-Za-z0-9._:-]{8,256}$/;
@@ -36,10 +37,10 @@ export function evaluateConsent(
   sessionEmail: string,
   env: Record<string, string | undefined>,
 ): ConsentGate {
-  const expectedClient = String(env['PRESTON_CONTROL_OAUTH_CLIENT_ID'] ?? '').trim();
-  if (!expectedClient) return { ok: false, reason: 'unconfigured' };
+  const registered = registeredClientIds(env);
+  if (registered.length === 0) return { ok: false, reason: 'unconfigured' };
   if (!validAuthorizationId(details.authorization_id)) return { ok: false, reason: 'authorization_id_invalid' };
-  if (String(details.client?.id ?? '') !== expectedClient) return { ok: false, reason: 'client_not_allowed' };
+  if (!registered.includes(String(details.client?.id ?? ''))) return { ok: false, reason: 'client_not_allowed' };
   const scopes = String(details.scope ?? '').split(/\s+/).map((s) => s.trim()).filter(Boolean);
   if (scopes.some((s) => !ALLOWED_SCOPES.has(s))) return { ok: false, reason: 'scope_not_allowed' };
   if (!isOwnerEmail(sessionEmail, env)) return { ok: false, reason: 'user_not_owner' };

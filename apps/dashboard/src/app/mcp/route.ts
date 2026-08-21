@@ -1,13 +1,8 @@
-import { createClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
-import {
-  authenticateControlRequest,
-  type AuthResult,
-  type ControlClient,
-} from '@/lib/preston-control/auth';
+import { authenticateControlRequest } from '@/lib/preston-control/auth';
+import { clientFor, deniedResponse as denied } from '@/lib/preston-control/http';
 import { buildPrestonControlServer } from '@/lib/preston-control/server';
-import { protectedResourceMetadataUrl } from '@/lib/preston-control/metadata';
 import type { ComposerClient } from '@/lib/ai-os/orchestration/composer-persist';
 
 // Preston Control - ChatGPT MCP endpoint (Streamable HTTP, stateless).
@@ -27,30 +22,6 @@ export const dynamic = 'force-dynamic';
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-function clientFor(token: string): ControlClient | null {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !key) return null;
-  // Anon key + the OWNER's bearer: PostgREST evaluates RLS / is_owner() under
-  // auth.uid() of the token. No session persistence, no refresh.
-  return createClient(url, key, {
-    global: { headers: { Authorization: `Bearer ${token}` } },
-    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-  }) as unknown as ControlClient;
-}
-
-function denied(auth: Exclude<AuthResult, { ok: true }>, request: Request): Response {
-  const headers: Record<string, string> = {};
-  if (auth.httpStatus === 401) {
-    headers['WWW-Authenticate'] =
-      `Bearer resource_metadata="${protectedResourceMetadataUrl(request)}"`;
-  }
-  return NextResponse.json(
-    { ok: false, status: auth.reason },
-    { status: auth.httpStatus, headers },
-  );
-}
-
 export async function POST(request: Request) {
   const env = process.env as Record<string, string | undefined>;
 
@@ -62,7 +33,7 @@ export async function POST(request: Request) {
   }
 
   const auth = await authenticateControlRequest(
-    request.headers.get('authorization'), env, { clientFor },
+    request.headers.get('authorization'), env, { clientFor }, 'mcp',
   );
   if (!auth.ok) return denied(auth, request);
 
@@ -88,7 +59,7 @@ export async function POST(request: Request) {
 export async function GET(request: Request) {
   const env = process.env as Record<string, string | undefined>;
   const auth = await authenticateControlRequest(
-    request.headers.get('authorization'), env, { clientFor },
+    request.headers.get('authorization'), env, { clientFor }, 'mcp',
   );
   if (!auth.ok) return denied(auth, request);
   return NextResponse.json({ ok: false, status: 'method_not_allowed' }, { status: 405 });

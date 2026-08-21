@@ -69,11 +69,13 @@ export const config = {
   // re-authenticated by the 0011 DB gateway's stored token hash, and the
   // ssot route delegates auth entirely to the 0012/0013 gateways). /mcp
   // (Preston Control, OAuth bearer-authenticated inside the handler) and
+  // /api/control/* (the same tools as a Custom GPT Actions facade),
+  // /oauth/gpt/* (its PKCE bridge; ChatGPT-driven, cookie-less) and
   // /.well-known/ (public RFC 9728 metadata) are excluded for the same
   // reason. They
   // carry no owner session cookie, so the cookie-session redirect must
   // never intercept them (that would return an HTML redirect instead of
   // the routes' own fail-closed JSON 503/401). The ssot route is inert
   // until SSOT_STATUS_ENABLED=true (an owner gate).
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/health|api/os/chatgpt|api/os/remote|api/os/ssot|mcp$|\\.well-known/).*)'],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/health|api/os/chatgpt|api/os/remote|api/os/ssot|api/control|oauth/gpt/|mcp$|\\.well-known/).*)'],
 };
