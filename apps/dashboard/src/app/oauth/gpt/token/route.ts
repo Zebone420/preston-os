@@ -35,7 +35,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'invalid_request' }, { status: 400 });
   }
   const out = buildTokenForward(env, form, request.headers.get('authorization'), publicOrigin(request, env));
-  if (!out.ok) return NextResponse.json({ error: out.error }, { status: out.status });
+  if (!out.ok) {
+    // Operator diagnostic: booleans/lengths only (see ClientAuthDiagnostic);
+    // never the presented or configured values. This is the ONLY log line in
+    // the Preston Control adapter and the audit suite pins its shape.
+    if (out.diag) console.warn('[preston-control:gpt-token] client_auth_failed ' + JSON.stringify(out.diag));
+    return NextResponse.json({ error: out.error }, { status: out.status });
+  }
 
   let upstream: Response;
   try {

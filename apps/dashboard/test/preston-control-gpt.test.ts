@@ -350,6 +350,24 @@ describe('PKCE bridge (pure)', () => {
     expect(buildTokenForward(env, { grant_type: 'client_credentials', client_id: GPT_CLIENT, client_secret: CONF }, null, ORIGIN)).toMatchObject({ ok: false, error: 'unsupported_grant_type' });
   });
 
+  it('client-auth diagnostic is values-free; Basic with raw (non-urlencoded) creds and colons still works', () => {
+    const bad = buildTokenForward(env, { grant_type: 'authorization_code', code: 'c.' + 'n'.repeat(43), client_id: GPT_CLIENT, client_secret: 'nope' }, null, ORIGIN);
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) {
+      expect(bad.diag).toEqual({ method: 'post', basic_decode_error: false, client_id_match: true, secret_present: true, secret_length_match: false, grant_type: 'authorization_code' });
+      expect(JSON.stringify(bad.diag)).not.toContain('nope');
+      expect(JSON.stringify(bad.diag)).not.toContain(CONF);
+    }
+    const envColon = { ...env, PRESTON_CONTROL_GPT_OAUTH_CLIENT_SECRET: 'a:b%c:' + 'x'.repeat(20) };
+    const rawBasic = 'Basic ' + Buffer.from(`${GPT_CLIENT}:a:b%c:${'x'.repeat(20)}`).toString('base64');
+    expect(buildTokenForward(envColon, { grant_type: 'refresh_token', refresh_token: 'rt' }, rawBasic, ORIGIN).ok).toBe(true);
+    const encBasic = 'Basic ' + Buffer.from(`${encodeURIComponent(GPT_CLIENT)}:${encodeURIComponent('a:b%c:' + 'x'.repeat(20))}`).toString('base64');
+    expect(buildTokenForward(envColon, { grant_type: 'refresh_token', refresh_token: 'rt' }, encBasic, ORIGIN).ok).toBe(true);
+    const none = buildTokenForward(env, { grant_type: 'refresh_token', refresh_token: 'rt' }, null, ORIGIN);
+    expect(none.ok).toBe(false);
+    if (!none.ok) expect(none.diag?.method).toBe('none');
+  });
+
   it('token response filter passes only the OAuth fields', () => {
     expect(filterTokenResponse({ access_token: 'a', refresh_token: 'r', expires_in: 3600, token_type: 'bearer', id_token: 'idt', user: { email: OWNER } }))
       .toEqual({ access_token: 'a', token_type: 'bearer', refresh_token: 'r', expires_in: 3600 });

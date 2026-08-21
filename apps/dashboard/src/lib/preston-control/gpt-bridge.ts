@@ -194,11 +194,23 @@ export interface TokenForward {
 }
 export type TokenOutcome =
   | { ok: true; forward: TokenForward }
-  | { ok: false; error: 'unconfigured' | 'invalid_client' | 'invalid_grant' | 'unsupported_grant_type'; status: 400 | 401 | 503 };
+  | { ok: false; error: 'unconfigured' | 'invalid_client' | 'invalid_grant' | 'unsupported_grant_type'; status: 400 | 401 | 503; diag?: ClientAuthDiagnostic };
 
 // Accepts client credentials either in the POST body (client_secret_post,
 // what the ChatGPT docs show) or as HTTP Basic; both are verified here in
 // constant time and re-sent to Supabase as client_secret_post.
+// Values-free description of WHY a token request failed client auth. Safe to
+// log: booleans and lengths only. Lets an operator tell "ChatGPT sent no
+// secret" from "ChatGPT sent a different secret" without seeing either.
+export interface ClientAuthDiagnostic {
+  method: 'basic' | 'post' | 'none';
+  basic_decode_error: boolean;
+  client_id_match: boolean;
+  secret_present: boolean;
+  secret_length_match: boolean;
+  grant_type: string;
+}
+
 export function buildTokenForward(
   env: Env,
   form: Record<string, string | undefined>,
@@ -206,19 +218,38 @@ export function buildTokenForward(
   origin: string,
 ): TokenOutcome {
   if (!bridgeConfigured(env)) return { ok: false, error: 'unconfigured', status: 503 };
+  const expectedId = String(env[GPT_CLIENT_ID_ENV]);
+  const expectedSecret = String(env[GPT_CLIENT_SECRET_ENV]);
   let cid = form.client_id ?? '';
   let secret = form.client_secret ?? '';
+  let method: ClientAuthDiagnostic['method'] = cid || secret ? 'post' : 'none';
+  let basicDecodeError = false;
   if (basicAuthHeader?.startsWith('Basic ')) {
+    method = 'basic';
     try {
-      const [u, p] = Buffer.from(basicAuthHeader.slice(6), 'base64').toString('utf8').split(':');
-      cid = decodeURIComponent(u ?? '');
-      secret = decodeURIComponent(p ?? '');
+      const raw = Buffer.from(basicAuthHeader.slice(6), 'base64').toString('utf8');
+      const i = raw.indexOf(':'); // split at the FIRST colon only (secrets may contain ':')
+      const u = i >= 0 ? raw.slice(0, i) : raw;
+      const pw = i >= 0 ? raw.slice(i + 1) : '';
+      // RFC 6749 §2.3.1 says form-urlencode before Basic; many clients do not.
+      // Accept either: prefer the decoded form when it matches, else the raw.
+      const dec = (v: string) => { try { return decodeURIComponent(v); } catch { return v; } };
+      cid = safeEq(dec(u), expectedId) ? dec(u) : u;
+      secret = safeEq(dec(pw), expectedSecret) ? dec(pw) : pw;
     } catch {
-      return { ok: false, error: 'invalid_client', status: 401 };
+      basicDecodeError = true;
     }
   }
-  if (!safeEq(cid, String(env[GPT_CLIENT_ID_ENV])) || !secret || !safeEq(secret, String(env[GPT_CLIENT_SECRET_ENV]))) {
-    return { ok: false, error: 'invalid_client', status: 401 };
+  const diag: ClientAuthDiagnostic = {
+    method,
+    basic_decode_error: basicDecodeError,
+    client_id_match: safeEq(cid, expectedId),
+    secret_present: secret.length > 0,
+    secret_length_match: secret.length === expectedSecret.length,
+    grant_type: String(form.grant_type ?? '').slice(0, 32),
+  };
+  if (basicDecodeError || !diag.client_id_match || !secret || !safeEq(secret, expectedSecret)) {
+    return { ok: false, error: 'invalid_client', status: 401, diag };
   }
   const body = new URLSearchParams();
   body.set('client_id', cid);

@@ -327,6 +327,13 @@ describe('AUDIT 5 - no token / code / secret / key in logs, audit rows, evidence
     for (const dir of files) {
       for (const f of walk(join(root, dir))) {
         const src = readFileSync(f, 'utf8');
+        if (f.endsWith(join('oauth', 'gpt', 'token', 'route.ts'))) {
+          // The single permitted logger: values-free client-auth diagnostic.
+          const calls = src.match(/console\.(log|info|debug|warn|error)\(/g) ?? [];
+          expect(calls, f).toHaveLength(1);
+          expect(src).toContain("console.warn('[preston-control:gpt-token] client_auth_failed ' + JSON.stringify(out.diag))");
+          continue;
+        }
         expect(src, f).not.toMatch(/console\.(log|info|debug|warn|error)\(/);
       }
     }
