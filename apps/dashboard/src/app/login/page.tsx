@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { getBrowserSupabase } from '@/lib/supabase/client';
+import { safeConsentNext } from '@/lib/preston-control/consent';
 
 // Owner login. No signup flow exists: the single owner user is created
 // by the owner in the Supabase dashboard (Auth -> Add user).
@@ -24,7 +25,12 @@ export default function LoginPage() {
     if (error) {
       setMessage('Login failed: ' + error.message);
     } else {
-      window.location.href = '/';
+      // Post-login continuation is honoured ONLY for the Preston Control
+      // OAuth consent path (same-origin, validated); everything else -> '/'.
+      const next = safeConsentNext(
+        new URLSearchParams(window.location.search).get('next'),
+      );
+      window.location.href = next ?? '/';
     }
   }
 

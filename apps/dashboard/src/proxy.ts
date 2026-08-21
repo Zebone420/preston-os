@@ -50,6 +50,14 @@ export async function proxy(request: NextRequest) {
   // 'home' sends a signed-in owner away from /login; every blocked
   // state ('setup', 'login', 'deny') lands on the safe /login surface.
   to.pathname = decision === 'home' ? '/' : '/login';
+  to.search = '';
+  // Preston Control OAuth consent: an unauthenticated owner arriving from
+  // the Supabase OAuth server must come BACK to the consent page (with its
+  // authorization_id) after signing in. Only that one same-origin path is
+  // carried; the login page re-validates it (lib/preston-control/consent).
+  if (decision === 'login' && path === '/oauth/consent') {
+    to.searchParams.set('next', path + request.nextUrl.search);
+  }
   return NextResponse.redirect(to);
 }
 
@@ -59,10 +67,13 @@ export const config = {
   // (Phase 5J / Phase 8 / SSOT B3) that self-authenticate inside their
   // handlers (constant-time token compare; the remote routes are ALSO
   // re-authenticated by the 0011 DB gateway's stored token hash, and the
-  // ssot route delegates auth entirely to the 0012/0013 gateways) - they
+  // ssot route delegates auth entirely to the 0012/0013 gateways). /mcp
+  // (Preston Control, OAuth bearer-authenticated inside the handler) and
+  // /.well-known/ (public RFC 9728 metadata) are excluded for the same
+  // reason. They
   // carry no owner session cookie, so the cookie-session redirect must
   // never intercept them (that would return an HTML redirect instead of
   // the routes' own fail-closed JSON 503/401). The ssot route is inert
   // until SSOT_STATUS_ENABLED=true (an owner gate).
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/health|api/os/chatgpt|api/os/remote|api/os/ssot).*)'],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/health|api/os/chatgpt|api/os/remote|api/os/ssot|mcp$|\\.well-known/).*)'],
 };

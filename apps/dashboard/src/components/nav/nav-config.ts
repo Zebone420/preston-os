@@ -136,6 +136,7 @@ export const MISSING_DESTINATIONS: ReadonlyArray<{
 export const NON_NAV_ROUTES: ReadonlyArray<string> = [
   '/login', // owner-gate surface; nav is hidden there anyway
   '/business/quotes/[id]', // detail subview of Quotes
+  '/oauth/consent', // Preston Control OAuth consent; reached only via the OAuth server redirect
 ];
 
 export function isItemActive(pathname: string, item: NavItem): boolean {
