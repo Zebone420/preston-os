@@ -360,3 +360,62 @@ regeneration afterwards:
 4. Tell the agent — it will redeploy, re-probe §3, and re-check diag
    (expect `credentials:"valid"`); then the GPT preview sign-in, Tests
    A–E, Galaxy G1–G8, and shared-SSOT verification proceed.
+
+---
+
+## 14. ADDENDUM — GOTRUE LOG EVIDENCE: THE SECRET VALUE ITSELF IS REJECTED (2026-08-24 ~04:00–04:20 UTC)
+
+Third sync round: owner reported the regenerated secret synchronized to
+all four locations. Agent redeployed (`8aewy71nqsJBu9hY8HZZ9hvDB7CP`,
+37s, Ready, alias attached, `85b2dcd`; build postdates the Production
+row save "Updated 6m ago"), §3 smoke ALL PASS again (04:05:50 UTC), diag
+STILL `invalid_credentials` both methods.
+
+**Supabase Auth log ground truth** (project logs, entries 00:05:53 EDT =
+04:05:53 UTC — exactly the two diag probes):
+- Basic probe → `400: invalid authentication method: client is
+  registered for 'client_secret_post' but 'client_secret_basic' was
+  used` — an EXPECTED refusal; confirms the client's token method is
+  `client_secret_post` as intended.
+- **Post probe → `400: invalid client credentials`** — GoTrue rejects
+  the secret VALUE. Method, client id, redirect URIs are all correct.
+
+Facts that narrow the cause: `bridge_configured:true` proves the
+Production env var is present and non-empty (empty-value save defect
+excluded); three independent paste rounds all failed; the value came
+from a "Regenerate client secret" in the drawer each time. **Prime
+suspect: the regeneration was never COMMITTED in Supabase** — if the
+drawer is closed without clicking "Update app", the displayed new secret
+may be discarded, so every pasted value was a never-activated secret
+while GoTrue kept the original 2026-08-20 hash. Second suspect: copy
+artifact (partial selection/whitespace) three times in a row (unlikely).
+
+## 15. OWNER ACTION REQUIRED — one-pass, self-verifying secret fix
+
+1. Supabase staging → OAuth Apps → Preston Control GPT (staging) →
+   **Regenerate client secret** → copy the shown value → **click
+   "Update app" BEFORE closing the drawer** (this is the step most
+   likely skipped in every prior round).
+2. Verify the held value against Supabase directly from YOUR OWN
+   PowerShell (no Vercel in the loop; secret prompt is hidden):
+   ```powershell
+   $sec = Read-Host 'client B secret' -AsSecureString
+   $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
+   $s = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)
+   [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
+   $body = @{ grant_type='refresh_token'; refresh_token='bogus';
+     client_id='7f83970f-9f62-4157-b50b-58ff039d5c69'; client_secret=$s }
+   try { Invoke-RestMethod -Method Post -Uri 'https://vcqtlmlaxxankxyezlul.supabase.co/auth/v1/oauth/token' -Body $body } catch {
+     $r = New-Object IO.StreamReader($_.Exception.Response.GetResponseStream()); $r.ReadToEnd() }
+   $s = $null
+   ```
+   Expected: an `invalid_grant`-class error (credentials ACCEPTED, bogus
+   token refused). If you see `invalid client credentials`, the held
+   value is still not the committed secret — repeat step 1 and make sure
+   "Update app" is clicked.
+3. Only after step 2 shows `invalid_grant`: paste the SAME value into
+   Vercel `PRESTON_CONTROL_GPT_OAUTH_CLIENT_SECRET` Production row (and
+   Preview row + GPT editor + 1Password). Secret? YES.
+4. Tell the agent — it redeploys and re-checks diag; on
+   `credentials:"valid"` the GPT preview sign-in → Tests A–E → Galaxy
+   G1–G8 → shared-SSOT validation proceed immediately.
