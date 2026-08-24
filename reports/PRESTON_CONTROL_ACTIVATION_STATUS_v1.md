@@ -419,3 +419,59 @@ artifact (partial selection/whitespace) three times in a row (unlikely).
 4. Tell the agent — it redeploys and re-checks diag; on
    `credentials:"valid"` the GPT preview sign-in → Tests A–E → Galaxy
    G1–G8 → shared-SSOT validation proceed immediately.
+
+---
+
+## 16. ADDENDUM — DIAG VALID; SIGN-IN REACHES THE TOKEN STEP; GPT-STORED CREDENTIALS ARE THE LAST MISMATCH (2026-08-24 ~04:15–04:50 UTC)
+
+**Secret mismatch at Supabase: CLOSED.** After the owner's regenerate +
+"Update app" + sync, and a fresh rebuild (Redeploy of 5N3rrd974, Ready):
+- §3 smoke ALL PASS again (04:18:49 UTC).
+- **diag: `credentials:"valid"` on `post`** (upstream tag
+  `refresh_token_not_found` = client auth ACCEPTED, bogus token
+  refused). `basic` leg invalid as expected on a `client_secret_post`
+  client.
+
+**Live GPT sign-in retest (agent-driven via the owner ChatGPT session,
+account chooser resume, no credentials entered):**
+- First attempt surfaced the GPT Action still uses the BRANCH-DOMAIN
+  authorize/token URLs, and ChatGPT's REAL redirect_uri is
+  `https://chat.openai.com/aip/g-925d6cfd426b3683e89bb7d3c80265f74bfa7261/oauth/callback`
+  → the bridge answered `invalid_redirect` → **the owner-typed
+  Production `PRESTON_CONTROL_GPT_CALLBACK_URL` was wrong. Agent FIXED
+  it** (typed the now-verified non-secret value into the Production
+  row, saved, redeployed). Authorize-leg probe now **302 → Supabase**
+  with the alias bridge callback + S256 challenge.
+- Second/third attempts (old chat + fresh chat on latest GPT version):
+  flow completes authorize → Supabase → bridge callback → ChatGPT, then
+  fails at the LAST leg: **401 `invalid_client` from
+  `/oauth/gpt/token`** = the client id/secret ChatGPT POSTS (stored in
+  the GPT Action) do not match Vercel's — the GPT editor's stored
+  values are stale (diag already proves Vercel's values are correct at
+  Supabase).
+- Editor inspection (read-only): Action auth = OAuth, method POST,
+  scope email, Client ID/Secret `<HIDDEN>` (unverifiable), URLs =
+  branch domain; Action callback URL shown = the g-925d… value
+  (matches Vercel). Editor header shows "Update" (unpublished-changes
+  state) — note ChatGPT chats use only the PUBLISHED version.
+
+## 17. OWNER ACTION REQUIRED — fix the GPT Action's stored credentials (final ChatGPT-side step)
+
+In the GPT editor (chatgpt.com → Preston Control → Configure → Actions →
+gear next to "OAuth"):
+1. Client ID: `7f83970f-9f62-4157-b50b-58ff039d5c69`
+2. Client Secret: the current client-B secret from 1Password (the one
+   diag just validated). Secret? YES.
+3. RECOMMENDED same dialog: change Authorization URL to
+   `https://preston-os-staging.vercel.app/oauth/gpt/authorize` and
+   Token URL to `https://preston-os-staging.vercel.app/oauth/gpt/token`
+   (the branch-domain URLs only work while the branch domain rides the
+   Production build — unstable across future previews).
+4. Save → check the **Callback URL** shown in the Actions panel: if it
+   still shows the `g-925d…` value, nothing else needed; if it CHANGED,
+   tell the agent the new value (it is non-secret) — the agent updates
+   Vercel + redeploys.
+5. Click **Update** (publish) in the editor header — chats only use the
+   published version.
+6. Tell the agent — it drives the sign-in retest in a fresh chat and
+   continues Tests A–E → Galaxy G1–G8 → shared-SSOT validation.
