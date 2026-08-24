@@ -307,3 +307,56 @@ does not authenticate at Supabase staging.
 Everything remaining requires either a regenerated secret in hand or the
 owner's ChatGPT account — no further agent-executable staging work exists
 until 1–3 are done.
+
+---
+
+## 12. ADDENDUM — SECRET-ALIGNMENT LOOP + AGENT-ADDED REDIRECT URI (2026-08-24 ~03:50–04:10 UTC)
+
+Owner reported the regenerated client-B secret pasted into the Vercel
+Production row. Agent then:
+- Redeployed (deployment `Fr5Xy4nWaGwfzeZxYoehn9czRTEP`, 37s, Ready,
+  alias attached, source `85b2dcd`) — deterministically AFTER the
+  Production secret save (row "Updated 5m ago" at check time).
+- §3 smoke re-run 03:54:14 UTC: all five results unchanged-PASS
+  (200/200/401/400/401).
+- Diag re-run (owner session): **still `credentials:"invalid"`, upstream
+  400 `invalid_credentials`, both post and Basic** → the value in the
+  Production row does not match the CURRENT Supabase client-B secret.
+- Timeline clue: the **Preview** secret row was updated AFTER the
+  Production row (3m vs 5m ago). Most likely story: two separate
+  regenerations — the secret pasted into Production was revoked by a
+  later regeneration (each secret is shown only once). A paste artifact
+  (trailing whitespace/partial copy) is the other candidate.
+- **Agent FIXED the missing redirect URI itself** (classifier permitted
+  the plain-URL typing): Supabase client B now lists BOTH
+  `https://preston-os-staging-git-…/oauth/gpt/callback` and
+  `https://preston-os-staging.vercel.app/oauth/gpt/callback` (verified
+  persisted after Update app). Step-5 requirement now PASS.
+- GPT editor read-only verification attempted at
+  `chatgpt.com/gpts/editor/g-925d…7261` — page renders blank in the
+  connected Chrome (no usable ChatGPT session); steps 6–7 remain
+  owner-verified.
+
+## 13. OWNER ACTION REQUIRED — single remaining staging blocker
+
+**The Vercel Production `PRESTON_CONTROL_GPT_OAUTH_CLIENT_SECRET` does not
+authenticate at Supabase.** Do exactly, in ONE pass with no second
+regeneration afterwards:
+1. Supabase staging → OAuth Apps → Preston Control GPT (staging) →
+   **Regenerate client secret** → copy ONCE (watch for full selection, no
+   trailing whitespace).
+2. Paste that same value into ALL of, before doing anything else:
+   - Vercel `preston-os-staging` → `PRESTON_CONTROL_GPT_OAUTH_CLIENT_SECRET`
+     **Production** row → Edit → replace value → Save
+   - the same variable's **Preview** row (keeps the two in sync)
+   - the GPT editor → action → OAuth **Client Secret**
+   - 1Password.
+   Secret? **YES.**
+3. While in the GPT editor, confirm: Authorization URL
+   `https://preston-os-staging.vercel.app/oauth/gpt/authorize`; Token URL
+   `…/oauth/gpt/token`; schema imported from `…/api/control/openapi.json`;
+   method "Default (POST request)"; scope `email`; displayed Callback URL
+   byte-identical to Vercel `PRESTON_CONTROL_GPT_CALLBACK_URL`.
+4. Tell the agent — it will redeploy, re-probe §3, and re-check diag
+   (expect `credentials:"valid"`); then the GPT preview sign-in, Tests
+   A–E, Galaxy G1–G8, and shared-SSOT verification proceed.
