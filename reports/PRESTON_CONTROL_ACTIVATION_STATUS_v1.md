@@ -95,3 +95,78 @@ Unchanged from packet §9: `PRESTON_CONTROL_ENABLED=false` + redeploy kills
 all 14 endpoints; reverting the Production Branch setting (Option A) or
 promoting the previous master deployment (Option B) restores the sealed
 pre-control staging build. No migrations involved.
+
+---
+
+## 7. ADDENDUM — STAGING PROMOTION EXECUTED (2026-08-24 ~02:40 UTC, owner-directed)
+
+The owner directed the agent to attempt the §5 promotion itself. Done via
+the owner-logged-in Chrome Vercel session (team Zebone420preston-os):
+
+- Verified project `preston-os-staging` (alias `preston-os-staging.vercel.app`),
+  found the **Ready preview of `85b2dcd`** (branch `feature/preston-control`,
+  built from this session's docs commit) and used **Promote to Production**.
+  Vercel rebuilt it with the staging project's Production env: deployment
+  `FGEkzFzZSLeU5NnBaCL3aM6KzvaR`, build 27s, status **Ready · Latest**,
+  environment Production, domains = the alias + the branch git-domain +
+  `preston-os-staging-mg8db562h-…vercel.app`. No env vars, secrets, domains,
+  or project settings were changed. Production (`preston-os-prod`) untouched.
+- Alias smoke (2026-08-24 02:44:31 UTC) — the §3 probes now return
+  control-route JSON where the pre-promotion alias 307'd to /login:
+  `/.well-known/oauth-protected-resource/mcp` → 404 `{"ok":false,"status":"disabled"}`;
+  `/api/control/openapi.json` → 404 disabled; `/api/control/status` → 503
+  disabled; `/oauth/gpt/authorize` → 404 `{"error":"disabled"}`; `/mcp`
+  (GET; agent POST is guard-blocked) → 503 disabled.
+  **The control build is LIVE on the alias and fail-closed disabled.**
+- **Root cause of "disabled" (read-only inspection of env-var names/scopes):**
+  all 7 `PRESTON_CONTROL_*` variables exist only in **Preview scope,
+  branch-pinned to `feature/preston-control`** — the staging project's
+  Production scope has none. `PRESTON_CONTROL_ENABLED` (Preview) = `true`
+  (non-secret, revealed). `PRESTON_CONTROL_PUBLIC_ORIGIN` (Preview, non-secret)
+  = `https://preston-os-staging-git-feature-prest-b899d1-zebone420preston-os.vercel.app`
+  — i.e. the 2026-08-21 triage ran on the **branch git-domain with Preview
+  env**, never on the alias. Supabase client B's redirect URI and the GPT
+  editor's authorize/token URLs therefore presumably also reference the
+  branch domain.
+- Side effect of the promotion: the branch git-domain now serves the
+  Production-env (disabled) build, so the old branch-domain test setup is
+  dormant. Any new branch push (or a Redeploy of the prior preview) would
+  restore it — do that only if you deliberately choose to keep testing on
+  the branch domain instead of the alias.
+
+## 8. OWNER ACTION REQUIRED — move the control configuration to the alias
+
+Where: Vercel → `preston-os-staging` → Settings → Environment Variables;
+then Supabase staging → Authentication → OAuth Apps; then the GPT editor.
+
+Do exactly:
+1. For each of `PRESTON_CONTROL_ENABLED`, `PRESTON_CONTROL_OAUTH_CLIENT_ID`,
+   `PRESTON_CONTROL_GPT_OAUTH_CLIENT_ID`, `PRESTON_CONTROL_GPT_OAUTH_CLIENT_SECRET`,
+   `PRESTON_CONTROL_GPT_BRIDGE_KEY`, `PRESTON_CONTROL_GPT_CALLBACK_URL`:
+   row ⋯ → Edit → also tick **Production** → Save (values stay as stored;
+   nothing re-typed).
+2. `PRESTON_CONTROL_PUBLIC_ORIGIN`: leave it Preview-only (on the alias the
+   request origin is already correct; its stored branch-domain value must
+   NOT reach Production scope).
+3. Supabase (staging) → OAuth Apps → client B ("Preston Control GPT
+   (staging)") → add redirect URI exactly
+   `https://preston-os-staging.vercel.app/oauth/gpt/callback` (keeping the
+   old one is fine during transition).
+4. GPT editor → the Preston Control action → OAuth settings: Authorization
+   URL `https://preston-os-staging.vercel.app/oauth/gpt/authorize`, Token
+   URL `https://preston-os-staging.vercel.app/oauth/gpt/token`; re-import
+   the schema from `https://preston-os-staging.vercel.app/api/control/openapi.json`.
+   If the editor then shows a DIFFERENT callback URL, copy it verbatim into
+   `PRESTON_CONTROL_GPT_CALLBACK_URL` (both scopes).
+5. Vercel → Deployments → top (current Production, `85b2dcd`) → ⋯ →
+   **Redeploy** (env changes need a new build).
+
+Expected result: the five §3 probes flip from "disabled" to their packet
+answers (metadata JSON 200, openapi 200 with 6 operations, 401s on
+status/mcp, 400 on bare authorize). Secret? NO (scope ticks only; no values
+typed anywhere).
+
+Agent immediately afterward: re-runs the §3 probes, records them here, then
+hands you the signed-in `GET /oauth/gpt/diag` check (expect
+`credentials:"valid"` on `post`) and stands by on the §8 packet error
+matrix for the GPT preview sign-in retest, then Tests A–E / Galaxy G1–G8.
