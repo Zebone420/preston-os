@@ -237,3 +237,73 @@ redeploy and re-probe immediately).
 
 Expected result after redeploy: metadata + openapi 200 JSON; status/mcp
 401 without bearer; bare authorize 400.
+
+---
+
+## 10. ADDENDUM — §3 SMOKE PASS + CREDENTIAL/CALLBACK TRIAGE (2026-08-24 ~03:40–03:55 UTC)
+
+Owner added the four Production rows (all marked Sensitive) and redeployed;
+agent verified rows (no branch pins; ENABLED + bridge key Production-
+available; PUBLIC_ORIGIN correctly absent; unrelated vars untouched), ran
+one final Redeploy to guarantee the last-added secret was loaded:
+deployment `GX471zFHzEf8orHN7F2LQNMAvauM`, 36s, Ready, alias attached,
+source `85b2dcd`.
+
+**§3 SMOKE — ALL PASS (2026-08-24 03:41:53 UTC, alias, commit `85b2dcd`):**
+- `/.well-known/oauth-protected-resource/mcp` → **200** `{resource: <alias>/mcp, authorization_servers:["https://vcqtlmlaxxankxyezlul.supabase.co/auth/v1"], …}`
+- `/api/control/openapi.json` → **200**, `servers[0] = <alias>`, **6 operations** (getPrestonStatus, submitPrestonGoal, getPrestonGoal, listPrestonApprovals, decidePrestonApproval, getPrestonEvidence), authorize/token URLs = `<alias>/oauth/gpt/{authorize,token}`
+- `/api/control/status` (no bearer) → **401** `missing_token` + `WWW-Authenticate: Bearer resource_metadata=…`
+- `/oauth/gpt/authorize` (bare) → **400** `unauthorized_client`
+- `/mcp` (no bearer) → **401** `missing_token` + `WWW-Authenticate`
+
+**Preston Control is LIVE on the staging alias, fail-closed to OAuth.**
+
+**Diag (owner session via browser, `GET /oauth/gpt/diag`):** `ok:true`,
+`bridge_configured:true`, `public_origin = <alias>` (request-origin
+fallback proven), `client_id_suffix "9d5c69"` (client B id correct), BUT
+**`credentials:"invalid"` — upstream 400 `invalid_credentials` on BOTH
+`client_secret_post` and Basic** → the client-B secret stored in Vercel
+does not authenticate at Supabase staging.
+
+**Supabase read-only findings (OAuth Apps drawer, staging project):**
+- Both clients exist (GPT `7f83970f-…5c69`, MCP `c1680204-…c4a1`),
+  Confidential, created Aug 20; GPT client token method =
+  `client_secret_post` (matches bridge).
+- **Client B has ONE redirect URI: the branch git-domain callback.**
+  `https://preston-os-staging.vercel.app/oauth/gpt/callback` is NOT
+  registered → Supabase will refuse the alias bridge flow.
+- Authorize-leg probe with the OLD Preview callback value →
+  `invalid_redirect` (callback pin enforcing; also means the Production
+  `PRESTON_CONTROL_GPT_CALLBACK_URL` differs from the old Preview value —
+  unreadable now because the row is Sensitive; the GPT preview test
+  settles whether it matches ChatGPT's real callback).
+
+## 11. OWNER ACTION REQUIRED — final credential/config alignment (all secret-adjacent)
+
+1. **Supabase staging → Authentication → OAuth Apps → Preston Control GPT
+   (staging):**
+   a. **Add redirect URI** (exact): `https://preston-os-staging.vercel.app/oauth/gpt/callback`
+   b. **Regenerate client secret** → copy it once →
+      - Vercel `preston-os-staging` → `PRESTON_CONTROL_GPT_OAUTH_CLIENT_SECRET`
+        (Production row) → Edit → paste new value → Save
+      - GPT editor → the action's OAuth **Client Secret** field
+      - 1Password (replace old)
+      Secret? **YES** — typed only into Supabase/Vercel/ChatGPT/1Password.
+2. **GPT editor (chatgpt.com):** Authorization URL
+   `https://preston-os-staging.vercel.app/oauth/gpt/authorize`, Token URL
+   `…/oauth/gpt/token`, re-import schema from `…/api/control/openapi.json`,
+   Token Exchange Method "Default (POST request)". After saving, compare
+   the **Callback URL** the editor displays to what you typed into
+   `PRESTON_CONTROL_GPT_CALLBACK_URL`; if it differs, update the Vercel
+   row (byte-identical) — then redeploy (or tell the agent).
+3. **MCP plugin (Tests A–E surface, ChatGPT web Developer mode):**
+   connector with MCP URL `https://preston-os-staging.vercel.app/mcp`,
+   OAuth = client A id + client A secret (1Password), scope `email`.
+4. Then: agent re-runs diag expectation (`credentials:"valid"`), you run
+   the GPT preview "Check Preston status." sign-in, Tests A–E, Galaxy
+   G1–G8 per packet §6; agent verifies each server-side (Vercel logs,
+   orchestration read-models, SSOT rows).
+
+Everything remaining requires either a regenerated secret in hand or the
+owner's ChatGPT account — no further agent-executable staging work exists
+until 1–3 are done.
