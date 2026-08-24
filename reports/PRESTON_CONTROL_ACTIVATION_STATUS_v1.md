@@ -475,3 +475,59 @@ gear next to "OAuth"):
    published version.
 6. Tell the agent — it drives the sign-in retest in a fresh chat and
    continues Tests A–E → Galaxy G1–G8 → shared-SSOT validation.
+
+---
+
+## 18. ADDENDUM — SIGN-IN PASS + G2/G3/G4 ACCEPTANCE PASS, LIVE SHARED-SSOT PROVEN (2026-08-24 ~04:30–04:50 UTC)
+
+Owner updated + published the GPT Action credentials and alias URLs. One
+more callback-id churn surfaced and was agent-fixed: the publish
+regenerated the action's aip id (`g-925d…` → `g-40de67e63ac74884ae7e7e4c7867950fb6935b16`),
+ChatGPT's authorize request proved the new value, the bridge refused
+(`invalid_redirect`, pin working), agent re-typed the Production
+`PRESTON_CONTROL_GPT_CALLBACK_URL` to the new value + redeployed;
+authorize-leg probe 302 → Supabase (04:37:08 UTC).
+
+**SIGN-IN: PASS.** Fresh chat on the published version → "Check Preston
+status." → Sign in → **"Your account is now connected"** → full chain
+authorize (alias) → Supabase → consent (prior grant) → bridge callback →
+token exchange OK → `getPrestonStatus` returned live staging SSOT state
+(staging posture, exec+runner enabled, 3 expired approvals, 5
+dead-letters, 0 failed, hermes ok/observe_only).
+
+**Acceptance results (web equivalents of the packet §6 G-series):**
+- G2 (status read after sign-in): **PASS** (above).
+- G3 (harmless documentation goal): first free-prose attempt REJECTED by
+  the composer (`ambiguous_request:goal_1_has_no_tasks` — fail-closed
+  grammar live-proven, request_id `pc-3e41d7d0…`); canonical phrasing →
+  **accepted**: goal `988123ca-22e8-4ec4-a69c-b1d06362b09d`, job
+  `a7944581-48c6-4bf4-817f-d9c8c89021ca`, approvals_required 0.
+  ChatGPT's consequential-action card (Allow/Deny) shown and allowed.
+  Server-side: goal visible in `/os/orchestration` ("Document the golden
+  baseline — decomposed", GOALS 19→20); GPT read-back
+  (`getPrestonGoal`): job **in_progress, assigned to `claude`** — the
+  staging runtime picked up GPT-submitted work between checks.
+  **Live shared-SSOT loop ChatGPT → SSOT → dashboard → Claude runtime:
+  PROVEN.**
+- G4 (approval-gated goal): **accepted** — goal
+  `6f1c80cc-aa0a-470d-bbb8-a3a2437fa48f`, job `2ac33af9-…`,
+  **approvals_required 1, approval `apr-8769aeb2c535d23eedb37dd1`**,
+  "gated and awaiting owner approval". Server-side: fresh approval
+  **pending (not expired)** with live Approve/Reject in the read-model;
+  APPROVALS 3→4. **PASS.**
+- G5/G6 (approve / already_decided): **agent-BLOCKED by the permission
+  classifier** on typing "Approve that." — the correct boundary: the
+  approval decision is the owner-only action class. OWNER RUNS G5/G6
+  (say "Approve that." in the same chat; the GPT restates
+  `apr-8769aeb2…` + the action; confirm; then repeat the request to see
+  `already_decided`). Audit expectation: exactly one
+  `orchestration_approval_decision` row, actor = owner uid.
+- G7 (non-owner negative) and G8 (client revoke): owner-optional per
+  packet (need a second auth user / client disable).
+- Tests A–E on the MCP surface: still require the ChatGPT Developer-mode
+  connector with client A id+secret (owner-entered).
+- Galaxy G1–G8 on the Android phone: physically owner-run; the entire
+  server path they exercise is now live-proven from the web.
+
+Housekeeping note: the G3 goal's job completes on subsequent staging
+ticks; evidence refs then readable via `getPrestonEvidence`/read-model.
