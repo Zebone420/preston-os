@@ -1,8 +1,19 @@
 // Preston Control - OpenAPI 3.1 document for the Custom GPT Actions surface.
 // PURE. Hand-bounded: six operations, strict request schemas mirroring
-// schemas.ts, no generic endpoints. x-openai-isConsequential marks the two
-// write operations so ChatGPT asks the owner before calling (the approval
-// decision is additionally one-time + owner-only in the DB regardless).
+// schemas.ts, no generic endpoints.
+//
+// x-openai-isConsequential contract (ChatGPT platform behaviour):
+//   true  -> ChatGPT shows an Allow/Deny card on EVERY call (no always-allow).
+//   false -> ChatGPT may offer "Always Allow"; routine calls run frictionless.
+// Only decidePrestonApproval is consequential: it records the owner's
+// authoritative decision (one-time + owner-only + audited in the DB
+// regardless). Goal submission is intake into a default-deny control plane -
+// nothing executes inside the call, risk is classified server-side, RED/
+// YELLOW work parks behind Preston's own approval rows, production targets
+// are rejected, and request_id makes it idempotent - so it is accurately
+// non-consequential at the transport layer. Preston's SSOT/control plane
+// stays the authoritative action authorization; the ChatGPT prompt is only
+// transport friction.
 //
 // Security: OAuth 2.0 authorization-code against the project's Supabase Auth
 // OAuth server; the GPT editor holds the GPT-surface client id/secret. The
@@ -98,10 +109,11 @@ export function buildOpenApiDocument(origin: string): Record<string, unknown> {
           operationId: 'submitPrestonGoal',
           summary: 'Submit a goal to Preston',
           description:
-            'Submit a build / fix / investigate / audit / research / implement mission. Preston decomposes ' +
-            'it, classifies risk, parks gated work behind owner approval, and the runtime executes it. ' +
-            'Idempotent on request_id. Returns accepted | duplicate | rejected with goal and job ids.',
-          'x-openai-isConsequential': true,
+            'Submit a build / fix / investigate / audit / research / implement mission. Non-executing ' +
+            'intake: Preston decomposes it, classifies risk server-side, parks any gated work behind ' +
+            "Preston's own owner approval, and rejects production targets. Idempotent on request_id. " +
+            'Returns accepted | duplicate | rejected with goal and job ids.',
+          'x-openai-isConsequential': false,
           requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/SubmitGoalRequest' } } } },
           responses: { '200': { description: 'Intake result', content: { 'application/json': { schema: { $ref: '#/components/schemas/Result' } } } }, '400': { description: 'Invalid input' }, '401': { description: 'Not authenticated' }, '403': { description: 'Not the owner' } },
         },

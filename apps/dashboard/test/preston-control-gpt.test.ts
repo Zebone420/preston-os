@@ -226,9 +226,16 @@ describe('GPT Actions REST surface', () => {
       ['decidePrestonApproval', 'getPrestonEvidence', 'getPrestonGoal', 'getPrestonStatus', 'listPrestonApprovals', 'submitPrestonGoal'],
     );
     const byId = Object.fromEntries(ops.map((o) => [o.operationId, o]));
+    // Least-privilege transport friction: ONLY the owner-decision write is
+    // consequential (ChatGPT must ask every time). Goal submission is
+    // non-executing default-deny intake - Preston's own approval rows gate
+    // real risk - so it must stay always-allowable.
     expect(byId.decidePrestonApproval['x-openai-isConsequential']).toBe(true);
-    expect(byId.submitPrestonGoal['x-openai-isConsequential']).toBe(true);
+    expect(byId.submitPrestonGoal['x-openai-isConsequential']).toBe(false);
     expect(byId.getPrestonStatus['x-openai-isConsequential']).toBe(false);
+    expect(byId.getPrestonGoal['x-openai-isConsequential']).toBe(false);
+    expect(byId.listPrestonApprovals['x-openai-isConsequential']).toBe(false);
+    expect(byId.getPrestonEvidence['x-openai-isConsequential']).toBe(false);
     const flow = doc.components.securitySchemes.prestonOAuth.flows.authorizationCode;
     expect(flow.authorizationUrl).toBe(ORIGIN + '/oauth/gpt/authorize');
     expect(flow.tokenUrl).toBe(ORIGIN + '/oauth/gpt/token');
