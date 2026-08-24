@@ -170,3 +170,70 @@ Agent immediately afterward: re-runs the §3 probes, records them here, then
 hands you the signed-in `GET /oauth/gpt/diag` check (expect
 `credentials:"valid"` on `post`) and stands by on the §8 packet error
 matrix for the GPT preview sign-in retest, then Tests A–E / Galaxy G1–G8.
+
+---
+
+## 9. ADDENDUM — OWNER-DIRECTED VERCEL ENV EXECUTION (2026-08-24 ~03:00–03:28 UTC)
+
+The owner authorized the agent to perform the §8 Vercel steps itself.
+Executed via the owner browser session, staging project only:
+
+**Completed by the agent (no values typed, none revealed beyond the
+non-secret ones already documented):**
+- `PRESTON_CONTROL_ENABLED` = `true` added as a NEW Production-scope row
+  (plaintext, no branch pin). The literal `true` was typed; it is the
+  packet's documented non-secret value.
+- `PRESTON_CONTROL_GPT_BRIDGE_KEY` (Sensitive, no branch pin) re-scoped
+  from Preview to **Production and Preview** via Edit — stored value
+  preserved untouched (never displayed; Vercel keeps it on scope edits).
+- `PRESTON_CONTROL_PUBLIC_ORIGIN` left Preview-only, per instruction.
+- No other variable altered (verified in the final list: SSOT/REMOTE/
+  SUPABASE/NEXT_PUBLIC rows unchanged; the six Preview-pinned control
+  rows keep their original Preview + `feature/preston-control` scope).
+- Redeploy executed: current Production deployment (source `85b2dcd`)
+  rebuilt as deployment `EHfdGsfFPkLddTD5ERoZHLra5HJw`, 36s, **Ready**,
+  alias `preston-os-staging.vercel.app` attached.
+
+**Probe evidence (2026-08-24 03:28:26 UTC), commit `85b2dcd`, alias
+`preston-os-staging.vercel.app`:**
+- `/.well-known/oauth-protected-resource/mcp` → 404 `disabled`
+- `/api/control/openapi.json` → 404 `disabled`
+- `/api/control/status` → **503 `unconfigured`** (was `disabled`)
+- `/oauth/gpt/authorize` → 404 `disabled`
+- `/mcp` → **503 `unconfigured`** (was `disabled`)
+
+The `disabled`→`unconfigured` shift on status/mcp is live proof the
+Production env scope is loading and the flag is on; the surfaces now
+fail closed only on the missing client configuration.
+
+**Why the agent could not finish the remaining four rows:**
+- Vercel rejects adding Production scope to a branch-pinned variable
+  ("Environment Variables with `gitBranch` can only be used with
+  `target=preview`"), and the edit form for those rows offers no way to
+  clear the pin — so the values must be re-entered as new
+  Production-scope rows.
+- The auto-mode permission classifier blocks the agent from typing
+  credential-shaped values (client-id UUIDs, the `g-…` callback URL)
+  into browser forms; the H-4 guard blocks staging them in a `.env`
+  file; the import path needs a native file picker the agent cannot
+  drive. These safety controls were respected, not bypassed.
+
+**OWNER ACTION REQUIRED (final Vercel step, ~3 minutes):**
+Where: the open Vercel tab → `preston-os-staging` → Settings →
+Environment Variables → **Add Environment Variable** (add all four in one
+dialog with "+ Add Another"; set Environments = **Production** only;
+Sensitive OFF for the first three, **ON for the client secret**):
+1. `PRESTON_CONTROL_OAUTH_CLIENT_ID` = the client A id (reveal it from
+   the existing Preview row's eye icon to copy: `c1680204-…c4a1`)
+2. `PRESTON_CONTROL_GPT_OAUTH_CLIENT_ID` = the client B id (`7f83970f-…5c69`)
+3. `PRESTON_CONTROL_GPT_CALLBACK_URL` = the exact value in the Preview
+   row (`https://chat.openai.com/aip/g-…/oauth/callback` — copy via the
+   row's Copy to Clipboard to keep it byte-identical)
+4. `PRESTON_CONTROL_GPT_OAUTH_CLIENT_SECRET` = client B secret from
+   1Password (Sensitive ON) — the one value that exists nowhere the UI
+   can copy from. Secret? YES — type it only into Vercel.
+Then click **Redeploy** on the save toast (or tell the agent — it will
+redeploy and re-probe immediately).
+
+Expected result after redeploy: metadata + openapi 200 JSON; status/mcp
+401 without bearer; bare authorize 400.
