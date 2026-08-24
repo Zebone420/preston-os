@@ -109,10 +109,9 @@ export function buildOpenApiDocument(origin: string): Record<string, unknown> {
           operationId: 'submitPrestonGoal',
           summary: 'Submit a goal to Preston',
           description:
-            'Submit a build / fix / investigate / audit / research / implement mission. Non-executing ' +
-            'intake: Preston decomposes it, classifies risk server-side, parks any gated work behind ' +
-            "Preston's own owner approval, and rejects production targets. Idempotent on request_id. " +
-            'Returns accepted | duplicate | rejected with goal and job ids.',
+            'Creates non-executing intake for a Preston goal. Preston classifies risk server-side, parks ' +
+            'gated work behind its approval rows, rejects production targets, and uses request_id for ' +
+            'idempotency. Returns accepted, duplicate, or rejected with goal and job ids.',
           'x-openai-isConsequential': false,
           requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/SubmitGoalRequest' } } } },
           responses: { '200': { description: 'Intake result', content: { 'application/json': { schema: { $ref: '#/components/schemas/Result' } } } }, '400': { description: 'Invalid input' }, '401': { description: 'Not authenticated' }, '403': { description: 'Not the owner' } },
