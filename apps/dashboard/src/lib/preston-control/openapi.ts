@@ -92,10 +92,9 @@ export function buildOpenApiDocument(origin: string): Record<string, unknown> {
               maxLength: 200,
               description:
                 "The owner's OWN verbatim confirmation naming the exact approval id, e.g. " +
-                "'Approve apr-1234abcd...'. NEVER compose, infer, or autofill this value; only " +
-                'pass a message the owner typed after seeing the restated approval. Omit on the ' +
-                'first call - the server refuses to decide and returns the restatement to show ' +
-                'the owner.',
+                "'Approve apr-1234abcd...'. NEVER compose, infer, or autofill; pass only a " +
+                'message the owner typed after seeing the restated approval. Omit on the first ' +
+                'call to get the restatement.',
             },
           },
         },
@@ -150,15 +149,12 @@ export function buildOpenApiDocument(origin: string): Record<string, unknown> {
         post: {
           operationId: 'decidePrestonApproval',
           summary: 'Approve or reject a pending Preston approval (owner only)',
+          // ChatGPT Actions rejects operation descriptions over 300 chars.
           description:
-            'CONSEQUENTIAL: records the owner decision through Preston\'s authoritative owner-only, ' +
-            'one-time, audited decision path. SERVER-ENFORCED two-step handshake: a call without a ' +
-            'valid owner_confirmation makes NO decision - it returns a restatement of the exact ' +
-            'approval_id and action text plus the required confirmation phrase. The decision only ' +
-            'happens when owner_confirmation is the owner\'s OWN message naming the exact approval ' +
-            'id (e.g. "Approve apr-...."). Ambiguous requests like "approve that" must never be ' +
-            'resolved to an approval id; ask the owner for the exact id instead. Already-decided ' +
-            'or expired approvals are refused.',
+            'CONSEQUENTIAL owner decision, server-enforced handshake: without a valid ' +
+            'owner_confirmation NO decision is made and the approval is restated with the required ' +
+            'phrase. Never resolve ambiguous refs like "approve that" - ask the owner for the ' +
+            'exact id. One-time; decided/expired refused.',
           'x-openai-isConsequential': true,
           parameters: [{ name: 'approval_id', in: 'path', required: true, schema: { type: 'string', pattern: RUNTIME_ID_PATTERN } }],
           requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/DecideApprovalRequest' } } } },
