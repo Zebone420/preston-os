@@ -220,7 +220,7 @@ describe('/mcp end-to-end through a real MCP client', () => {
     expect(JSON.stringify(list)).not.toContain('nonce');
     const approvalId = String(approvals[0].approval_id);
 
-    const decided = await client.callTool({ name: 'preston_decide_approval', arguments: { approval_id: approvalId, outcome: 'approved' } });
+    const decided = await client.callTool({ name: 'preston_decide_approval', arguments: { approval_id: approvalId, outcome: 'approved', owner_confirmation: `Approve ${approvalId}` } });
     const d = decided.structuredContent as Record<string, unknown>;
     expect(d.ok).toBe(true);
     expect(d.decided_by).toBe(OWNER);
@@ -228,7 +228,7 @@ describe('/mcp end-to-end through a real MCP client', () => {
     expect(row.status).toBe('approved');
     expect(String(row.nonce)).toMatch(/^pc-/);
 
-    const twice = await client.callTool({ name: 'preston_decide_approval', arguments: { approval_id: approvalId, outcome: 'approved' } });
+    const twice = await client.callTool({ name: 'preston_decide_approval', arguments: { approval_id: approvalId, outcome: 'approved', owner_confirmation: `Approve ${approvalId}` } });
     expect((twice.structuredContent as Record<string, unknown>).error).toBe('already_decided');
 
     const ev = await client.callTool({ name: 'preston_get_evidence', arguments: { goal_id: goalId } });

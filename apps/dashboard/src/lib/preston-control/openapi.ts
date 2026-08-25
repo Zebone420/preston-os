@@ -87,6 +87,16 @@ export function buildOpenApiDocument(origin: string): Record<string, unknown> {
           properties: {
             outcome: { type: 'string', enum: ['approved', 'rejected'] },
             reason: { type: 'string', maxLength: 300, description: 'Optional non-secret note.' },
+            owner_confirmation: {
+              type: 'string',
+              maxLength: 200,
+              description:
+                "The owner's OWN verbatim confirmation naming the exact approval id, e.g. " +
+                "'Approve apr-1234abcd...'. NEVER compose, infer, or autofill this value; only " +
+                'pass a message the owner typed after seeing the restated approval. Omit on the ' +
+                'first call - the server refuses to decide and returns the restatement to show ' +
+                'the owner.',
+            },
           },
         },
       },
@@ -142,8 +152,13 @@ export function buildOpenApiDocument(origin: string): Record<string, unknown> {
           summary: 'Approve or reject a pending Preston approval (owner only)',
           description:
             'CONSEQUENTIAL: records the owner decision through Preston\'s authoritative owner-only, ' +
-            'one-time, audited decision path. Always confirm the approval_id and action text with the ' +
-            'owner first. Already-decided or expired approvals are refused.',
+            'one-time, audited decision path. SERVER-ENFORCED two-step handshake: a call without a ' +
+            'valid owner_confirmation makes NO decision - it returns a restatement of the exact ' +
+            'approval_id and action text plus the required confirmation phrase. The decision only ' +
+            'happens when owner_confirmation is the owner\'s OWN message naming the exact approval ' +
+            'id (e.g. "Approve apr-...."). Ambiguous requests like "approve that" must never be ' +
+            'resolved to an approval id; ask the owner for the exact id instead. Already-decided ' +
+            'or expired approvals are refused.',
           'x-openai-isConsequential': true,
           parameters: [{ name: 'approval_id', in: 'path', required: true, schema: { type: 'string', pattern: RUNTIME_ID_PATTERN } }],
           requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/DecideApprovalRequest' } } } },

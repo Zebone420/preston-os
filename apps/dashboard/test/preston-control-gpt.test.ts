@@ -169,7 +169,7 @@ describe('GPT Actions REST surface', () => {
     const approvalId = lj.approvals[0].approval_id as string;
 
     const d = await decision.POST(
-      req(`/api/control/approvals/${approvalId}/decision`, { method: 'POST', token: GPT_TOKEN, body: { outcome: 'approved' } }),
+      req(`/api/control/approvals/${approvalId}/decision`, { method: 'POST', token: GPT_TOKEN, body: { outcome: 'approved', owner_confirmation: `Approve ${approvalId}` } }),
       { params: Promise.resolve({ approval_id: approvalId }) },
     );
     const dj = await d.json();
@@ -179,13 +179,13 @@ describe('GPT Actions REST surface', () => {
     expect(row.status).toBe('approved');
 
     const again = await decision.POST(
-      req(`/api/control/approvals/${approvalId}/decision`, { method: 'POST', token: GPT_TOKEN, body: { outcome: 'approved' } }),
+      req(`/api/control/approvals/${approvalId}/decision`, { method: 'POST', token: GPT_TOKEN, body: { outcome: 'approved', owner_confirmation: `Approve ${approvalId}` } }),
       { params: Promise.resolve({ approval_id: approvalId }) },
     );
     expect((await again.json()).error).toBe('already_decided');
 
     const guestDecide = await decision.POST(
-      req(`/api/control/approvals/${approvalId}/decision`, { method: 'POST', token: GUEST_TOKEN, body: { outcome: 'rejected' } }),
+      req(`/api/control/approvals/${approvalId}/decision`, { method: 'POST', token: GUEST_TOKEN, body: { outcome: 'rejected', owner_confirmation: `Reject ${approvalId}` } }),
       { params: Promise.resolve({ approval_id: approvalId }) },
     );
     expect(guestDecide.status).toBe(403);

@@ -91,9 +91,11 @@ export function buildPrestonControlServer(ctx: ToolContext): McpServer {
     title: 'Decide a Preston approval (owner only)',
     description:
       'CONSEQUENTIAL: records the owner\'s approve/reject decision on a pending approval through ' +
-      'Preston\'s authoritative owner-only decision path. Always confirm the approval_id and the ' +
-      'action text with the owner before calling. One-time; already-decided or expired approvals ' +
-      'are refused.',
+      'Preston\'s authoritative owner-only decision path. SERVER-ENFORCED handshake: without a ' +
+      'valid owner_confirmation (the owner\'s OWN message naming the exact approval id, e.g. ' +
+      '"Approve apr-...") NO decision is made - the server returns a restatement of the approval ' +
+      'id and action to show the owner. Never resolve ambiguous references like "approve that"; ' +
+      'ask the owner for the exact id. One-time; already-decided or expired approvals are refused.',
     inputSchema: DECIDE_APPROVAL_SHAPE,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   }, async (args) => result(await prestonDecideApproval(ctx, args)));

@@ -312,9 +312,55 @@ const DECIDE_ERROR_TAGS = [
   'not_pending', 'already_decided', 'expired',
 ] as const;
 
+// G8 owner-boundary invariant: the authoritative decision RPC is reachable
+// ONLY through a confirmation phrase that NAMES the exact approval id and the
+// requested outcome. An ambiguous reference ("Approve that.", "go ahead",
+// "the pending one") can never satisfy this check because the id itself must
+// appear in the phrase - so a conversational layer that resolved a pronoun to
+// an approval id still cannot decide until the owner has typed the id.
+// Accepted forms (case-insensitive verb, optional word "approval", trailing
+// ./! ignored): "approve <id>", "approved <id>", "reject <id>",
+// "rejected <id>". Anything else is a refusal WITHOUT any decision.
+const CONFIRMATION_RE = /^(approve|approved|reject|rejected)(?:\s+approval)?\s+([A-Za-z0-9._:-]{8,128})$/i;
+
+export type OwnerConfirmationCheck =
+  | { ok: true }
+  | { ok: false; error: 'owner_confirmation_required' | 'owner_confirmation_id_mismatch' | 'owner_confirmation_outcome_mismatch' };
+
+export function evaluateOwnerConfirmation(
+  raw: unknown,
+  approvalId: string,
+  outcome: 'approved' | 'rejected',
+): OwnerConfirmationCheck {
+  const s = String(raw ?? '').trim().replace(/[.!]+$/, '').trim().replace(/\s+/g, ' ');
+  if (!s) return { ok: false, error: 'owner_confirmation_required' };
+  const m = CONFIRMATION_RE.exec(s);
+  if (!m) return { ok: false, error: 'owner_confirmation_required' };
+  if (m[2].toLowerCase() !== approvalId.toLowerCase()) {
+    return { ok: false, error: 'owner_confirmation_id_mismatch' };
+  }
+  const verbOutcome = m[1].toLowerCase().startsWith('approve') ? 'approved' : 'rejected';
+  if (verbOutcome !== outcome) return { ok: false, error: 'owner_confirmation_outcome_mismatch' };
+  return { ok: true };
+}
+
+// Bounded read used only to RESTATE the approval back to the owner during the
+// confirmation handshake (same projection discipline as every other read).
+async function restateApproval(ctx: ToolContext, approvalId: string) {
+  try {
+    const client = ctx.client as unknown as RuntimeClient;
+    const r = await client
+      .from('orchestration_approvals').select('*').eq('approval_id', approvalId).limit(1);
+    if (r.error || !Array.isArray(r.data) || r.data.length === 0) return null;
+    return projectApproval(r.data[0] as Row, Date.parse(ctx.now));
+  } catch {
+    return null;
+  }
+}
+
 export async function prestonDecideApproval(
   ctx: ToolContext,
-  input: { approval_id: string; outcome: 'approved' | 'rejected'; reason?: string },
+  input: { approval_id: string; outcome: 'approved' | 'rejected'; reason?: string; owner_confirmation?: string },
 ) {
   const approvalId = String(input.approval_id ?? '').trim();
   const outcome = input.outcome === 'approved' || input.outcome === 'rejected' ? input.outcome : null;
@@ -324,6 +370,28 @@ export async function prestonDecideApproval(
   const reason = String(input.reason ?? '').slice(0, MAX_REASON_CHARS);
   if (looksSecret(reason)) {
     return { ok: false as const, approval_id: approvalId, error: 'secret_in_reason' };
+  }
+  // G8 handshake: no valid owner confirmation -> NO decision, restate instead.
+  const confirmation = evaluateOwnerConfirmation(input.owner_confirmation, approvalId, outcome);
+  if (!confirmation.ok) {
+    const approval = await restateApproval(ctx, approvalId);
+    const phrase = `${outcome === 'approved' ? 'Approve' : 'Reject'} ${approvalId}`;
+    return {
+      ok: false as const,
+      decision_made: false as const,
+      approval_id: approvalId,
+      requested_outcome: outcome,
+      error: confirmation.error,
+      restatement: approval,
+      required_confirmation: phrase,
+      instructions:
+        'NO decision was recorded. Show the owner the restated approval (exact ' +
+        'approval_id and action text). To proceed, the OWNER must reply with the ' +
+        `exact phrase "${phrase}" themselves. Never construct that phrase from an ` +
+        'ambiguous reference such as "approve that", "approve it", "go ahead", or ' +
+        '"the pending one" - even if only one approval is open. If the owner used ' +
+        'ambiguous wording, ask them to state the exact approval id.',
+    };
   }
   // Fresh one-time nonce per attempt; the DB partial unique index is the
   // durable replay guard. The RPC re-enforces is_owner() under auth.uid().

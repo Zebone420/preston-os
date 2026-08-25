@@ -21,6 +21,13 @@ export const DECIDE_APPROVAL_SHAPE = {
   approval_id: RUNTIME_ID,
   outcome: z.enum(['approved', 'rejected']),
   reason: z.string().max(300).optional().describe('Optional non-secret note.'),
+  owner_confirmation: z.string().max(200).optional().describe(
+    "The owner's OWN verbatim confirmation message naming the exact approval id " +
+    "(e.g. 'Approve apr-1234abcd...'). NEVER compose, infer, or autofill this value - " +
+    'pass it only when the owner has typed it after seeing the restated approval. ' +
+    'Omit it on the first call: the server refuses to decide and returns a ' +
+    'restatement of the approval id and action to show the owner.',
+  ),
 };
 export const GET_EVIDENCE_SHAPE = { goal_id: UUID.optional(), job_id: UUID.optional() };
 

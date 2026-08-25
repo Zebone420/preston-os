@@ -188,7 +188,7 @@ describe('preston_decide_approval', () => {
 
   it('owner approval goes through decide_orchestration_approval exactly once with a fresh pc- nonce and one audit row', async () => {
     const { db, approvalId } = await gated();
-    const r = await prestonDecideApproval(ctxFor(db.client), { approval_id: approvalId, outcome: 'approved' });
+    const r = await prestonDecideApproval(ctxFor(db.client), { approval_id: approvalId, outcome: 'approved', owner_confirmation: `Approve ${approvalId}` });
     expect(r.ok).toBe(true);
     expect(db.decideCalls).toHaveLength(1);
     expect(String(db.decideCalls[0].p_nonce)).toMatch(/^pc-/);
@@ -203,22 +203,22 @@ describe('preston_decide_approval', () => {
 
   it('already-decided, invalid id, and expired approvals are refused with the RPC tag', async () => {
     const { db, approvalId } = await gated();
-    await prestonDecideApproval(ctxFor(db.client), { approval_id: approvalId, outcome: 'rejected' });
-    expect(await prestonDecideApproval(ctxFor(db.client), { approval_id: approvalId, outcome: 'approved' }))
+    await prestonDecideApproval(ctxFor(db.client), { approval_id: approvalId, outcome: 'rejected', owner_confirmation: `Reject ${approvalId}` });
+    expect(await prestonDecideApproval(ctxFor(db.client), { approval_id: approvalId, outcome: 'approved', owner_confirmation: `Approve ${approvalId}` }))
       .toMatchObject({ ok: false, error: 'already_decided' });
-    expect(await prestonDecideApproval(ctxFor(db.client), { approval_id: 'apr-does-not-exist', outcome: 'approved' }))
+    expect(await prestonDecideApproval(ctxFor(db.client), { approval_id: 'apr-does-not-exist', outcome: 'approved', owner_confirmation: 'Approve apr-does-not-exist' }))
       .toMatchObject({ ok: false, error: 'approval_not_found' });
 
     const late = makeDb({ isOwner: true, nowIso: () => LATER });
     const g2 = await gated(late);
-    expect(await prestonDecideApproval(ctxFor(g2.db.client, LATER), { approval_id: g2.approvalId, outcome: 'approved' }))
+    expect(await prestonDecideApproval(ctxFor(g2.db.client, LATER), { approval_id: g2.approvalId, outcome: 'approved', owner_confirmation: `Approve ${g2.approvalId}` }))
       .toMatchObject({ ok: false, error: 'expired' });
   });
 
   it('non-owner / runtime identity -> owner_required from the DB (no local override exists)', async () => {
     const rt = makeDb({ isOwner: false, nowIso: () => NOW });
     const { approvalId } = await gated(rt);
-    const r = await prestonDecideApproval(ctxFor(rt.client), { approval_id: approvalId, outcome: 'approved' });
+    const r = await prestonDecideApproval(ctxFor(rt.client), { approval_id: approvalId, outcome: 'approved', owner_confirmation: `Approve ${approvalId}` });
     expect(r).toMatchObject({ ok: false, error: 'owner_required' });
     const row = rt.rowsOf('orchestration_approvals').find((a) => a.approval_id === approvalId)!;
     expect(row.status).toBe('pending');
