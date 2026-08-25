@@ -46,6 +46,9 @@ vi.mock('@supabase/supabase-js', () => ({
           if (!u?.owner) return Promise.resolve({ data: null, error: { message: 'owner_required' } });
           const row = db.rowsOf('orchestration_approvals').find((r) => r.approval_id === args.p_approval_id);
           if (!row) return Promise.resolve({ data: null, error: { message: 'approval_not_found' } });
+          // Real RPC order (0021): status gate before nonce, so a decided row
+          // replays as not_pending. Staging-proven 2026-08-25.
+          if (row.status !== 'pending') return Promise.resolve({ data: null, error: { message: 'not_pending' } });
           if (row.nonce) return Promise.resolve({ data: null, error: { message: 'already_decided' } });
           row.status = args.p_outcome; row.nonce = args.p_nonce;
           return Promise.resolve({ data: [row], error: null });
@@ -229,7 +232,7 @@ describe('/mcp end-to-end through a real MCP client', () => {
     expect(String(row.nonce)).toMatch(/^pc-/);
 
     const twice = await client.callTool({ name: 'preston_decide_approval', arguments: { approval_id: approvalId, outcome: 'approved', owner_confirmation: `Approve ${approvalId}` } });
-    expect((twice.structuredContent as Record<string, unknown>).error).toBe('already_decided');
+    expect((twice.structuredContent as Record<string, unknown>).error).toBe('not_pending');
 
     const ev = await client.callTool({ name: 'preston_get_evidence', arguments: { goal_id: goalId } });
     expect((ev.structuredContent as Record<string, unknown>).ok).toBe(true);

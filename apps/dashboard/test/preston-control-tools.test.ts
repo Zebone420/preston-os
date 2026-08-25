@@ -61,8 +61,11 @@ function makeDb(opts: DecideOpts = { isOwner: true, nowIso: () => NOW }) {
       if (!args.p_nonce) return Promise.resolve({ data: null, error: { message: 'nonce_required' } });
       const row = db.rowsOf('orchestration_approvals').find((r) => r.approval_id === args.p_approval_id);
       if (!row) return Promise.resolve({ data: null, error: { message: 'approval_not_found' } });
-      if (row.nonce) return Promise.resolve({ data: null, error: { message: 'already_decided' } });
+      // Real RPC order (0021): status gate BEFORE the nonce gate, so a decided
+      // row replays as not_pending; already_decided is the anomaly branch
+      // (pending row with a nonce). Staging-proven 2026-08-25.
       if (row.status !== 'pending') return Promise.resolve({ data: null, error: { message: 'not_pending' } });
+      if (row.nonce) return Promise.resolve({ data: null, error: { message: 'already_decided' } });
       if (Date.parse(String(row.expires_at)) <= Date.parse(opts.nowIso())) {
         return Promise.resolve({ data: null, error: { message: 'expired' } });
       }
@@ -205,7 +208,7 @@ describe('preston_decide_approval', () => {
     const { db, approvalId } = await gated();
     await prestonDecideApproval(ctxFor(db.client), { approval_id: approvalId, outcome: 'rejected', owner_confirmation: `Reject ${approvalId}` });
     expect(await prestonDecideApproval(ctxFor(db.client), { approval_id: approvalId, outcome: 'approved', owner_confirmation: `Approve ${approvalId}` }))
-      .toMatchObject({ ok: false, error: 'already_decided' });
+      .toMatchObject({ ok: false, error: 'not_pending' });
     expect(await prestonDecideApproval(ctxFor(db.client), { approval_id: 'apr-does-not-exist', outcome: 'approved', owner_confirmation: 'Approve apr-does-not-exist' }))
       .toMatchObject({ ok: false, error: 'approval_not_found' });
 

@@ -53,6 +53,9 @@ vi.mock('@supabase/supabase-js', () => ({
           if (!u?.owner) return Promise.resolve({ data: null, error: { message: 'owner_required' } });
           const row = db.rowsOf('orchestration_approvals').find((r) => r.approval_id === args.p_approval_id);
           if (!row) return Promise.resolve({ data: null, error: { message: 'approval_not_found' } });
+          // Real RPC order (0021): status gate before nonce, so a decided row
+          // replays as not_pending. Staging-proven 2026-08-25.
+          if (row.status !== 'pending') return Promise.resolve({ data: null, error: { message: 'not_pending' } });
           if (row.nonce) return Promise.resolve({ data: null, error: { message: 'already_decided' } });
           row.status = args.p_outcome; row.nonce = args.p_nonce;
           return Promise.resolve({ data: [row], error: null });
@@ -137,7 +140,7 @@ describe('GPT Actions REST surface', () => {
     expect(await r.json()).toMatchObject({ status: 'unconfigured' });
   });
 
-  it('Galaxy Test B/C/D over REST: harmless goal -> duplicate -> gated -> list -> decide -> already_decided -> evidence', async () => {
+  it('Galaxy Test B/C/D over REST: harmless goal -> duplicate -> gated -> list -> decide -> replay refused (not_pending) -> evidence', async () => {
     const goals = await import('../src/app/api/control/goals/route');
     const goal = await import('../src/app/api/control/goals/[goal_id]/route');
     const approvals = await import('../src/app/api/control/approvals/route');
@@ -182,7 +185,7 @@ describe('GPT Actions REST surface', () => {
       req(`/api/control/approvals/${approvalId}/decision`, { method: 'POST', token: GPT_TOKEN, body: { outcome: 'approved', owner_confirmation: `Approve ${approvalId}` } }),
       { params: Promise.resolve({ approval_id: approvalId }) },
     );
-    expect((await again.json()).error).toBe('already_decided');
+    expect((await again.json()).error).toBe('not_pending');
 
     const guestDecide = await decision.POST(
       req(`/api/control/approvals/${approvalId}/decision`, { method: 'POST', token: GUEST_TOKEN, body: { outcome: 'rejected', owner_confirmation: `Reject ${approvalId}` } }),

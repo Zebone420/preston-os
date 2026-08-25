@@ -53,8 +53,10 @@ function makeDb(opts: DecideOpts = { isOwner: true, nowIso: () => NOW }) {
       if (!opts.isOwner) return Promise.resolve({ data: null, error: { message: 'owner_required' } });
       const row = db.rowsOf('orchestration_approvals').find((r) => r.approval_id === args.p_approval_id);
       if (!row) return Promise.resolve({ data: null, error: { message: 'approval_not_found' } });
-      if (row.nonce) return Promise.resolve({ data: null, error: { message: 'already_decided' } });
+      // Real RPC order (0021): status gate BEFORE the nonce gate, so a decided
+      // row replays as not_pending. Staging-proven 2026-08-25.
       if (row.status !== 'pending') return Promise.resolve({ data: null, error: { message: 'not_pending' } });
+      if (row.nonce) return Promise.resolve({ data: null, error: { message: 'already_decided' } });
       if (Date.parse(String(row.expires_at)) <= Date.parse(opts.nowIso())) {
         return Promise.resolve({ data: null, error: { message: 'expired' } });
       }
@@ -245,7 +247,7 @@ describe('G8: ambiguous references never reach the decision RPC', () => {
     const id = await gated(db, 'pc-g8-case9');
     await prestonDecideApproval(ctxFor(db.client), { approval_id: id, outcome: 'approved', owner_confirmation: `Approve ${id}` });
     expect(await prestonDecideApproval(ctxFor(db.client), { approval_id: id, outcome: 'rejected', owner_confirmation: `Reject ${id}` }))
-      .toMatchObject({ ok: false, error: 'already_decided' });
+      .toMatchObject({ ok: false, error: 'not_pending' });
     expect(approvalRow(db, id).status).toBe('approved');
 
     const late = makeDb({ isOwner: true, nowIso: () => LATER });
