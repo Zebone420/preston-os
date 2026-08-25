@@ -61,3 +61,19 @@ Spec 6.5/7 contains no full-sequence-repeat requirement after a step
 failure. G1 adjudicated PASS (no rerun). G4-G8 verified PASS (no rerun).
 Rerun = G2 + G3 only, with the canonical prompt pinned in the closing
 section of this report.
+
+## G2/G3 RETEST: PASS, VERIFIED (2026-08-25 ~22:27Z)
+
+Device: first submission accepted, goal 311277a5-fa5b-4bbe-8795-aabe79762128,
+approvals_required 0; exact resubmission (same request_id
+pc-galaxy-g2-20260825) -> duplicate, SAME goal id, no second goal.
+Server-side: Vercel shows POST /oauth/gpt/token 200 at 18:27:47.96 EDT then
+exactly TWO POST /api/control/goals 200 (18:27:49.08, 18:27:52.68); the
+read-model shows exactly ONE "Document the Galaxy acceptance drill marker
+GALAXYG2-20260825..." goal row (decomposed), FAILED 0. Two calls, one row =
+request_id idempotency proven on the Galaxy path.
+
+## FINAL: Galaxy gate (spec 6.5) = PASS in full
+
+G1 PASS (adjudicated per the spec's proof clause), G2/G3 PASS (retest),
+G4-G8 PASS (verified server-side). Phase H prerequisite 2 met.
