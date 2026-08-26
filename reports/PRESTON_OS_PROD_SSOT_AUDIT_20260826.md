@@ -71,9 +71,45 @@ H. Canonical id identity across ChatGPT -> SSOT -> Claude runtime ->
    migrations (prod goals carry environment=production and complete with
    real evidence) - by design of the go-live; no action.
 
+## HERMES LIVENESS RECOVERY (2026-08-26 ~02:35Z, owner-run under agent direction)
+
+Root cause of the stale observer: hermes-observe.service exited 78/CONFIG
+every tick - "supabase token refresh failed with status 400". The
+/var/lib/preston/hermes token store held a REVOKED runtime@service.preston
+refresh token (frozen mtime Aug 20 21:33), swept during the golden-seal
+C-3/C-4 identity re-seed while only the worker store was re-bootstrapped.
+Proven NOT: env/store presence (all four vars present, SUPABASE_URL=prod),
+password (never evaluated), account status (worker refreshes 200 every
+5 min), permissions/build. GoTrue never reached on the failing ticks; the
+failing calls were rejected at the gateway (x_sb_error_code
+UNAUTHORIZED_INVALID_API_KEY) during the mint attempts - this project's
+Auth gateway accepts only the LEGACY anon JWT class, not sb_publishable_.
+Identity note: no dedicated hermes@ auth user exists in prod (only
+info@preston.nyc + runtime@service.preston); Hermes authenticates AS
+runtime@service.preston (host-level separation only). A dedicated hermes
+identity would require the deferred least-privilege RLS gate (not done).
+
+Fix (documented --bootstrap path, no RLS/credential-reset/user change):
+timer stopped -> store truncated to 0 (ownership/mode preserved) ->
+fresh runtime@service.preston refresh token minted (legacy anon apikey,
+password-grant, owner workstation, token never in chat) -> one-time
+runuser --bootstrap seeded the store. VERIFIED: store now 12 bytes,
+mtime advancing (02:35:15 bootstrap -> 02:36:18 first timer tick =
+rotation live); service Result=success ExecMainStatus=0 (was 78);
+hermes-loop stoppedReason=completed; token-leak scan of hermes.log = 0.
+Timer active (waiting), 5-min cadence restored.
+
+observed_bucket: still 202608202133 by design - hermes-loop records 0 on
+a no-op tick (open_approvals 0, no queued execution), and the bucket is
+the latest orchestration_decisions row, so it advances only on the next
+tick with an observable event. Liveness (the actual defect) is FIXED;
+bucket advance is state-driven, not a heartbeat.
+
 ## Verdict
 
-SSOT status: GREEN (with the hermes-liveness PARTIAL note). Production
-Supabase is the single operational truth for every active component.
-Airtable excluded. No split-brain, no dual-write, no staging leakage,
-no authoritative local state. No RED changes required.
+SSOT status: GREEN. Production Supabase is the single operational truth
+for every active component. Hermes observer liveness RESTORED (CONFIG
+failure fixed; runs clean + rotates every 5 min). Airtable excluded. No
+split-brain, no dual-write, no staging leakage, no authoritative local
+state. No RED changes made. Deferred (separate gate): dedicated
+least-privilege Hermes auth identity + scoped RLS.
