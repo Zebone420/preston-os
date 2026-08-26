@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { makeComposerFakeDb } from './composer-fake-db';
 import {
   normalizeRequestId,
+  parseHermesSnapshotCounts,
   prestonDecideApproval,
   prestonGetEvidence,
   prestonGetGoal,
@@ -313,5 +314,71 @@ describe('consent gate + metadata', () => {
     expect(protectedResourceMetadata(req, { ...env, PRESTON_CONTROL_PUBLIC_ORIGIN: 'https://control.preston.nyc/' })!.resource)
       .toBe('https://control.preston.nyc/mcp');
     expect(protectedResourceMetadata(req, { ...env, NEXT_PUBLIC_SUPABASE_URL: '' })).toBeNull();
+  });
+});
+
+// P0.1 (2026-08-26): a hermes od-orchstatus row is a SNAPSHOT recorded at a
+// past minute bucket; preston_status.summary is computed live per read over
+// the current bounded window. The live drill showed summary=2 dead-letters
+// next to a stale hermes reason 'dead_lettered:5' - both correct for their
+// own time/window. These pins keep the two metrics distinctly named so the
+// discrepancy can never read as a counting defect again.
+describe('P0.1 hermes snapshot vs live summary disambiguation', () => {
+  const GOAL_ID = '11111111-1111-4111-8111-111111111111';
+
+  it('surfaces stale hermes counts as snapshot_counts, distinct from the live summary', async () => {
+    const db = makeDb();
+    db.rowsOf('master_goals').push({
+      id: GOAL_ID, title: 'g', objective: 'o', source: 'dashboard',
+      requested_by: OWNER, status: 'failed', environment: 'staging',
+      correlation_id: 'cmp-p01-snapshot', simulation_only: true, iteration: 1,
+      created_at: NOW, updated_at: NOW,
+    });
+    for (const n of [1, 2]) {
+      db.rowsOf('goal_jobs').push({
+        id: `22222222-2222-4222-8222-22222222222${n}`, goal_id: GOAL_ID,
+        kind: 'documentation', title: 't', objective: 'o',
+        status: 'dead_lettered', risk_class: 'GREEN', assigned_role: 'claude',
+        attempts: 3, requires_approval: false, approval_id: null,
+        evidence_refs: [], failure_reason: 'drill residue',
+        created_at: NOW, updated_at: NOW,
+      });
+    }
+    db.rowsOf('orchestration_decisions').push({
+      id: 'od-orchstatus-202608202133', hermes_mode: 'observe_only',
+      decision: 'observe',
+      reasons: ['orchestration_status', 'status:simulation_ready',
+        'open_approvals:0', 'failed:0', 'dead_lettered:5'],
+      correlation_id: 'orchstatus-202608202133',
+      created_at: '2026-08-20T21:33:00.000Z',
+    });
+
+    const s = await prestonStatus(ctxFor(db.client));
+    expect(s.summary.dead_lettered_jobs).toBe(2); // live bounded-window count
+    expect(s.hermes.snapshot_counts.dead_lettered_jobs).toBe(5); // historical
+    expect(s.hermes.snapshot_counts.failed_jobs).toBe(0);
+    expect(s.hermes.snapshot_counts.open_approvals).toBe(0);
+    expect(s.hermes.snapshot_counts.as_of_bucket).toBe('202608202133');
+    expect(s.hermes.snapshot_note).toContain('observed_bucket');
+  });
+
+  it('parses absent or malformed snapshot counts as null, never a fabricated 0', () => {
+    expect(parseHermesSnapshotCounts([])).toEqual({
+      open_approvals: null, failed_jobs: null, dead_lettered_jobs: null,
+    });
+    expect(parseHermesSnapshotCounts(['dead_lettered:abc', 'failed:'])).toEqual({
+      open_approvals: null, failed_jobs: null, dead_lettered_jobs: null,
+    });
+    expect(parseHermesSnapshotCounts(['open_approvals:3'])).toEqual({
+      open_approvals: 3, failed_jobs: null, dead_lettered_jobs: null,
+    });
+  });
+
+  it('reports empty snapshot_counts when no hermes status row exists', async () => {
+    const db = makeDb();
+    const s = await prestonStatus(ctxFor(db.client));
+    expect(s.hermes.state).toBe('empty');
+    expect(s.hermes.snapshot_counts.as_of_bucket).toBeNull();
+    expect(s.hermes.snapshot_counts.dead_lettered_jobs).toBeNull();
   });
 });

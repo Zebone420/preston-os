@@ -591,15 +591,22 @@ export async function runDispatcher(input: DispatcherInput): Promise<DispatcherR
     // Phase 8: one bounded, idempotent orchestration STATUS observation per
     // run (goals/approvals/failures aggregates -> orchestration_decisions).
     // Read-only; approval_attention surfaces when an owner decision waits.
-    let orch: { status: string; approval_attention: boolean } | null = null;
+    let orch: { status: string; approval_attention: boolean; recorded: boolean } | null = null;
     try {
       const o = await hermesObserveOrchestration(client, now);
-      orch = { status: o.status, approval_attention: o.approval_attention };
+      orch = { status: o.status, approval_attention: o.approval_attention, recorded: o.recorded };
     } catch { orch = null; }
+    // P0.1 (2026-08-26): orchestration_recorded surfaces a SILENT status-row
+    // insert failure (RLS/CHECK) that previously left no trace - the bucket
+    // simply stopped advancing with every tick "clean".
     log({
       level: 'info', command, correlationId, event: 'hermes_loop',
       rounds: res.rounds, stoppedReason: res.stoppedReason, recorded: res.totalRecorded,
-      ...(orch ? { orchestration_status: orch.status, ...(orch.approval_attention ? { approval_attention: true } : {}) } : {}),
+      ...(orch ? {
+        orchestration_status: orch.status,
+        orchestration_recorded: orch.recorded,
+        ...(orch.approval_attention ? { approval_attention: true } : {}),
+      } : {}),
     });
     return {
       exitCode: res.stoppedReason === 'halted' ? EXIT.halted : EXIT.ok,

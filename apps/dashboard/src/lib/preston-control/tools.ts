@@ -136,6 +136,29 @@ export function projectApproval(r: Row, nowMs: number) {
   };
 }
 
+// P0.1 (2026-08-26): the counts embedded in a hermes decision row's reasons
+// (open_approvals:N / failed:N / dead_lettered:N) are a SNAPSHOT recorded by a
+// PAST hermes tick at observed_bucket (minute granularity) over the same
+// bounded recent-goals window - they are NOT live values and may lag or
+// disagree with `summary` (which is computed live per read over the current
+// window). Surfacing them under distinct names prevents the two metrics from
+// being conflated (live drill finding: summary said 2 dead-letters while a
+// stale hermes row said 5 - both correct for their own time/window).
+export function parseHermesSnapshotCounts(reasons: string[]) {
+  const num = (prefix: string): number | null => {
+    const m = reasons.find((r) => r.startsWith(prefix));
+    if (!m) return null;
+    const tail = m.slice(prefix.length);
+    // Strict digits only: Number('') is 0, which would fabricate a count.
+    return /^\d+$/.test(tail) ? Number(tail) : null;
+  };
+  return {
+    open_approvals: num('open_approvals:'),
+    failed_jobs: num('failed:'),
+    dead_lettered_jobs: num('dead_lettered:'),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // 1. preston_status (READ ONLY)
 export async function prestonStatus(ctx: ToolContext) {
@@ -177,6 +200,15 @@ export async function prestonStatus(ctx: ToolContext) {
       hermes_mode: hermes.hermes_mode ?? null,
       observed_bucket: hermes.observed_bucket ?? null,
       reasons: (hermes.reasons ?? []).map((r) => safeText(r, 200)),
+      // Historical snapshot as of observed_bucket - NOT live. Live
+      // bounded-window counts are in `summary`.
+      snapshot_counts: {
+        as_of_bucket: hermes.observed_bucket ?? null,
+        ...parseHermesSnapshotCounts(hermes.reasons ?? []),
+      },
+      snapshot_note:
+        'snapshot_counts were recorded by a past hermes tick at ' +
+        'observed_bucket; live bounded-window counts are in summary',
     },
     summary: model.summary,
     recent_goals: model.goals.rows.map(projectGoal),
