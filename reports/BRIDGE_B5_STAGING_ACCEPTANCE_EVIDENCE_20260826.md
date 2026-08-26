@@ -50,6 +50,40 @@ alone does NOT re-discover; pre-refresh chats keep the old 6-tool list.
 Residue so far: drill goals 3931e43f (+child 68e76dab), da910563 (cancel
 target), 5405e00d (gated, approval expires 24h) - sim-only, documented.
 
+## Addendum 2 (session 2, ~05:50-06:00Z - host session S1-S4)
+
+- S1 DIAGNOSIS (ssh, read-only): preston-orchestrator.timer ACTIVE
+  (waiting) since Aug 10; service exits 0/SUCCESS every 5-min tick in
+  ~405ms. Tick log root cause: goal ef99816e-4a04-40ea-835f-f77f78b5f5e7
+  ("Draft a database schema migration plan for owner review", decomposed,
+  1 pending gated job, created 2026-08-25T00:13Z - drill residue) exceeds
+  its wall deadline; engine verdict `deadline_exceeded` cannot reflect
+  (decomposed->terminal illegal edge => goal_cas_unapplied) so oldest-first
+  selection re-picks it EVERY tick, starving all younger goals. Parked-goal
+  skip works (7 approval-parked goals skipped correctly). PRE-EXISTING
+  liveness defect, not introduced by the bridge build.
+- FIX authored + tested locally (commit 0c55673): reflectGoalStatus routes
+  decomposed -> running -> terminal (legal chain, per-leg CAS); regression
+  tests reproduce the stall + all-terminal-decomposed shapes. Unpushed
+  (H-6); rides the B6 set. Immediate staging unblock = owner cancel of
+  ef99816e (doubles as G6 on a real stuck goal).
+- S2 HOST UPDATE DONE: /srv/preston-os at 8fb5fdb (verified rev-parse);
+  os-runtime rebuilt 05:56 as repo owner grann; dist carries the B2 emitter
+  (ev-result-/JobResultRecorded) + P0.1 orchestration_recorded. npm ci
+  SKIPPED: host npm 11.16 refuses the committed lockfile
+  (@img/sharp optional-dep sync, EUSAGE) - tsc build needs no new deps;
+  lockfile refresh recorded as B6-set tech debt. Host-local drift noted:
+  uncommitted M apps/dashboard/src/app/api/os/remote/status/route.ts
+  (app-side only, left untouched).
+- S3: timer active (waiting), service healthy - proceeding automatic.
+- S4 PASS (live): first post-rebuild hermes tick logs
+  orchestration_recorded:true (two pre-rebuild lines lack the field -
+  clean before/after). Status-row append confirmed succeeding.
+- S10 SCOPE FACT: the "Preston Control" GPT was repointed to PRODUCTION in
+  Wave 2; no staging GPT exists. Any GPT-editor change would modify prod
+  GPT config (out of scope for B5). G12 stands on live MCP + live staging
+  openapi + unit parity pins; prod GPT re-import stays a B6 owner step.
+
 ## Addendum (05:46Z status read over the staging MCP surface)
 
 1. P0.1 LIVE-CONFIRMED: preston_status now returns
