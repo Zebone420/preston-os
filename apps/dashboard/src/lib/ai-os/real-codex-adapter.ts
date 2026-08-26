@@ -41,6 +41,7 @@ import {
   buildLevel1Prompt,
   checkWorktreeConfinement,
   clampTimeoutMs,
+  extractResultText,
   makeNodeProcessRunner,
   mapProcessOutcome,
   realEvidenceRef,
@@ -276,6 +277,10 @@ export interface RealCodexAdapterResult {
   process: RealProcessEvidence | null;
   summary: string;
   failure_reason: string | null;
+  // Bridge B2: readable result text (sanitized + bounded); see the claude
+  // adapter's extractResultText. Codex `exec --json` emits event lines, so
+  // this is usually the raw sanitized tail rather than a parsed field.
+  result_excerpt: string | null;
 }
 
 function processEvidence(o: ProcessOutcome): RealProcessEvidence {
@@ -326,6 +331,7 @@ function refuse(
     process: null,
     summary: `real codex adapter refused: ${reason}`,
     failure_reason: reason,
+    result_excerpt: null,
   };
 }
 
@@ -382,5 +388,6 @@ export async function runRealCodexJob(
       : `REAL level-1 ${i.job.kind} codex run did not complete: ` +
         (mapped.failure_reason ?? 'unknown'),
     failure_reason: mapped.failure_reason,
+    result_excerpt: extractResultText(o.stdout),
   };
 }

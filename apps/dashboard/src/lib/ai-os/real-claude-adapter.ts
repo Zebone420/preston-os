@@ -137,6 +137,23 @@ export function sanitizeProcessText(text: string): string {
   return t.slice(0, REAL_CLAUDE_EXCERPT_CHARS);
 }
 
+// Bridge B2: extract the human-readable result text from the agent CLI's
+// stdout. The claude CLI with --output-format json emits a JSON object whose
+// `result` field is the answer text; parsing happens on the FULL captured
+// stdout (before excerpt truncation) so a long JSON wrapper cannot destroy
+// the readable part. Falls back to the raw (sanitized, bounded) text when the
+// output is not JSON-shaped. Always sanitized + bounded on the way out.
+export function extractResultText(stdout: string): string | null {
+  const t = String(stdout ?? '').trim();
+  if (!t) return null;
+  try {
+    const j = JSON.parse(t) as Record<string, unknown>;
+    const r = j['result'];
+    if (typeof r === 'string' && r.trim()) return sanitizeProcessText(r.trim());
+  } catch { /* not JSON - fall through to raw text */ }
+  return sanitizeProcessText(t);
+}
+
 // --- capability probe (requirement 2): NO process, NO auth, NO network ----
 
 export interface RealClaudeProbeInput {
@@ -672,6 +689,9 @@ export interface RealAdapterResult {
   process: RealProcessEvidence | null;
   summary: string;
   failure_reason: string | null;
+  // Bridge B2: the readable result text extracted from the agent CLI output
+  // (sanitized + bounded). Null when the run never spawned / produced none.
+  result_excerpt: string | null;
 }
 
 export function mapProcessOutcome(o: ProcessOutcome): {
@@ -757,6 +777,7 @@ function refuse(
     process: null,
     summary: `real claude adapter refused: ${reason}`,
     failure_reason: reason,
+    result_excerpt: null,
   };
 }
 
@@ -819,6 +840,7 @@ export async function runRealClaudeJob(
       : `REAL level-1 ${i.job.kind} run did not complete: ` +
         (mapped.failure_reason ?? 'unknown'),
     failure_reason: mapped.failure_reason,
+    result_excerpt: extractResultText(o.stdout),
   };
 }
 

@@ -14,7 +14,8 @@
 
 import { randomUUID } from 'node:crypto';
 import type { RuntimeClient } from '../store';
-import { readSystemControlsChecked } from '../store';
+import { insertEvent, readSystemControlsChecked } from '../store';
+import { makeEnvelope } from '../transport';
 import { step, type EngineAction } from './completion-engine';
 import { makeSimulationAdapter } from './adapters';
 import {
@@ -65,6 +66,13 @@ export interface RealExecutionResult {
   evidence_refs: string[];
   failure_reason: string | null;
   summary: string;
+  // Bridge B2: bounded, sanitized readable report (adapter-extracted result
+  // text + worktree-audit touched paths). Optional: simulation results and
+  // older executors omit it.
+  report?: {
+    result_excerpt: string | null;
+    files_changed: string[];
+  };
 }
 
 export type RealJobExecutor = (input: {
@@ -454,6 +462,7 @@ export async function driverStep(
   const byId = new Map(state.jobs.map((j) => [j.id, j]));
   let persisted = 0;
   let lockRequired = false;
+  let resultEventUnrecorded = false; // B2: a result record failed to append
 
   for (const act of s.actions) {
     const jobId = (act as { job_id?: string }).job_id;
@@ -601,7 +610,42 @@ export async function driverStep(
           run_id: null,
           run_lease_expires_at: null,
         }, nowIso);
-        if (t.ok) persisted++;
+        if (t.ok) {
+          persisted++;
+          // Bridge B2: ONE bounded, redacted, human-readable result record per
+          // attempt, appended to os_events AFTER (and only after) the run-owned
+          // terminal CAS won - so exactly the owning run records it, once.
+          // Deterministic id => PK-idempotent on any replay. A failed append
+          // never fails the job; it is surfaced through the step reason so the
+          // tick log shows it (no silent gaps - P0.1 lesson).
+          const attempt = job.attempts + 1;
+          const ev = makeEnvelope({
+            id: `ev-result-${job.id}-${attempt}`,
+            type: 'JobResultRecorded',
+            actor: job.assigned_role ?? 'claude',
+            source: 'orchestration-driver',
+            correlation_id: `result:job:${job.id}`,
+            idempotency_key: `ev-result-${job.id}-${attempt}`,
+            now: nowIso,
+            payload: {
+              goal_id: goalId,
+              job_id: job.id,
+              run_id: runId,
+              attempt,
+              outcome: to,
+              executed: real?.executed === true,
+              mode: real ? 'real' : 'simulation',
+              provider_role: job.assigned_role ?? 'claude',
+              summary: String(res.summary ?? '').slice(0, 400),
+              failure_reason: res.failure_reason,
+              result_excerpt: real?.report?.result_excerpt ?? null,
+              files_changed: (real?.report?.files_changed ?? []).slice(0, 50),
+              evidence_refs: evidenceRefs.slice(0, 10),
+            },
+          });
+          const rec = await insertEvent(client, ev);
+          if (!rec.ok) resultEventUnrecorded = true;
+        }
       } finally {
         // Guaranteed release (audit #10): the lock is released on every path -
         // success, skip, adapter throw, or mid-run halt.
@@ -640,6 +684,9 @@ export async function driverStep(
     const gt = await transitionGoal(client, goalId, state.goal.status, s.status, nowIso);
     if (!gt.ok) reason = `${s.reason}:goal_cas_unapplied`;
   }
+  // B2: surface a failed result-record append in the tick log (job outcome
+  // itself persisted fine; only the readable report is missing).
+  if (resultEventUnrecorded) reason = `${reason}:result_event_unrecorded`;
   return {
     halted: false, reason, actions: s.actions, persisted, lockRequired, done: s.done,
     ...(unlockRefusals.length ? { unlockRefusals } : {}),
@@ -662,10 +709,17 @@ export async function driveGoal(
   let cycles = 0;
   let lastReason = 'noop';
   let lastRefusals: Array<{ job_id: string; reason: string }> | undefined;
+  // B2: a result-record append failed on SOME step this drive - keep it
+  // visible on the final (non-halt) reason so the tick log shows the gap.
+  let eventGap = false;
+  const withGap = (reason: string) =>
+    eventGap && !reason.includes('result_event_unrecorded')
+      ? `${reason}:result_event_unrecorded` : reason;
   while (cycles++ < Math.min(maxCycles, 5000)) {
     const r = await driverStep(client, goalId, now(), depends, lockCtx, newRunId, executeReal);
     lastReason = r.reason;
     lastRefusals = r.unlockRefusals;
+    if (r.reason.includes('result_event_unrecorded')) eventGap = true;
     if (r.halted) return { cycles, halted: true, reason: r.reason };
     // Fail closed (audit #2): an edit job needed a lock but no lock context was
     // provided and nothing else progressed - do not spin; halt with a clear,
@@ -694,7 +748,7 @@ export async function driveGoal(
       const gt = state.goal.status === goalStatus
         ? { ok: true }
         : await transitionGoal(client, goalId, state.goal.status, goalStatus, new Date(now()).toISOString());
-      return { cycles, halted: false, reason: gt.ok ? reason : `${reason}:goal_cas_unapplied` };
+      return { cycles, halted: false, reason: withGap(gt.ok ? reason : `${reason}:goal_cas_unapplied`) };
     }
     const blockedOnApproval = state.jobs.some((j) => j.status === 'awaiting_approval') &&
       state.jobs.every((j) => ['completed', 'cancelled', 'dead_lettered', 'awaiting_approval'].includes(j.status));
@@ -716,10 +770,10 @@ export async function driveGoal(
     // (completed/failed/cancelled) are unchanged.
     if (r.done) {
       return {
-        cycles, halted: false, reason: r.reason,
+        cycles, halted: false, reason: withGap(r.reason),
         ...(lastRefusals?.length ? { unlockRefusals: lastRefusals } : {}),
       };
     }
   }
-  return { cycles, halted: true, reason: lastReason };
+  return { cycles, halted: true, reason: withGap(lastReason) };
 }

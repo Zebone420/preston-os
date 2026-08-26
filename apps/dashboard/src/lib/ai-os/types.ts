@@ -127,7 +127,15 @@ export type EventType =
   | 'LockAcquired'
   | 'LockReleased'
   | 'HermesObserved'
-  | 'ExecutionBlocked';
+  | 'ExecutionBlocked'
+  // Bridge B2 (2026-08-26): one bounded, redacted, human-readable result
+  // record per goal-job attempt, emitted by the durable driver after the
+  // run-owned terminal CAS. Read back by Preston Control preston_get_job.
+  | 'JobResultRecorded'
+  // Bridge B3: owner-confirmed goal cancellation audit record.
+  | 'GoalCancelRequested'
+  // Bridge B4: parent->child continuation linkage record.
+  | 'GoalLinked';
 
 export interface OsEvent {
   id: string;

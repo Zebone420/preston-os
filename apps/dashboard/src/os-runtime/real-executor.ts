@@ -218,6 +218,7 @@ export async function buildRealExecutor(
       ],
       failure_reason: `real_required:${reason}`,
       summary: 'strict real mode: decline is a failure, not a simulation',
+      report: { result_excerpt: null, files_changed: [] },
     }, { job_id: job.id, goal_id: job.goal_id, run_id: runId, role });
 
     // Re-resolve the capability EVERY job (owner may have downgraded).
@@ -326,6 +327,14 @@ export async function buildRealExecutor(
         child_env_keys: proc?.child_env_keys ?? null,
         child_home: proc?.child_home ?? null,
       };
+      // Bridge B2: the bounded, sanitized readable report the driver persists
+      // as a JobResultRecorded event. result_excerpt comes from the adapter
+      // (parsed CLI result text, already redacted + bounded); files_changed
+      // from the post-run worktree audit (relative repo paths only).
+      const report = (touched: string[]) => ({
+        result_excerpt: result.result_excerpt ?? null,
+        files_changed: touched.slice(0, 50),
+      });
       if (!audit.ok || !audit.audit) {
         return logResult({
           outcome: 'failed', executed: true,
@@ -336,6 +345,7 @@ export async function buildRealExecutor(
           ],
           failure_reason: 'worktree_audit_unreadable',
           summary: 'real run completed but confinement could not be proven',
+          report: report([]),
         }, ids);
       }
       if (!audit.audit.ok) {
@@ -350,6 +360,9 @@ export async function buildRealExecutor(
           failure_reason: 'path_violation',
           summary: 'real run touched paths outside the allowlist; ' +
             'edits discarded with the worktree',
+          // Deliberately NO result excerpt on a confinement violation: the
+          // run's output is untrusted alongside its discarded edits.
+          report: { result_excerpt: null, files_changed: [] },
         }, ids);
       }
 
@@ -366,6 +379,7 @@ export async function buildRealExecutor(
         ],
         failure_reason: result.failure_reason,
         summary: result.summary,
+        report: report(audit.audit.touched ?? []),
       }, ids);
     } finally {
       // Always remove the worktree: results live in evidence + job rows;
