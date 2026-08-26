@@ -37,7 +37,11 @@ import {
   listJobsForGoal,
   listOpenApprovals,
   readGoalById,
+  transitionGoal,
+  transitionJob,
 } from '@/lib/ai-os/orchestration/store';
+import { insertEvent } from '@/lib/ai-os/store';
+import { makeEnvelope } from '@/lib/ai-os/transport';
 import { deploymentEnvironment } from '@/lib/ai-os/runtime-environment';
 
 export interface ToolContext {
@@ -527,6 +531,188 @@ export async function prestonDecideApproval(
   } catch {
     return { ok: false as const, approval_id: approvalId, error: 'decide_failed' };
   }
+}
+
+// ---------------------------------------------------------------------------
+// 5b. preston_cancel_goal (CONSEQUENTIAL WRITE, bridge B3)
+//
+// Owner-confirmed, id-specific goal cancellation over the EXISTING legal
+// state machine (CAS transitions; rows are never deleted). Mirrors the G8
+// approval handshake: without a confirmation phrase naming the EXACT goal id,
+// NO cancellation happens and the goal is restated instead.
+//
+// What cancellation can and cannot do (honest semantics):
+// - It CAS-transitions every non-terminal job (pending/ready/assigned/
+//   in_progress/awaiting_review/awaiting_approval/failed) to 'cancelled' and
+//   then the goal to 'cancelled'. The dispatcher never selects a cancelled
+//   goal, so no further orchestration ticks run it.
+// - It does NOT kill an in-flight worker process. A run already executing
+//   finishes its bounded attempt, but its result is DROPPED: the driver's
+//   run-owned terminal CAS requires status='in_progress' + its own run_id,
+//   which the cancel just changed - the documented out-of-band-cancel path.
+// - completed / failed / dead_lettered goals are terminal: not cancellable.
+// - Replaying a cancel on a cancelled goal is an idempotent no-op.
+// - A pending approval on a cancelled job stays pending until its 24h TTL
+//   expires (approvals are append-only by design); it can no longer gate
+//   anything because the job is terminal.
+const CANCEL_CONFIRMATION_RE = /^cancel(?:\s+goal)?\s+([A-Za-z0-9-]{36})$/i;
+const TERMINAL_JOB_STATUSES = new Set(['completed', 'cancelled', 'dead_lettered']);
+
+export type CancelConfirmationCheck =
+  | { ok: true }
+  | { ok: false; error: 'cancel_confirmation_required' | 'cancel_confirmation_id_mismatch' };
+
+export function evaluateCancelConfirmation(raw: unknown, goalId: string): CancelConfirmationCheck {
+  const s = String(raw ?? '').trim().replace(/[.!]+$/, '').trim().replace(/\s+/g, ' ');
+  if (!s) return { ok: false, error: 'cancel_confirmation_required' };
+  const m = CANCEL_CONFIRMATION_RE.exec(s);
+  if (!m) return { ok: false, error: 'cancel_confirmation_required' };
+  if (m[1].toLowerCase() !== goalId.toLowerCase()) {
+    return { ok: false, error: 'cancel_confirmation_id_mismatch' };
+  }
+  return { ok: true };
+}
+
+export async function prestonCancelGoal(
+  ctx: ToolContext,
+  input: { goal_id: string; reason?: string; owner_confirmation?: string },
+) {
+  const client = ctx.client as unknown as RuntimeClient;
+  const goalId = String(input.goal_id ?? '').trim();
+  if (!UUID_RE.test(goalId)) {
+    return { ok: false as const, goal_id: goalId, error: 'goal_id_invalid' };
+  }
+  const reason = String(input.reason ?? '').slice(0, MAX_REASON_CHARS);
+  if (looksSecret(reason)) {
+    return { ok: false as const, goal_id: goalId, error: 'secret_in_reason' };
+  }
+  const g = await readGoalById(client, goalId);
+  if (!g.ok) return { ok: false as const, goal_id: goalId, error: 'read_failed' };
+  if (g.rows.length === 0) return { ok: false as const, goal_id: goalId, error: 'not_found' };
+  const goal = projectGoal(g.rows[0]);
+
+  // Idempotent replay: nothing left to do, no confirmation needed to say so.
+  if (goal.status === 'cancelled') {
+    return {
+      ok: true as const, goal_id: goalId, status: 'already_cancelled' as const,
+      decision_made: false as const, jobs_cancelled: 0,
+      note: 'Goal is already cancelled; replay is a no-op.',
+    };
+  }
+  if (goal.status === 'completed' || goal.status === 'failed' || goal.status === 'dead_lettered') {
+    return {
+      ok: false as const, goal_id: goalId, error: 'goal_terminal',
+      goal_status: goal.status, decision_made: false as const,
+      note: `A ${goal.status} goal is terminal and cannot be cancelled.`,
+    };
+  }
+
+  // G8-style handshake: the exact goal id must appear in the owner's phrase.
+  const confirmation = evaluateCancelConfirmation(input.owner_confirmation, goalId);
+  if (!confirmation.ok) {
+    const phrase = `Cancel goal ${goalId}`;
+    return {
+      ok: false as const,
+      decision_made: false as const,
+      goal_id: goalId,
+      error: confirmation.error,
+      restatement: goal,
+      required_confirmation: phrase,
+      instructions:
+        'NO cancellation was performed. Show the owner the restated goal ' +
+        '(exact goal_id, title, status). To proceed, the OWNER must reply ' +
+        `with the exact phrase "${phrase}" themselves. Never construct that ` +
+        'phrase from an ambiguous reference such as "cancel that", "cancel ' +
+        'it", or "the running one" - even if only one goal is active. If the ' +
+        'owner used ambiguous wording, ask them to state the exact goal id.',
+    };
+  }
+
+  // Jobs first (fail-closed: an unreadable job list means we cannot prove
+  // what would be left behind), then the goal row.
+  const jobs = await listJobsForGoal(client, goalId, 1001);
+  if (!jobs.ok) return { ok: false as const, goal_id: goalId, error: 'jobs_read_failed' };
+  let cancelled = 0;
+  let alreadyTerminal = 0;
+  const failures: Array<{ job_id: string; error: string }> = [];
+  for (const row of jobs.rows) {
+    const jobId = String(row['id'] ?? '');
+    let status = String(row['status'] ?? '');
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (TERMINAL_JOB_STATUSES.has(status)) { alreadyTerminal++; break; }
+      const t = await transitionJob(client, jobId, status, 'cancelled',
+        { run_id: null, run_lease_expires_at: null }, ctx.now);
+      if (t.ok) { cancelled++; break; }
+      // Lost the CAS to a concurrent runtime transition: re-read once and
+      // retry against the fresh status; a second loss is reported, not spun.
+      const rr = await client.from('goal_jobs').select('*').eq('id', jobId).limit(1);
+      const fresh = rr.error ? null : (rr.data ?? [])[0];
+      if (!fresh) { failures.push({ job_id: jobId, error: t.error ?? 'cancel_failed' }); break; }
+      status = String(fresh['status'] ?? '');
+      if (attempt === 1) failures.push({ job_id: jobId, error: t.error ?? 'cancel_failed' });
+    }
+  }
+
+  // Goal row last. A lost CAS re-reads once; a concurrent transition to
+  // 'cancelled' still counts as success (idempotent outcome).
+  let goalCancelled = false;
+  let from = goal.status;
+  for (let attempt = 0; attempt < 2 && !goalCancelled; attempt++) {
+    const gt = await transitionGoal(client, goalId, from, 'cancelled', ctx.now);
+    if (gt.ok) { goalCancelled = true; break; }
+    const rr = await readGoalById(client, goalId);
+    const fresh = rr.ok && rr.rows.length > 0 ? String(rr.rows[0]['status'] ?? '') : '';
+    if (fresh === 'cancelled') { goalCancelled = true; break; }
+    if (!fresh) break;
+    from = fresh;
+  }
+
+  // Append-only audit record (deterministic id => replay-idempotent).
+  const audit = await insertEvent(client, makeEnvelope({
+    id: `ev-cancel-${goalId}`,
+    type: 'GoalCancelRequested',
+    actor: 'owner',
+    source: 'preston-control',
+    correlation_id: `cancel:goal:${goalId}`,
+    idempotency_key: `ev-cancel-${goalId}`,
+    now: ctx.now,
+    payload: {
+      goal_id: goalId,
+      requested_by: ctx.ownerEmail,
+      reason: reason || null,
+      goal_status_before: goal.status,
+      jobs_cancelled: cancelled,
+      jobs_already_terminal: alreadyTerminal,
+      jobs_cancel_failed: failures.length,
+    },
+  }));
+
+  if (!goalCancelled || failures.length > 0) {
+    return {
+      ok: false as const, goal_id: goalId, error: 'cancel_partial',
+      decision_made: true as const,
+      goal_cancelled: goalCancelled, jobs_cancelled: cancelled,
+      jobs_already_terminal: alreadyTerminal, jobs_cancel_failed: failures.slice(0, 10),
+      audit_recorded: audit.ok,
+      note: 'Some rows lost their CAS to a concurrent runtime transition. ' +
+        'Re-run the same cancel (idempotent) to converge.',
+    };
+  }
+  return {
+    ok: true as const,
+    goal_id: goalId,
+    status: 'cancelled' as const,
+    decision_made: true as const,
+    goal_status_before: goal.status,
+    jobs_cancelled: cancelled,
+    jobs_already_terminal: alreadyTerminal,
+    audit_recorded: audit.ok,
+    decided_by: ctx.ownerEmail,
+    decided_at: ctx.now,
+    note: 'Cancellation prevents all future orchestration ticks for this ' +
+      'goal. It does NOT kill an already-running bounded attempt; that ' +
+      "run's result is dropped by the run-owned persistence CAS.",
+  };
 }
 
 // ---------------------------------------------------------------------------

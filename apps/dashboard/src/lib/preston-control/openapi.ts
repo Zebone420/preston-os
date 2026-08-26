@@ -80,6 +80,21 @@ export function buildOpenApiDocument(origin: string): Record<string, unknown> {
             request_id: { type: 'string', pattern: RUNTIME_ID_PATTERN, description: 'Optional idempotency key; reuse to retry safely.' },
           },
         },
+        CancelGoalRequest: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            reason: { type: 'string', maxLength: 300, description: 'Optional non-secret note.' },
+            owner_confirmation: {
+              type: 'string',
+              maxLength: 200,
+              description:
+                "The owner's OWN verbatim message naming the exact goal id, e.g. " +
+                "'Cancel goal 1234abcd-...'. NEVER compose, infer, or autofill; omit on the " +
+                'first call to get the restatement.',
+            },
+          },
+        },
         DecideApprovalRequest: {
           type: 'object',
           additionalProperties: false,
@@ -134,6 +149,22 @@ export function buildOpenApiDocument(origin: string): Record<string, unknown> {
           'x-openai-isConsequential': false,
           parameters: [{ name: 'goal_id', in: 'path', required: true, schema: uuid }],
           responses: { '200': { description: 'Goal detail', content: { 'application/json': { schema: { $ref: '#/components/schemas/Result' } } } }, '400': { description: 'Invalid id' }, '401': { description: 'Not authenticated' } },
+        },
+      },
+      '/api/control/goals/{goal_id}/cancel': {
+        post: {
+          operationId: 'cancelPrestonGoal',
+          summary: 'Cancel a Preston goal (owner only)',
+          // ChatGPT Actions rejects operation descriptions over 300 chars.
+          description:
+            'CONSEQUENTIAL owner cancellation, server-enforced handshake: without a valid ' +
+            'owner_confirmation naming the exact goal id NO cancellation happens and the goal is ' +
+            'restated with the required phrase. Never resolve ambiguous refs like "cancel that". ' +
+            'Idempotent; terminal goals refused.',
+          'x-openai-isConsequential': true,
+          parameters: [{ name: 'goal_id', in: 'path', required: true, schema: uuid }],
+          requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/CancelGoalRequest' } } } },
+          responses: { '200': { description: 'Cancellation result', content: { 'application/json': { schema: { $ref: '#/components/schemas/Result' } } } }, '400': { description: 'Invalid input' }, '401': { description: 'Not authenticated' }, '403': { description: 'Not the owner' } },
         },
       },
       '/api/control/jobs/{job_id}': {

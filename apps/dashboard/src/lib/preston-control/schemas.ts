@@ -31,9 +31,20 @@ export const DECIDE_APPROVAL_SHAPE = {
 };
 export const GET_EVIDENCE_SHAPE = { goal_id: UUID.optional(), job_id: UUID.optional() };
 export const GET_JOB_SHAPE = { job_id: UUID };
+export const CANCEL_GOAL_SHAPE = {
+  goal_id: UUID,
+  reason: z.string().max(300).optional().describe('Optional non-secret note.'),
+  owner_confirmation: z.string().max(200).optional().describe(
+    "The owner's OWN verbatim message naming the exact goal id " +
+    "(e.g. 'Cancel goal 1234abcd-...'). NEVER compose, infer, or autofill " +
+    'this value. Omit it on the first call: the server refuses to cancel and ' +
+    'returns a restatement of the goal for the owner to confirm.',
+  ),
+};
 
 export const SubmitGoalSchema = z.object(SUBMIT_GOAL_SHAPE).strict();
 export const GetGoalSchema = z.object(GET_GOAL_SHAPE).strict();
 export const DecideApprovalSchema = z.object(DECIDE_APPROVAL_SHAPE).strict();
 export const GetEvidenceSchema = z.object(GET_EVIDENCE_SHAPE).strict();
 export const GetJobSchema = z.object(GET_JOB_SHAPE).strict();
+export const CancelGoalSchema = z.object(CANCEL_GOAL_SHAPE).strict();

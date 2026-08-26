@@ -8,6 +8,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
+  CANCEL_GOAL_SHAPE,
   DECIDE_APPROVAL_SHAPE,
   GET_EVIDENCE_SHAPE,
   GET_GOAL_SHAPE,
@@ -15,6 +16,7 @@ import {
   SUBMIT_GOAL_SHAPE,
 } from './schemas';
 import {
+  prestonCancelGoal,
   prestonDecideApproval,
   prestonGetEvidence,
   prestonGetGoal,
@@ -35,6 +37,7 @@ export const TOOL_NAMES = [
   'preston_get_job',
   'preston_list_approvals',
   'preston_decide_approval',
+  'preston_cancel_goal',
   'preston_get_evidence',
 ] as const;
 
@@ -112,6 +115,18 @@ export function buildPrestonControlServer(ctx: ToolContext): McpServer {
     inputSchema: DECIDE_APPROVAL_SHAPE,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   }, async (args) => result(await prestonDecideApproval(ctx, args)));
+
+  server.registerTool('preston_cancel_goal', {
+    title: 'Cancel a Preston goal (owner only)',
+    description:
+      'CONSEQUENTIAL: cancels a non-terminal goal and its non-terminal jobs so no future ' +
+      'orchestration tick runs them. SERVER-ENFORCED handshake: without a valid owner_confirmation ' +
+      '(the owner\'s OWN message naming the exact goal id, e.g. "Cancel goal <uuid>") NO ' +
+      'cancellation happens - the goal is restated instead. Never resolve ambiguous references ' +
+      'like "cancel that". Idempotent on replay; does not kill an already-running bounded attempt.',
+    inputSchema: CANCEL_GOAL_SHAPE,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+  }, async (args) => result(await prestonCancelGoal(ctx, args)));
 
   server.registerTool('preston_get_evidence', {
     title: 'Get Preston evidence',
