@@ -1,4 +1,53 @@
-# Bridge B5 staging acceptance - evidence (2026-08-26, session 1)
+# Bridge B5 staging acceptance - evidence (2026-08-26)
+
+## FINAL VERDICT: B5 PASS (all 12 gates; details per session below)
+
+| Gate | Result | Key evidence |
+|---|---|---|
+| G1 per-job read | PASS | job 62767a0d read pre-run (pending, empty reports) and post-run (completed, 1 report) over live staging MCP |
+| G2 readable result | PASS | TIMER-driven real runs; audit job 308b74c8 result_excerpt = full multi-finding audit text readable from ChatGPT; doc job summary readable (excerpt fail-safe-redacted, see defect 5) |
+| G3 result/evidence integrity | PASS | run_id identical across job.evidence_refs (real:/real-audit:paths_ok:clean/real-provider:role:claude) and the result report; attempts:1; exactly ONE report per attempt; recorded_at present; no duplicates |
+| G4 cancel, no confirmation | PASS | cancel_confirmation_required, restatement, zero writes (goal da910563) |
+| G5 cancel, wrong id | PASS | cancel_confirmation_id_mismatch, zero writes |
+| G6 valid cancel | PASS | OWNER-typed phrase; ef99816e decomposed->cancelled, jobs_cancelled 1, audit_recorded true, decided_by info@preston.nyc 06:02:53Z, unrelated goals untouched, honest in-flight note |
+| G7 cancel replay | PASS | already_cancelled no-op, decision_made false, single audit row |
+| G8 follow-up | PASS | child 68e76dab linked both directions, parent row unmutated; child later REAL-completed on the timer (full continuation loop) |
+| G9 approval regression | PASS | refusal paths byte-per-contract; then REAL owner decision: apr-0249cb2102abbc03e90df2ac approved decided_at 2026-08-26T12:57:06Z; migration-kind job then completed mode:simulation (Level-1 ineligible BY DESIGN, honestly labeled) |
+| G10 idempotency | PASS | duplicate replay same ids, links converged; submit duplicates unchanged |
+| G11 bounded-exec regression | PASS | ALL TIMER-DRIVEN, executed:true real completions: documentation 62767a0d, code 0136f50e, recommendation 54f467af, AUDIT 308b74c8 (goal 0a652d20). Shape C: "send a summary email" rejected prohibited:external_message, zero rows, zero dead letters. P0.2 RESIDUAL CLOSED |
+| G12 surface parity | PASS (server-side) | MCP live with all 9 tools; live staging openapi = 9 ops, consequential set {decide,cancel}; unit parity pins. Live GPT-Actions retest = B6 owner step (no staging GPT exists; the only GPT is prod-configured) |
+
+Unattended-runtime proof (owner requirement): every G2/G3/G11 completion above
+ran on the normal preston-orchestrator.timer with the session idle for ~11h
+(completions 07:13Z-12:57Z+), under User=preston-worker with the runtime
+service token store - no owner credential in the execution path (S8).
+Manual dispatcher ticks were used ONLY to drain the stale expired-goal
+backlog (11 goals terminalized; identical binary/identity/flock as the unit)
+and stopped before any drill goal ran, per owner instruction.
+
+Starvation liveness fix 0c55673 live-proven: first post-fix tick terminalized
+the pinned goal (reason deadline_exceeded, no :goal_cas_unapplied), then one
+stale goal per tick; fresh goals ran normally afterward.
+
+Defects register (real ones only):
+1. Queue starvation on decomposed->terminal reflection - FIXED 0c55673, live-proven.
+2. Hermes snapshot/live count ambiguity - FIXED 6c3774d (P0.1), live-proven.
+3. Silent od-orchstatus append failures invisible - FIXED 6c3774d, hermes log
+   now shows orchestration_recorded:true every tick.
+4. apps/dashboard/package-lock.json out of sync for npm >=11 (ci EUSAGE:
+   @img/sharp optional deps) - OPEN, B6-set debt; builds unaffected (tsc).
+5. Read-side result_excerpt over-redaction: looksSecret is all-or-nothing, so
+   any key/token-SHAPED substring redacts the whole excerpt (doc job hit) -
+   OPEN, minor, fail-safe direction; refine to span-level redaction later.
+6. /remote page stale Phase-4 copy - found BY the audit worker itself
+   (its readable report cites file:lines) - OPEN, cosmetic backlog.
+
+Residue: drill goals + ~11 deadline-dead-lettered stale goals (honest
+terminal states), 7 approval-parked goals unchanged, approvals expire per TTL.
+Host: /srv/preston-os at 02daa2a, os-runtime rebuilt 06:15:22Z, timer
+active (waiting), /tmp helper removed, host-local M route.ts drift untouched.
+
+## Session 1 detail (below): deployment smoke + G1/G4/G5/G8/G9-refusals/G10
 
 Build under test: 8fb5fdb (B1-B4 + P0.1) promoted to the staging alias
 preston-os-staging.vercel.app (deployment dGDkPUYR4W54vwbQwpVigyDkLiUx,
