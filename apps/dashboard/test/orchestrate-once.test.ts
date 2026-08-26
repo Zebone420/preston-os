@@ -998,10 +998,17 @@ describe('orchestrate-once - simulation-only containment (no external writes)', 
     const r = await dispatch(db, { maxIterations: 10 });
     expect(r.summary.stoppedReason).toBe('completed');
     const writes = db.calls.filter((c) => c.op !== 'select');
-    const allowed = new Set(['master_goals', 'goal_jobs', 'repository_worktrees']);
+    // B2 (2026-08-26): os_events joined the allowed surface - the driver
+    // appends one JobResultRecorded row per attempt (insert-only, already in
+    // the runtime identity's 0020 grant). Everything else is unchanged.
+    const allowed = new Set(['master_goals', 'goal_jobs', 'repository_worktrees', 'os_events']);
     expect(writes.every((w) => allowed.has(w.table))).toBe(true);
+    // os_events writes must be APPENDS only (never update/delete), and only
+    // the driver's deterministic result records.
+    const eventWrites = writes.filter((w) => w.table === 'os_events');
+    expect(eventWrites.every((w) => w.op === 'insert')).toBe(true);
     // decisively: no runtime job queue, no messaging, no business tables
-    for (const banned of ['os_jobs', 'telegram_updates', 'agents', 'os_events', 'clients', 'quote_versions']) {
+    for (const banned of ['os_jobs', 'telegram_updates', 'agents', 'clients', 'quote_versions']) {
       expect(db.calls.some((c) => c.table === banned && c.op !== 'select')).toBe(false);
     }
   });
