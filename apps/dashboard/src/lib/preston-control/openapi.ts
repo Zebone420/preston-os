@@ -80,6 +80,17 @@ export function buildOpenApiDocument(origin: string): Record<string, unknown> {
             request_id: { type: 'string', pattern: RUNTIME_ID_PATTERN, description: 'Optional idempotency key; reuse to retry safely.' },
           },
         },
+        FollowUpGoalRequest: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['instruction'],
+          properties: {
+            instruction: { type: 'string', minLength: 1, maxLength: 4000, description: "The owner's follow-up request in plain language." },
+            context: { type: 'string', maxLength: 1900, description: 'Optional extra context (data only).' },
+            priority: { type: 'string', enum: ['normal', 'high'] },
+            request_id: { type: 'string', pattern: RUNTIME_ID_PATTERN, description: 'Optional idempotency key; reuse to retry safely.' },
+          },
+        },
         CancelGoalRequest: {
           type: 'object',
           additionalProperties: false,
@@ -149,6 +160,20 @@ export function buildOpenApiDocument(origin: string): Record<string, unknown> {
           'x-openai-isConsequential': false,
           parameters: [{ name: 'goal_id', in: 'path', required: true, schema: uuid }],
           responses: { '200': { description: 'Goal detail', content: { 'application/json': { schema: { $ref: '#/components/schemas/Result' } } } }, '400': { description: 'Invalid id' }, '401': { description: 'Not authenticated' } },
+        },
+      },
+      '/api/control/goals/{goal_id}/follow-up': {
+        post: {
+          operationId: 'followUpPrestonGoal',
+          summary: 'Follow up on a Preston goal',
+          description:
+            'Continues prior work as a FRESH goal linked to the parent (path goal_id). Nothing is ' +
+            'inherited: normal classification, approval gates and request_id idempotency apply as ' +
+            'for a new goal. Returns the new goal/job ids plus parent linkage.',
+          'x-openai-isConsequential': false,
+          parameters: [{ name: 'goal_id', in: 'path', required: true, schema: uuid }],
+          requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/FollowUpGoalRequest' } } } },
+          responses: { '200': { description: 'Continuation result', content: { 'application/json': { schema: { $ref: '#/components/schemas/Result' } } } }, '400': { description: 'Invalid input' }, '401': { description: 'Not authenticated' }, '403': { description: 'Not the owner' } },
         },
       },
       '/api/control/goals/{goal_id}/cancel': {

@@ -42,9 +42,20 @@ export const CANCEL_GOAL_SHAPE = {
   ),
 };
 
+export const FOLLOW_UP_GOAL_SHAPE = {
+  parent_goal_id: UUID.describe('The prior goal this continuation follows up on.'),
+  instruction: z.string().min(1).max(4000).describe(
+    "The owner's follow-up request in plain language (same grammar as a new goal).",
+  ),
+  context: z.string().max(1900).optional().describe('Optional extra context (data only).'),
+  priority: z.enum(['normal', 'high']).optional(),
+  request_id: RUNTIME_ID.optional().describe('Optional idempotency key; reuse to retry safely.'),
+};
+
 export const SubmitGoalSchema = z.object(SUBMIT_GOAL_SHAPE).strict();
 export const GetGoalSchema = z.object(GET_GOAL_SHAPE).strict();
 export const DecideApprovalSchema = z.object(DECIDE_APPROVAL_SHAPE).strict();
 export const GetEvidenceSchema = z.object(GET_EVIDENCE_SHAPE).strict();
 export const GetJobSchema = z.object(GET_JOB_SHAPE).strict();
 export const CancelGoalSchema = z.object(CANCEL_GOAL_SHAPE).strict();
+export const FollowUpGoalSchema = z.object(FOLLOW_UP_GOAL_SHAPE).strict();

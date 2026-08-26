@@ -10,6 +10,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   CANCEL_GOAL_SHAPE,
   DECIDE_APPROVAL_SHAPE,
+  FOLLOW_UP_GOAL_SHAPE,
   GET_EVIDENCE_SHAPE,
   GET_GOAL_SHAPE,
   GET_JOB_SHAPE,
@@ -18,6 +19,7 @@ import {
 import {
   prestonCancelGoal,
   prestonDecideApproval,
+  prestonFollowUpGoal,
   prestonGetEvidence,
   prestonGetGoal,
   prestonGetJob,
@@ -33,6 +35,7 @@ export const PRESTON_CONTROL_SERVER_VERSION = '1.0.0';
 export const TOOL_NAMES = [
   'preston_status',
   'preston_submit_goal',
+  'preston_follow_up_goal',
   'preston_get_goal',
   'preston_get_job',
   'preston_list_approvals',
@@ -76,6 +79,17 @@ export function buildPrestonControlServer(ctx: ToolContext): McpServer {
     inputSchema: SUBMIT_GOAL_SHAPE,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async (args) => result(await prestonSubmitGoal(ctx, args)));
+
+  server.registerTool('preston_follow_up_goal', {
+    title: 'Follow up on a Preston goal',
+    description:
+      'Continue prior work: submits the instruction as a FRESH goal linked to the parent goal ' +
+      '(provenance preserved; nothing inherited - normal classification, approval gates, and ' +
+      'idempotency apply exactly as for a new goal). Use when the owner says "continue goal X ' +
+      'with ...". Returns the new goal/job ids plus the parent linkage.',
+    inputSchema: FOLLOW_UP_GOAL_SHAPE,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, async (args) => result(await prestonFollowUpGoal(ctx, args)));
 
   server.registerTool('preston_get_goal', {
     title: 'Get a Preston goal',

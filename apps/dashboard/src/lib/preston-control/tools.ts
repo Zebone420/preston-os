@@ -320,6 +320,9 @@ export async function prestonGetGoal(ctx: ToolContext, goalId: string) {
     : [];
   const counts: Record<string, number> = {};
   for (const j of jobRows) counts[j.status] = (counts[j.status] ?? 0) + 1;
+  // B4 continuation linkage (append-only GoalLinked events; absent = null/[]).
+  const parentGoalId = await readParentLink(ctx, id);
+  const childGoalIds = await readChildLinks(ctx, id);
   return {
     found: true as const,
     goal: projectGoal(g.rows[0]),
@@ -328,6 +331,119 @@ export async function prestonGetGoal(ctx: ToolContext, goalId: string) {
     job_status_counts: counts,
     pending_approvals: related,
     evidence_refs: jobRows.flatMap((j) => j.evidence_refs.map((e) => ({ job_id: j.job_id, ref: e }))),
+    parent_goal_id: parentGoalId,
+    child_goal_ids: childGoalIds,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 2b. preston_follow_up_goal (WRITE, idempotent on request_id, bridge B4)
+//
+// Continuation = a FRESH goal linked to a parent, never mutation of a live
+// goal graph (submit_goal_decomposition is atomic per goal by design). The
+// instruction flows through the SAME composer path as any new goal - normal
+// classification, normal approval gates, normal idempotency - and inherits
+// NOTHING from the parent: no permissions, no cleared gates, not even the
+// parent's text (only the parent UUID is recorded, in an append-only
+// GoalLinked os_events row, outside the composed text, so parent wording can
+// never alter the child's classification).
+const LINK_EVENT_PREFIX = 'ev-goal-link-';
+const LINK_CORRELATION_PREFIX = 'link:parent:';
+const MAX_CHILD_LINKS = 20;
+
+async function readParentLink(ctx: ToolContext, goalId: string): Promise<string | null> {
+  try {
+    const client = ctx.client as unknown as RuntimeClient;
+    const r = await client.from('os_events').select('*').eq('id', LINK_EVENT_PREFIX + goalId).limit(1);
+    if (r.error || !Array.isArray(r.data) || r.data.length === 0) return null;
+    const p = (r.data[0]['payload'] ?? {}) as Row;
+    const parent = String(p['parent_goal_id'] ?? '');
+    return UUID_RE.test(parent) ? parent : null;
+  } catch {
+    return null;
+  }
+}
+
+async function readChildLinks(ctx: ToolContext, goalId: string): Promise<string[]> {
+  try {
+    const client = ctx.client as unknown as RuntimeClient;
+    const r = await client.from('os_events').select('*')
+      .eq('correlation_id', LINK_CORRELATION_PREFIX + goalId).limit(MAX_CHILD_LINKS);
+    if (r.error || !Array.isArray(r.data)) return [];
+    return r.data
+      .map((row) => String(((row['payload'] ?? {}) as Row)['child_goal_id'] ?? ''))
+      .filter((id) => UUID_RE.test(id));
+  } catch {
+    return [];
+  }
+}
+
+export async function prestonFollowUpGoal(
+  ctx: ToolContext,
+  input: {
+    parent_goal_id: string;
+    instruction: string;
+    context?: string;
+    priority?: 'normal' | 'high';
+    request_id?: string;
+  },
+) {
+  const client = ctx.client as unknown as RuntimeClient;
+  const parentId = String(input.parent_goal_id ?? '').trim();
+  if (!UUID_RE.test(parentId)) {
+    return { status: 'rejected' as const, errors: ['parent_goal_id_invalid'], goals: [] };
+  }
+  const parent = await readGoalById(client, parentId);
+  if (!parent.ok) return { status: 'rejected' as const, errors: ['parent_read_failed'], goals: [] };
+  if (parent.rows.length === 0) {
+    return { status: 'rejected' as const, errors: ['parent_not_found'], goals: [] };
+  }
+  const parentGoal = projectGoal(parent.rows[0]);
+
+  // Same submission path as a brand-new goal: nothing is inherited.
+  const submitted = await prestonSubmitGoal(ctx, {
+    request: input.instruction,
+    context: input.context,
+    priority: input.priority,
+    request_id: input.request_id,
+  });
+  if (submitted.status === 'rejected') {
+    return { ...submitted, parent_goal_id: parentId, parent_status: parentGoal.status };
+  }
+
+  // Durable parent->child linkage, one append-only row per created goal.
+  // Deterministic id (child goal id) => a duplicate replay converges on the
+  // same link row; a failed link append is surfaced, never silently dropped.
+  let linksRecorded = 0;
+  let linksFailed = 0;
+  for (const g of submitted.goals) {
+    const link = await insertEvent(client, makeEnvelope({
+      id: LINK_EVENT_PREFIX + g.goal_id,
+      type: 'GoalLinked',
+      actor: 'owner',
+      source: 'preston-control',
+      correlation_id: LINK_CORRELATION_PREFIX + parentId,
+      idempotency_key: LINK_EVENT_PREFIX + g.goal_id,
+      now: ctx.now,
+      payload: {
+        parent_goal_id: parentId,
+        child_goal_id: g.goal_id,
+        requested_by: ctx.ownerEmail,
+        request_id: submitted.request_id,
+      },
+    }));
+    if (link.ok) linksRecorded++; else linksFailed++;
+  }
+
+  return {
+    ...submitted,
+    parent_goal_id: parentId,
+    parent_status: parentGoal.status,
+    links_recorded: linksRecorded,
+    ...(linksFailed > 0 ? { links_failed: linksFailed } : {}),
+    note: 'Continuation created as a FRESH goal linked to the parent. Normal ' +
+      'classification and approval gates applied; nothing was inherited ' +
+      'from the parent goal.',
   };
 }
 

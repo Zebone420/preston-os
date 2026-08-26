@@ -226,7 +226,7 @@ describe('GPT Actions REST surface', () => {
     const ops = Object.values(doc.paths as Record<string, Record<string, { operationId: string; 'x-openai-isConsequential': boolean }>>)
       .flatMap((p) => Object.values(p));
     expect(ops.map((o) => o.operationId).sort()).toEqual(
-      ['cancelPrestonGoal', 'decidePrestonApproval', 'getPrestonEvidence', 'getPrestonGoal', 'getPrestonJob', 'getPrestonStatus', 'listPrestonApprovals', 'submitPrestonGoal'],
+      ['cancelPrestonGoal', 'decidePrestonApproval', 'followUpPrestonGoal', 'getPrestonEvidence', 'getPrestonGoal', 'getPrestonJob', 'getPrestonStatus', 'listPrestonApprovals', 'submitPrestonGoal'],
     );
     const byId = Object.fromEntries(ops.map((o) => [o.operationId, o]));
     // Least-privilege transport friction: ONLY the owner-decision write is
@@ -238,6 +238,9 @@ describe('GPT Actions REST surface', () => {
     // consequential, ChatGPT must confirm every call.
     expect(byId.cancelPrestonGoal['x-openai-isConsequential']).toBe(true);
     expect(byId.submitPrestonGoal['x-openai-isConsequential']).toBe(false);
+    // Same rationale as submit: non-executing default-deny intake with its
+    // own approval gates; nothing inherited from the parent.
+    expect(byId.followUpPrestonGoal['x-openai-isConsequential']).toBe(false);
     expect(byId.getPrestonStatus['x-openai-isConsequential']).toBe(false);
     expect(byId.getPrestonGoal['x-openai-isConsequential']).toBe(false);
     expect(byId.getPrestonJob['x-openai-isConsequential']).toBe(false);
