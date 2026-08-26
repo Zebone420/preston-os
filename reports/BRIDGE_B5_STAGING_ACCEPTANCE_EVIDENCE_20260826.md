@@ -49,3 +49,20 @@ alone does NOT re-discover; pre-refresh chats keep the old 6-tool list.
 
 Residue so far: drill goals 3931e43f (+child 68e76dab), da910563 (cancel
 target), 5405e00d (gated, approval expires 24h) - sim-only, documented.
+
+## Addendum (05:46Z status read over the staging MCP surface)
+
+1. P0.1 LIVE-CONFIRMED: preston_status now returns
+   hermes.snapshot_counts {as_of_bucket:"202608260541", open_approvals:6,
+   failed_jobs:0, dead_lettered_jobs:0} + snapshot_note, distinct from the
+   live summary - the disambiguation renders exactly as designed on the
+   deployed staging surface.
+2. STAGING ORCHESTRATOR STALL ISOLATED: the hermes-observe timer is ALIVE
+   (bucket advanced to 05:41Z), controls readable
+   (execution_enabled/remote_runner_enabled true since 2026-08-09,
+   hermes 'unsafe_controls' = the known deliberate-active branch), yet the
+   B5 drill jobs stayed `pending` through 3+ expected orchestrator ticks
+   (05:27 -> 05:46Z). The fault is specific to preston-orchestrator
+   (timer inactive, or exiting 78/70 every tick). Diagnosis + the 8fb5fdb
+   rebuild both need the host session (SSH blocked by the workstation's
+   auto-mode permission classifier this session; owner boundary).
