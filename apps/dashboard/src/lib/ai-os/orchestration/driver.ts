@@ -681,7 +681,7 @@ export async function driverStep(
   // job rows); we never force a contradictory status. Surface it in the reason.
   let reason = s.reason;
   if (s.status !== state.goal.status) {
-    const gt = await transitionGoal(client, goalId, state.goal.status, s.status, nowIso);
+    const gt = await reflectGoalStatus(client, goalId, state.goal.status, s.status, nowIso);
     if (!gt.ok) reason = `${s.reason}:goal_cas_unapplied`;
   }
   // B2: surface a failed result-record append in the tick log (job outcome
@@ -691,6 +691,37 @@ export async function driverStep(
     halted: false, reason, actions: s.actions, persisted, lockRequired, done: s.done,
     ...(unlockRefusals.length ? { unlockRefusals } : {}),
   };
+}
+
+// B5 liveness fix (2026-08-26, staging finding): the engine can derive a
+// TERMINAL goal status (deadline_exceeded -> dead_lettered, budget caps ->
+// failed, all-jobs-terminal -> completed) while the goal row still reads
+// 'decomposed' - it never legally entered 'running' (e.g. the wall deadline
+// expired before the first drive). decomposed->terminal is not a legal edge,
+// so the reflection CAS failed FOREVER ('goal_cas_unapplied') and the
+// dispatcher's oldest-first selection re-picked the same goal every tick,
+// STARVING every younger goal (observed live: staging goal ef99816e pinned
+// the queue for weeks). Route through the legal chain instead:
+// decomposed -> running -> terminal. Each leg is its own guarded CAS
+// (concurrent-safe); a lost first leg leaves the goal in a legal state and
+// self-heals next cycle exactly like any lost CAS. Cancellation is NOT
+// routed here (decomposed -> cancelled is already a legal direct edge).
+async function reflectGoalStatus(
+  client: RuntimeClient,
+  goalId: string,
+  from: string,
+  to: MasterGoal['status'],
+  nowIso: string,
+): Promise<{ ok: boolean }> {
+  const direct = await transitionGoal(client, goalId, from, to, nowIso);
+  if (direct.ok) return direct;
+  const terminal = to === 'completed' || to === 'failed' || to === 'dead_lettered';
+  if (from === 'decomposed' && terminal) {
+    const leg1 = await transitionGoal(client, goalId, 'decomposed', 'running', nowIso);
+    if (!leg1.ok) return direct;
+    return transitionGoal(client, goalId, 'running', to, nowIso);
+  }
+  return direct;
 }
 
 // Restart-safe drive: bounded loop over driverStep until done/halted. Reloads
@@ -747,7 +778,7 @@ export async function driveGoal(
       const goalStatus = anyDead ? 'failed' : anyCancelled ? 'cancelled' : 'completed';
       const gt = state.goal.status === goalStatus
         ? { ok: true }
-        : await transitionGoal(client, goalId, state.goal.status, goalStatus, new Date(now()).toISOString());
+        : await reflectGoalStatus(client, goalId, state.goal.status, goalStatus, new Date(now()).toISOString());
       return { cycles, halted: false, reason: withGap(gt.ok ? reason : `${reason}:goal_cas_unapplied`) };
     }
     const blockedOnApproval = state.jobs.some((j) => j.status === 'awaiting_approval') &&

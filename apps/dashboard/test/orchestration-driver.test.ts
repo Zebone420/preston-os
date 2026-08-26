@@ -594,3 +594,57 @@ describe('owner stop honored MID-RUN (kill-switch inside a single step)', () => 
     expect((a.evidence_refs as string[] | undefined) ?? []).toHaveLength(0);
   });
 });
+
+// B5 liveness fix (2026-08-26, live staging finding): a goal whose wall
+// deadline expired while still 'decomposed' derived a TERMINAL engine status
+// that decomposed->terminal could never legally reflect, so the goal row
+// stayed driveable forever and the dispatcher's oldest-first selection
+// re-picked it every tick - starving every younger goal (staging goal
+// ef99816e pinned the queue). The driver now routes terminal reflection
+// through the legal chain decomposed -> running -> terminal.
+describe('terminal reflection from decomposed (starvation liveness fix)', () => {
+  it('a wall-deadline-expired decomposed goal terminalizes on the goal ROW (no goal_cas_unapplied loop)', async () => {
+    const db = makeFakeDb();
+    const expired: MasterGoal = {
+      ...goal(),
+      id: 'goal-b5-stall-01',
+      correlation_id: 'corr-b5-stall-01',
+      budget: { ...DEFAULT_BUDGET, max_wall_ms: 1000 },
+    };
+    await insertMasterGoal(db.client, expired);
+    const d = decomposeGoal(expired, [
+      { local_id: 'a', kind: 'documentation', title: 't', objective: 'o', depends_on_local: [] },
+    ], (l) => `job-b5-stall-${l}`, NOW);
+    if (!d.ok) throw new Error('decompose');
+    for (const j of d.jobs) await insertGoalJob(db.client, j);
+
+    // Clock far past created_at + max_wall_ms: the engine's verdict is
+    // terminal before any run happens.
+    let t = Date.parse(NOW) + 3_600_000;
+    const r = await driveGoal(db.client, 'goal-b5-stall-01', () => (t += 1000), 10, () => [], editLockCtx);
+
+    const row = db.rowsOf('master_goals').find((g) => g.id === 'goal-b5-stall-01')!;
+    // The ROW is terminal - the dispatcher will never re-select this goal.
+    expect(['dead_lettered', 'failed', 'cancelled', 'completed']).toContain(String(row.status));
+    expect(String(r.reason)).not.toContain('goal_cas_unapplied');
+  });
+
+  it('an all-jobs-terminal decomposed goal completes on the row through the legal chain', async () => {
+    const db = makeFakeDb();
+    const g2: MasterGoal = { ...goal(), id: 'goal-b5-stall-02', correlation_id: 'corr-b5-stall-02' };
+    await insertMasterGoal(db.client, g2);
+    const d = decomposeGoal(g2, [
+      { local_id: 'a', kind: 'documentation', title: 't', objective: 'o', depends_on_local: [] },
+    ], (l) => `job-b5-stall2-${l}`, NOW);
+    if (!d.ok) throw new Error('decompose');
+    for (const j of d.jobs) await insertGoalJob(db.client, j);
+    // Terminalize the only job out-of-band while the goal row stays decomposed.
+    await transitionJob(db.client, 'job-b5-stall2-a', 'pending', 'cancelled', {}, NOW);
+
+    let t = Date.parse(NOW);
+    const r = await driveGoal(db.client, 'goal-b5-stall-02', () => (t += 1000), 10, () => [], editLockCtx);
+    const row = db.rowsOf('master_goals').find((g) => g.id === 'goal-b5-stall-02')!;
+    expect(String(row.status)).toBe('cancelled'); // all-terminal, anyCancelled
+    expect(r.reason).toBe('cancelled');
+  });
+});
