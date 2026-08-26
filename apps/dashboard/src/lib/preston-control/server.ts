@@ -11,12 +11,14 @@ import {
   DECIDE_APPROVAL_SHAPE,
   GET_EVIDENCE_SHAPE,
   GET_GOAL_SHAPE,
+  GET_JOB_SHAPE,
   SUBMIT_GOAL_SHAPE,
 } from './schemas';
 import {
   prestonDecideApproval,
   prestonGetEvidence,
   prestonGetGoal,
+  prestonGetJob,
   prestonListApprovals,
   prestonStatus,
   prestonSubmitGoal,
@@ -30,6 +32,7 @@ export const TOOL_NAMES = [
   'preston_status',
   'preston_submit_goal',
   'preston_get_goal',
+  'preston_get_job',
   'preston_list_approvals',
   'preston_decide_approval',
   'preston_get_evidence',
@@ -77,6 +80,16 @@ export function buildPrestonControlServer(ctx: ToolContext): McpServer {
     inputSchema: GET_GOAL_SHAPE,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async (args) => result(await prestonGetGoal(ctx, args.goal_id)));
+
+  server.registerTool('preston_get_job', {
+    title: 'Get one Preston job',
+    description:
+      'Read-only: one job by id - status, role, risk, attempts, run liveness, linked approval, ' +
+      'evidence refs, and per-attempt readable result reports (what the worker actually did: ' +
+      'summary, result excerpt, files changed). Use to answer "what did Claude do on this job".',
+    inputSchema: GET_JOB_SHAPE,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, async (args) => result(await prestonGetJob(ctx, args.job_id)));
 
   server.registerTool('preston_list_approvals', {
     title: 'List pending Preston approvals',

@@ -328,6 +328,84 @@ export async function prestonGetGoal(ctx: ToolContext, goalId: string) {
 }
 
 // ---------------------------------------------------------------------------
+// 3b. preston_get_job (READ ONLY) - first-class per-job inspection (bridge B1).
+//
+// Result reports (bridge B2): the runtime driver records one bounded,
+// redacted, human-readable JobResultRecorded event per job attempt into
+// os_events (id ev-result-<job>-<attempt>, correlation result:job:<job>).
+// This reader surfaces them; until the runtime emits them (host build at the
+// B2 commit or later) the list is simply empty - absence is a normal state.
+const RESULT_CORRELATION_PREFIX = 'result:job:';
+const MAX_RESULT_REPORTS = 20;
+
+export async function readJobResultReports(ctx: ToolContext, jobId: string) {
+  try {
+    const client = ctx.client as unknown as RuntimeClient;
+    const r = await client
+      .from('os_events').select('*')
+      .eq('correlation_id', RESULT_CORRELATION_PREFIX + jobId)
+      .limit(MAX_RESULT_REPORTS);
+    if (r.error || !Array.isArray(r.data)) return { read_ok: false as const, reports: [] };
+    const reports = r.data.map((row) => {
+      const p = (row['payload'] ?? {}) as Row;
+      return {
+        attempt: Number(p['attempt'] ?? 0),
+        outcome: String(p['outcome'] ?? ''),
+        executed: p['executed'] === true,
+        mode: String(p['mode'] ?? ''),
+        provider_role: String(p['provider_role'] ?? ''),
+        summary: safeText(p['summary'], 400),
+        failure_reason: p['failure_reason'] == null ? null : safeText(p['failure_reason'], 300),
+        result_excerpt: p['result_excerpt'] == null ? null : safeText(p['result_excerpt'], 2000),
+        files_changed: safeJsonList(p['files_changed']).map((f) => safeText(f, 300)),
+        evidence_refs: safeJsonList(p['evidence_refs']),
+        recorded_at: String(row['created_at'] ?? ''),
+      };
+    });
+    reports.sort((a, b) => a.attempt - b.attempt);
+    return { read_ok: true as const, reports };
+  } catch {
+    return { read_ok: false as const, reports: [] };
+  }
+}
+
+export async function prestonGetJob(ctx: ToolContext, jobId: string) {
+  const client = ctx.client as unknown as RuntimeClient;
+  const id = String(jobId ?? '').trim();
+  if (!UUID_RE.test(id)) return { found: false as const, error: 'job_id_invalid' };
+  let rows: Row[] = [];
+  try {
+    const r = await client.from('goal_jobs').select('*').eq('id', id).limit(1);
+    if (r.error) return { found: false as const, error: 'read_failed' };
+    rows = r.data ?? [];
+  } catch {
+    return { found: false as const, error: 'read_failed' };
+  }
+  if (rows.length === 0) return { found: false as const, error: 'not_found' };
+  const row = rows[0];
+  const job = projectJob(row);
+  const nowMs = Date.parse(ctx.now);
+  // Run liveness: a non-null run_id with an unexpired lease means a runtime
+  // run currently owns the job. Progress resolution is per-attempt (one
+  // orchestrator tick); there is no intra-job stream by design.
+  const leaseMs = Date.parse(String(row['run_lease_expires_at'] ?? ''));
+  const run = {
+    active: row['run_id'] != null && Number.isFinite(leaseMs) && leaseMs > nowMs,
+    lease_expires_at: row['run_lease_expires_at'] == null ? null : String(row['run_lease_expires_at']),
+  };
+  const approval = job.approval_id ? await restateApproval(ctx, job.approval_id) : null;
+  const results = await readJobResultReports(ctx, id);
+  return {
+    found: true as const,
+    job,
+    run,
+    approval,
+    result_reports: results.reports,
+    result_reports_read_ok: results.read_ok,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // 4. preston_list_approvals (READ ONLY)
 export async function prestonListApprovals(ctx: ToolContext) {
   const client = ctx.client as unknown as RuntimeClient;

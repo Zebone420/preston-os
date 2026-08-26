@@ -136,6 +136,19 @@ export function buildOpenApiDocument(origin: string): Record<string, unknown> {
           responses: { '200': { description: 'Goal detail', content: { 'application/json': { schema: { $ref: '#/components/schemas/Result' } } } }, '400': { description: 'Invalid id' }, '401': { description: 'Not authenticated' } },
         },
       },
+      '/api/control/jobs/{job_id}': {
+        get: {
+          operationId: 'getPrestonJob',
+          summary: 'Get one Preston job',
+          description:
+            'Read-only: one job by id - status, role, risk, attempts, run liveness, linked ' +
+            'approval, evidence refs, and per-attempt readable result reports (summary, result ' +
+            'excerpt, files changed). Answers "what did the worker actually do on this job".',
+          'x-openai-isConsequential': false,
+          parameters: [{ name: 'job_id', in: 'path', required: true, schema: uuid }],
+          responses: { '200': { description: 'Job detail', content: { 'application/json': { schema: { $ref: '#/components/schemas/Result' } } } }, '400': { description: 'Invalid id' }, '401': { description: 'Not authenticated' } },
+        },
+      },
       '/api/control/approvals': {
         get: {
           operationId: 'listPrestonApprovals',

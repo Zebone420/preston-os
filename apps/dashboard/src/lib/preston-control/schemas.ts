@@ -30,8 +30,10 @@ export const DECIDE_APPROVAL_SHAPE = {
   ),
 };
 export const GET_EVIDENCE_SHAPE = { goal_id: UUID.optional(), job_id: UUID.optional() };
+export const GET_JOB_SHAPE = { job_id: UUID };
 
 export const SubmitGoalSchema = z.object(SUBMIT_GOAL_SHAPE).strict();
 export const GetGoalSchema = z.object(GET_GOAL_SHAPE).strict();
 export const DecideApprovalSchema = z.object(DECIDE_APPROVAL_SHAPE).strict();
 export const GetEvidenceSchema = z.object(GET_EVIDENCE_SHAPE).strict();
+export const GetJobSchema = z.object(GET_JOB_SHAPE).strict();
