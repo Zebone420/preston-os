@@ -72,7 +72,12 @@ describe('t-mode team goal composition + role mapping (live regression)', () => 
       ['claude', 'codex', 'claude']);
   });
 
-  it('a role-less audit task still defaults to the audit role', () => {
+  it('a role-less audit task routes to claude (bounded-execution routing fix 2026-08-26)', () => {
+    // Was: role-less audit defaulted to the adapter-less 'audit' role, so a
+    // real run failed provider_not_claude -> dead-letter (prod goal
+    // 6b5d32c5). audit is an implementer-eligible kind on the claude contract,
+    // so it now routes to claude and runs under the same bounded contract as
+    // code. The 'audit' ROLE stays adapter-refused if ever assigned directly.
     const r = composeRequest('Task 1: review the drill note.');
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -81,6 +86,6 @@ describe('t-mode team goal composition + role mapping (live regression)', () => 
     expect(built.ok).toBe(true);
     if (!built.ok) return;
     expect(built.jobs[0].kind).toBe('audit');
-    expect(built.jobs[0].assigned_role).toBe('audit');
+    expect(built.jobs[0].assigned_role).toBe('claude');
   });
 });

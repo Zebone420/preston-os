@@ -34,8 +34,15 @@ export type DecomposeResult =
 // Fixed, contract-checked - no agent is assigned a job its contract forbids.
 function assignRole(kind: JobKind): AgentRole {
   switch (kind) {
+    // audit is an implementer-eligible kind (both real adapters whitelist it
+    // and the claude contract holds the `audit` capability), so a role-less
+    // audit task routes to claude and can run its read-only review under the
+    // SAME bounded contract as code/documentation - YELLOW ceiling,
+    // worktree_only, path allowlist, no network, real_required. An explicit
+    // codex request is still honored upstream (composer-persist). The
+    // adapter-less 'audit' ROLE stays defined and is still refused by the
+    // real adapter (provider_not_claude) if ever assigned directly.
     case 'audit':
-      return 'audit';
     case 'documentation':
     case 'code':
     case 'test':

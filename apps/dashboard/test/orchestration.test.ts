@@ -311,8 +311,11 @@ describe('decomposition - deterministic, cycle-safe, capability-checked', () => 
       expect(order).toEqual(['job-0000000a', 'job-0000000b', 'job-0000000c', 'job-0000000d']);
       // b depends on a's minted id
       expect(r.jobs[1].depends_on).toEqual(['job-0000000a']);
-      // audit job assigned to the audit role
-      expect(r.jobs[2].assigned_role).toBe('audit');
+      // audit-kind job routes to the claude implementer (bounded-execution
+      // routing fix 2026-08-26): audit is an eligible kind on the claude
+      // contract, so a role-less audit runs under the same bounded contract
+      // as code rather than orphaning on the adapter-less 'audit' role.
+      expect(r.jobs[2].assigned_role).toBe('claude');
     }
   });
 

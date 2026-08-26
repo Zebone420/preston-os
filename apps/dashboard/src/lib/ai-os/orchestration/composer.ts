@@ -110,7 +110,12 @@ const KIND_LEXICON: Array<[JobKind, RegExp]> = [
   ['test', /\b(test|validat|regression)/i],
   ['audit', /\b(audit|inspect|review|verif|check|examin)/i],
   ['documentation', /\b(document|summar|report|write[-\s]?up|record|attach|note|readiness)/i],
-  ['recommendation', /\b(recommend|propos|suggest)/i],
+  // Planning/preparation work is a non-consequential, adapter-eligible kind
+  // (recommendation) - NOT 'unknown'. Placed AFTER migration/repair/test/
+  // audit/documentation so "schema migration plan" still classifies as
+  // migration (first match wins) and stays approval-gated; a bare "plan"/
+  // "prepare"/"outline" deterministically becomes recommendation.
+  ['recommendation', /\b(recommend|propos|suggest|plan|prepar|outline)/i],
   ['code', /\b(implement|build|code|refactor|add\b|create\s+(a\s+)?(component|endpoint|helper|feature))/i],
 ];
 
