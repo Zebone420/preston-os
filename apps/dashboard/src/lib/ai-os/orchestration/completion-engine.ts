@@ -100,10 +100,13 @@ export function step(state: GoalState, nowMs: number): EngineStep {
         // (Phase A1, orchestration/outcomes.ts) - never re-derived here or in
         // any adapter. A TERMINAL classification dead-letters immediately
         // (no attempts burned on a deterministic refusal); a RETRYABLE one
-        // retries within the unchanged bounded budget. The classification
-        // reason is persisted so evidence stays readable.
+        // retries within the unchanged bounded budget. An UNCERTAIN external
+        // outcome ALSO never re-runs (a retry could duplicate a real-world
+        // side effect) - it parks as a dead letter carrying the uncertain:
+        // reason while the side-effect ledger row awaits reconciliation.
+        // The classification reason is persisted so evidence stays readable.
         const cls = classifyFailure(job.failure_reason);
-        if (cls.outcome_class === 'TERMINAL') {
+        if (cls.outcome_class === 'TERMINAL' || cls.outcome_class === 'UNCERTAIN') {
           actions.push({ type: 'dead_letter', job_id: job.id, reason: cls.reason });
         } else if (job.attempts > g.budget.max_job_retries) {
           actions.push({ type: 'dead_letter', job_id: job.id, reason: job.failure_reason ?? 'retry_exhausted' });

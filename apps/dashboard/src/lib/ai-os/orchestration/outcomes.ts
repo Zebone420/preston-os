@@ -13,25 +13,41 @@
 //                 deterministic refusal (the pre-fix live failure mode: a
 //                 provider-mismatch job consumed 3 identical attempts before
 //                 dead-lettering - prod goal 6b5d32c5, 2026-08-26)
+//   UNCERTAIN   - an EXTERNAL side effect whose outcome is unknown (e.g. the
+//                 provider call timed out after possibly succeeding). NEVER
+//                 blind-retried: a retry could duplicate a real-world action.
+//                 The job parks terminally; the side-effect LEDGER row keeps
+//                 the reconciliation state, and only reconciliation (with
+//                 provider evidence) settles it. (Power-station master goal
+//                 sections 2/9/12.)
 //   OWNER_GATED - valid work parked on an owner approval decision
 //   CANCELLED   - owner-cancelled work
 //
 // Fail-open-to-RETRYABLE for unrecognized reasons: an unknown failure shape
 // must degrade to the pre-existing bounded-retry behavior (never to an
-// over-eager dead-letter), and the retry budget still caps the loop.
+// over-eager dead-letter), and the retry budget still caps the loop. The
+// UNCERTAIN class is reachable ONLY through its explicit reason prefixes -
+// an unknown shape can never accidentally park as uncertain.
 
 export type OutcomeClass =
   | 'SUCCESS'
   | 'RETRYABLE'
   | 'TERMINAL'
+  | 'UNCERTAIN'
   | 'OWNER_GATED'
   | 'CANCELLED';
 
 export interface FailureClassification {
-  outcome_class: 'RETRYABLE' | 'TERMINAL';
+  outcome_class: 'RETRYABLE' | 'TERMINAL' | 'UNCERTAIN';
   // Static reason code for evidence/logs; never free text from the failure.
   reason: string;
 }
+
+// Failure-reason prefixes that mean "an external side effect may or may not
+// have happened". Set by the capability executor (capabilities/executor.ts)
+// when a provider call times out or dies mid-flight after the ledger row
+// entered EXECUTING. Both forms classify UNCERTAIN.
+const UNCERTAIN_PREFIXES = ['side_effect_uncertain', 'uncertain_outcome'];
 
 // Deterministic refusals of the job CONTRACT itself: provider/role mismatch,
 // ineligible kind, risk ceiling, environment/schema pins, missing identity,
@@ -97,11 +113,28 @@ export function classifyFailure(
   const r = String(failureReason ?? '').trim();
   if (!r) return { outcome_class: 'RETRYABLE', reason: 'retryable:unspecified' };
 
+  // Uncertain external outcomes park terminally and are settled ONLY by
+  // ledger reconciliation - a blind retry could duplicate a real-world
+  // side effect. Checked first: uncertainty outranks every other class.
+  for (const p of UNCERTAIN_PREFIXES) {
+    if (r.startsWith(p)) {
+      return { outcome_class: 'UNCERTAIN', reason: `uncertain:${r}` };
+    }
+  }
+
   if (r.startsWith('real_required:')) {
     return classifyRealRequired(r.slice('real_required:'.length));
   }
   if (TERMINAL_BARE.has(r) || r.startsWith('unsupported_kind')) {
     return { outcome_class: 'TERMINAL', reason: `terminal:${r}` };
+  }
+  // Bare terminal reasons may carry a static sub-reason suffix (e.g. the
+  // capability executor's prohibited_action:unknown_capability). The colon
+  // form classifies identically to the bare form.
+  for (const p of TERMINAL_BARE) {
+    if (r.startsWith(p + ':')) {
+      return { outcome_class: 'TERMINAL', reason: `terminal:${r}` };
+    }
   }
   // path_violation: the agent's edits escaped the allowlist and were
   // discarded. Agent behavior varies run to run, so ONE more bounded attempt
