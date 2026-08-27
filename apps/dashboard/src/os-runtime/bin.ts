@@ -77,7 +77,7 @@ function fileTokenStore(path: string): TokenStore {
 // and is compiled by `npm run build:os-runtime`.
 
 async function main(): Promise<void> {
-  const { command, maxIterations, diagnostic } = parseArgs(process.argv);
+  const { command, maxIterations, diagnostic, dryrun } = parseArgs(process.argv);
   const log = jsonLogger();
   const correlationId = 'disp-' + process.pid + '-' + command;
 
@@ -116,6 +116,7 @@ async function main(): Promise<void> {
     correlationId,
     log,
     maxIterations,
+    dryrun,
   });
   process.exit(result.exitCode);
 }

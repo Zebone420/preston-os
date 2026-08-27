@@ -67,7 +67,8 @@ export type DispatcherCommand =
   | 'db-health'
   | 'worker-loop'
   | 'hermes-loop'
-  | 'orchestrate-once';
+  | 'orchestrate-once'
+  | 'capability-dryrun';
 
 export interface DispatcherInput {
   command: DispatcherCommand;
@@ -79,6 +80,9 @@ export interface DispatcherInput {
   maxIterations?: number;
   workerCandidates?: WorkerOnceInput[];
   hermesBatches?: ObserveCandidate[][];
+  // capability-dryrun ONLY: scenario + explicit idempotency key (a repeated
+  // key proves the ledger's duplicate convergence on a live drill).
+  dryrun?: { scenario: string; key: string | null };
   // Test-injection seams for orchestrate-once ONLY. Production (bin.ts) never
   // sets these: the command then uses the real clock, a crypto-random
   // per-invocation lock-token seed, and the driver's own crypto-random run-id
@@ -99,6 +103,7 @@ export function parseArgs(argv: string[]): {
   command: DispatcherCommand;
   maxIterations: number;
   diagnostic: boolean;
+  dryrun: { scenario: string; key: string | null };
 } {
   const cmd = argv[2];
   const command: DispatcherCommand =
@@ -106,10 +111,19 @@ export function parseArgs(argv: string[]): {
       : cmd === 'hermes-loop' ? 'hermes-loop'
         : cmd === 'db-health' ? 'db-health'
           : cmd === 'orchestrate-once' ? 'orchestrate-once'
-            : 'health';
+            : cmd === 'capability-dryrun' ? 'capability-dryrun'
+              : 'health';
   const maxIdx = argv.indexOf('--max');
   const maxIterations = maxIdx >= 0 ? Number(argv[maxIdx + 1]) || 5 : 5;
-  return { command, maxIterations, diagnostic: argv.includes('--diagnostic') };
+  const scIdx = argv.indexOf('--scenario');
+  const keyIdx = argv.indexOf('--key');
+  return {
+    command, maxIterations, diagnostic: argv.includes('--diagnostic'),
+    dryrun: {
+      scenario: scIdx >= 0 ? String(argv[scIdx + 1] ?? 'success') : 'success',
+      key: keyIdx >= 0 ? String(argv[keyIdx + 1] ?? '') || null : null,
+    },
+  };
 }
 
 // Positive environment allowlist + cross-environment URL denylist (P2).
@@ -563,6 +577,86 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
   };
 }
 
+// --- capability-dryrun (power-station master goal sections 15/18) ----------
+// An EXPLICIT bounded owner drill command - deliberately NOT part of any
+// timer tick, so the capability spine adds zero cost to normal orchestration.
+// Requires ORCH_CAPABILITY_DRYRUN_ENABLED=true (fail-closed exit 78). Runs
+// the trusted executor against the REAL ledger with the in-process dry-run
+// provider; no external system is touched by construction.
+//
+// Scenarios (--scenario): success (default) | terminal | retryable |
+// uncertain | duplicate (two executions, one ledger row) | gated (the
+// approval-gated write_test WITHOUT an approval -> expected refusal) |
+// reconcile (settle a prior uncertain row for --key as succeeded).
+async function capabilityDryrun(input: DispatcherInput): Promise<DispatcherResult> {
+  const { client, env, correlationId, log } = input;
+  const command = 'capability-dryrun';
+  if (String(env['ORCH_CAPABILITY_DRYRUN_ENABLED'] ?? '').trim() !== 'true') {
+    log({ level: 'error', command, correlationId, event: 'config_error', error: 'ORCH_CAPABILITY_DRYRUN_ENABLED not true (fail-closed)' });
+    return { exitCode: EXIT.config, summary: { error: 'dryrun not enabled' } };
+  }
+  const scenario = String(input.dryrun?.scenario ?? 'success');
+  const key = input.dryrun?.key ?? `dryrun-${correlationId}`;
+  const [
+    { executeCapability },
+    { makeDryrunAdapter, DRYRUN_PROVIDER },
+    { DRYRUN_READ_TEST, DRYRUN_WRITE_TEST },
+    { deriveSideEffectId },
+    { reconcileSideEffect },
+    { readApprovalRecord },
+  ] = await Promise.all([
+    import('../lib/ai-os/capabilities/executor'),
+    import('../lib/ai-os/capabilities/dryrun-adapter'),
+    import('../lib/ai-os/capabilities/registry'),
+    import('../lib/ai-os/capabilities/contract'),
+    import('../lib/ai-os/capabilities/ledger-store'),
+    import('../lib/ai-os/orchestration/store'),
+  ]);
+  if (scenario === 'reconcile') {
+    const sideEffectId = deriveSideEffectId(key);
+    const rec = await reconcileSideEffect(
+      client, sideEffectId, 'succeeded', `dryrun-reconciled-${correlationId}`,
+      `reconcile:dryrun:${correlationId}`, input.now);
+    log({ level: rec.ok ? 'info' : 'error', command, correlationId, event: 'capability_dryrun', scenario, side_effect_id: sideEffectId, reconciled: rec.ok, ...(rec.ok ? {} : { error: rec.error }) });
+    return { exitCode: rec.ok ? EXIT.ok : EXIT.error, summary: { scenario, side_effect_id: sideEffectId, reconciled: rec.ok } };
+  }
+  const gated = scenario === 'gated';
+  const outcomes: Record<string, string> = {
+    terminal: 'terminal', retryable: 'retryable', uncertain: 'uncertain',
+  };
+  const deps = {
+    client,
+    adapters: { [DRYRUN_PROVIDER]: makeDryrunAdapter() },
+    actorId: env['WORKER_AGENT_ID'] ?? 'preston-worker',
+    ownerIdentity: String(env['ORCH_OWNER_IDENTITY'] ?? ''),
+    now: () => Date.now(),
+    readApproval: readApprovalRecord,
+    log: (fields: Record<string, unknown>) => log({ level: 'info', command, correlationId, ...fields }),
+  };
+  const request = {
+    capability: gated ? DRYRUN_WRITE_TEST : DRYRUN_READ_TEST,
+    version: 1,
+    target: 'dryrun:echo',
+    params: { outcome: outcomes[scenario] ?? 'success' },
+    goal_id: 'dryrun-goal', job_id: 'dryrun-job', run_id: correlationId,
+    request_id: `req-${key}`, idempotency_key: key,
+  };
+  const first = await executeCapability(deps, request);
+  let second = null;
+  if (scenario === 'duplicate') second = await executeCapability(deps, request);
+  const summary = {
+    scenario,
+    side_effect_id: first.side_effect_id,
+    first: { ok: first.ok, error: first.error, summary: first.summary },
+    ...(second ? {
+      second: { ok: second.ok, error: second.error, summary: second.summary },
+      same_row: second.side_effect_id === first.side_effect_id,
+    } : {}),
+  };
+  log({ level: 'info', command, correlationId, event: 'capability_dryrun', ...summary });
+  return { exitCode: EXIT.ok, summary };
+}
+
 export async function runDispatcher(input: DispatcherInput): Promise<DispatcherResult> {
   const { command, client, env, now, correlationId, log } = input;
 
@@ -589,6 +683,10 @@ export async function runDispatcher(input: DispatcherInput): Promise<DispatcherR
 
     if (command === 'orchestrate-once') {
       return await orchestrateOnce(input);
+    }
+
+    if (command === 'capability-dryrun') {
+      return await capabilityDryrun(input);
     }
 
     if (command === 'db-health') {
