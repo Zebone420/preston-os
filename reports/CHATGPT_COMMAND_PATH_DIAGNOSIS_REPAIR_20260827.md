@@ -287,3 +287,60 @@ Remaining watch item: drill job 11a6dcf4 completes in the background;
 read its result via preston_get_job. Drill residue: one GREEN staging
 goal/job (honest terminal state expected), two rejected intake rows'
 worth of nothing (rejections persist no rows).
+
+## A6. Drill job terminal results — COMPLETED CLEAN (read back 2026-08-27)
+
+Job 11a6dcf4-2273-4870-ae86-43885358d66c reached its terminal state:
+
+- status **completed**, attempts **1**, failure_reason **null**,
+  run.active false, lease released (was 21:14:55Z -> null).
+- result_reports[0]: outcome **completed**, executed **true**, mode
+  **real**, provider_role **claude**, duration_ms **352486** (~5m52s),
+  recorded_at **2026-08-27T21:20:50.699737Z**, structured_error null.
+- summary: "REAL level-1 audit run completed (exit 0, bounded)".
+
+Evidence refs (3, archived verbatim):
+
+1. `real:goal:07646def-9581-428c-9305-294ffc4aea58:job:11a6dcf4-2273-4870-ae86-43885358d66c:run:11a6dcf4-2273-4870-ae86-43885358d66c:839cb2ad-5859-4cc0-8902-c8994b526cb2:attempt:1:completed:executed:true`
+2. `real-audit:job:11a6dcf4-...:run:...839cb2ad-5859-4cc0-8902-c8994b526cb2:paths_ok:clean`
+3. `real-provider:job:11a6dcf4-...:run:...839cb2ad-...:role:claude`
+
+Safety confirmation — no unexpected production access, no violations:
+
+- **paths_ok:clean** (allowed-path audit clean); files_changed [],
+  files_touched [], commit_sha null — the audit worker modified NOTHING.
+- artifacts [] — no artifacts produced (nothing to retrieve via
+  preston_get_artifact; the artifact surface itself was verified live in
+  the sealed 2026-08-27 prod smoke, unrelated to this GREEN drill).
+- Worker ran in its bounded worktree on the staging host (checkout base
+  8cf140e); zero secret-pattern and zero RED-boundary findings across the
+  audited tree; no network installs (denied by contract and permission
+  layer, honored).
+- Fail-safe reporting intact: the worker declared vitest/tsc/eslint/
+  os-runtime build UNRUNNABLE (node_modules absent in the worktree;
+  offline install and scanner scripts permission-denied), reproduced both
+  scanners' rule sets via search (0 findings), and explicitly did NOT
+  claim the suite passed. Limitations recorded in structured.limitations
+  (4 entries).
+
+Audit content (worker's structured.summary, archived): static audit of
+apps/dashboard (308 files, ~30k lines), no code changed; 5 findings -
+1 medium correctness (F1) + 4 low. F1 verbatim substance: real-codex-
+adapter.ts:203 returns `environment_mismatch` for the deployment-
+environment pin while real-claude-adapter.ts:328 uses
+`environment_not_staging`; orchestration/outcomes.ts TERMINAL_REAL_
+REQUIRED (:57-66) lists only the Claude spelling and no retryable prefix
+matches, so the codex refusal falls through classifyFailure (:105) to
+`retryable:unrecognized:environment_mismatch` and burns the full retry
+budget instead of terminating. Worker's recommended_next_action: add
+`environment_mismatch` to TERMINAL_REAL_REQUIRED (or align the codex
+adapter spelling) with a pinned regression test updating
+test/real-codex-adapter.test.ts:208. **Backlog item for the owner - not
+part of this gate.** Worktree provisioning gap (node_modules absent for
+audit worktrees) is a second backlog item: audits currently cannot run
+the suite, only static review.
+
+Staging evidence is COMPLETE. Still stopped at the production approval
+gate: no production deployment, modification, or master promotion has
+occurred. Owner actions next: push the report commits, then rule on the
+production RED gate.
