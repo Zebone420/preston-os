@@ -2,12 +2,18 @@
 Description=Preston AI OS Phase-7 goal driver timer (DISABLED by default)
 
 [Timer]
-# Fires 5 min after boot and 5 min after the previous run FINISHES, so a
-# bounded oneshot never overlaps itself. Do NOT enable together with
+# Fires after boot and again after the previous run FINISHES, so a bounded
+# oneshot never overlaps itself. Do NOT enable together with
 # preston-worker.timer (shared rotating refresh-token store).
-OnBootSec=5min
-OnUnitInactiveSec=5min
-AccuracySec=30s
+#
+# Fast-track C3 (2026-08-26): cadence moved 5min -> 60s AFTER the idle fast
+# path landed (dispatcher exits an idle tick after ~4 cheap indexed reads,
+# reusing the persisted access token - no refresh grant, no goal hydration,
+# no executor composition). Owner-visible submit-to-start latency drops from
+# up to ~5min to ~1min; OnUnitInactiveSec still serializes runs.
+OnBootSec=2min
+OnUnitInactiveSec=60s
+AccuracySec=15s
 Unit=preston-orchestrator.service
 
 [Install]
