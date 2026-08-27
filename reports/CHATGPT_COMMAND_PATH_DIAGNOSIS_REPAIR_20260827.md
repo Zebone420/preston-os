@@ -425,6 +425,66 @@ lease to 21:57:11Z. Persisted, valid, dispatched.
 - Codex outcome-classification (F1) and worktree provisioning remain
   owner-directed backlog, untouched per gate instruction.
 
+## P5b. Production drill job terminal results — COMPLETED CLEAN
+(read back 2026-08-27; evidence commit fe33a95 pushed and verified first)
+
+Job eeaf3d37-02fc-416b-a206-1ef1336cc094 terminal state:
+
+- status **completed**, attempts **1** (no retry), failure_reason
+  **null**, no uncertain outcome; outcome **completed**, executed
+  **true**, mode **real**, provider_role **claude**;
+  summary "REAL level-1 audit run completed (exit 0, bounded)";
+  duration_ms **301253** (~5m01s), recorded_at
+  **2026-08-27T21:52:14.843704Z**; structured_error null.
+
+Evidence refs (3, archived verbatim; run id 789c5883-5d4a-4220-90a0-c9ae931af607):
+
+1. `real:goal:9edcc875-7b9c-4259-b949-853e3005a506:job:eeaf3d37-02fc-416b-a206-1ef1336cc094:run:eeaf3d37-02fc-416b-a206-1ef1336cc094:789c5883-5d4a-4220-90a0-c9ae931af607:attempt:1:completed:executed:true`
+2. `real-audit:job:eeaf3d37-...:run:...789c5883-...:paths_ok:clean`
+3. `real-provider:job:eeaf3d37-...:run:...789c5883-...:role:claude`
+
+Safety confirmation — no violations, no unexpected changes:
+
+- **paths_ok:clean**; files_changed [], files_touched [], commit_sha
+  null — the worker modified NOTHING ("worktree clean, no edits made").
+- artifacts [] — none produced; nothing to retrieve.
+- Ran read-only in the bounded prod worktree at base
+  **5f15afa** (the pinned host baseline, as expected pre-repin); zero
+  secret-pattern and zero RED-boundary findings (both scanner rule sets
+  replicated read-only after script execution was permission-denied).
+- Fail-safe reporting intact: vitest/tsc/eslint declared UNRUNNABLE
+  (node_modules absent in a fresh worktree; network install prohibited by
+  contract) — the suite was NOT claimed passing; 4 limitations recorded.
+
+Audit content (worker's structured.summary, archived): read-only audit of
+security-critical runtime surfaces at 5f15afa; **8 findings, no files
+changed** — headline items, all PRE-EXISTING conditions at the sealed
+baseline, none caused by this promotion, none acted on (out of gate
+scope):
+
+- **PF1 (high, LATENT)**: the post-run confinement audit enumerates only
+  `git status --porcelain -uall` (worktree-provision.ts:113, sole
+  enumeration at real-executor.ts:332). A worker that makes a LOCAL
+  commit leaves a clean tree, so path-allowlist enforcement passes
+  vacuously, files_changed reports empty, and artifact persistence skips
+  (real-executor.ts:422 guards on touched.length > 0). Latent because the
+  current worker tool allowlist provides no shell/git, so workers cannot
+  actually commit today; becomes real if the allowlist is ever widened.
+  Worker's recommended next action: union a base-commit diff
+  (`git diff --name-only <base> HEAD`) into auditWorktree BEFORE any
+  allowlist widening.
+- PF2 (medium): the worker prompt authorizes tests and "at most one
+  LOCAL commit" that the current tool allowlist cannot perform -
+  prompt/capability contradiction.
+- PF3 (medium): artifact object-path flattening can collide and break
+  sha integrity; PF4 (medium): code-job artifacts dropped with an ok
+  condition. Plus 4 low-severity items.
+
+These join F1 (codex outcome spelling) and worktree provisioning on the
+owner-directed backlog. No production data, config, or host state was
+altered by the drill; the goal/job rows and their evidence are the only
+residue (honest terminal states).
+
 ## P6. Verdict
 
 Production promotion **COMPLETE AND VERIFIED**: master 60b212b, deployment
