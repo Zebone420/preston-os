@@ -72,7 +72,19 @@ export interface RealExecutionResult {
   report?: {
     result_excerpt: string | null;
     files_changed: string[];
+    // Fast-track Phase B: the versioned machine-parseable result block the
+    // worker emitted (schema-validated + secret-scanned by the adapter), or
+    // null with structured_error saying why parsing declined. A parse
+    // failure NEVER fabricates structured output. Typed structurally (the
+    // adapters supply the validated StructuredResult shape).
+    structured?: object | null;
+    structured_error?: string | null;
   };
+  // Fast-track Phase E telemetry (optional, additive): the model the routing
+  // table requested for this run, why, and the real process duration.
+  provider_model?: string | null;
+  routing_reason?: string | null;
+  duration_ms?: number | null;
 }
 
 export type RealJobExecutor = (input: {
@@ -271,6 +283,9 @@ export async function driverStep(
   // Phase 8: injected bounded-real-execution seam (see RealJobExecutor).
   // Omitted => pure simulation, identical to Phase 7.
   executeReal?: RealJobExecutor,
+  // Fast-track D1: bounded run-action parallelism (clamped 1..4). Default 1
+  // preserves the sequential Phase 7/8 behavior exactly.
+  maxParallel = 1,
 ): Promise<DriverStepResult> {
   // Fail closed on a bad execution clock at the boundary (audit MINOR): a
   // non-finite nowMs would otherwise throw at new Date(nowMs).toISOString().
@@ -464,10 +479,22 @@ export async function driverStep(
   let lockRequired = false;
   let resultEventUnrecorded = false; // B2: a result record failed to append
 
-  for (const act of s.actions) {
-    const jobId = (act as { job_id?: string }).job_id;
-    const job = jobId ? byId.get(jobId) : undefined;
-    if (act.type === 'run' && job) {
+  // Fast-track D1: run actions are collected and executed with BOUNDED
+  // parallelism (maxParallel, clamped 1..4); every other action type stays a
+  // cheap sequential CAS. Each parallel run keeps its own full safety
+  // lifecycle - per-job worktree lock, per-job execution lease (run_id CAS),
+  // per-job control-plane re-checks, per-job result event - so two runs can
+  // never share a lease, a worktree, or a result row.
+  const runQueue: GoalJob[] = [];
+  interface RunOutcome {
+    persisted: number;
+    halt: string | null;
+    lockRequired: boolean;
+    eventGap: boolean;
+  }
+  const runOne = async (job: GoalJob): Promise<RunOutcome> => {
+    const none: RunOutcome = { persisted: 0, halt: null, lockRequired: false, eventGap: false };
+    {
       const isEdit = EDIT_KINDS.has(job.kind);
       // Mandatory-lock gate (audit #2): an edit-capable job (code/test/
       // migration/repair/documentation) must NEVER run without an acquired
@@ -479,7 +506,7 @@ export async function driverStep(
       // fence >= 1 (checkWorktreeConfinement), so a lock-free review kind
       // could never really execute - it silently declined to simulation.
       const needsLock = isEdit || Boolean(executeReal);
-      if (needsLock && !lockCtx) { lockRequired = true; continue; }
+      if (needsLock && !lockCtx) return { ...none, lockRequired: true };
       const worktreeId = `wt-${job.id}`;
       const token = needsLock ? lockCtx!.token(job.id) : '';
       let fence = 0;
@@ -492,7 +519,7 @@ export async function driverStep(
           allowed_paths: lockCtx!.allowed_paths, now: nowIso,
           tree_dirty: false, branch_exists: false,
         });
-        if (!acq.ok) continue; // held by another / unsafe => skip this cycle
+        if (!acq.ok) return none; // held by another / unsafe => skip this cycle
         fence = acq.lock.fence;
         acquired = true;
       }
@@ -501,10 +528,10 @@ export async function driverStep(
         // have stopped/paused during acquisition. Fail closed; finally releases.
         const gate = await readSystemControlsChecked(client);
         if (!gate.readOk) {
-          return { halted: true, reason: 'controls_unreadable', actions: s.actions, persisted, lockRequired };
+          return { ...none, halt: 'controls_unreadable' };
         }
         if (gate.controls.owner_stop || gate.controls.paused) {
-          return { halted: true, reason: 'owner_stop_or_paused', actions: s.actions, persisted, lockRequired };
+          return { ...none, halt: 'owner_stop_or_paused' };
         }
         // Claim the job with an EXECUTION LEASE (audit BLOCKER): CAS the job to
         // in_progress and stamp THIS run's run_id + lease. Only one run wins the
@@ -516,7 +543,7 @@ export async function driverStep(
         const runLeaseIso = new Date(nowMs + RUN_LEASE_MS).toISOString();
         const mark = await transitionJob(client, job.id, job.status, 'in_progress',
           { run_id: runId, run_lease_expires_at: runLeaseIso }, nowIso);
-        if (!mark.ok) continue;
+        if (!mark.ok) return none;
         // The claim just won: the adapter must see the POST-claim row image
         // (status/run_id/lease are what the CAS persisted), not the stale
         // pre-claim snapshot. 11R-04 live decline (2026-08-10):
@@ -580,7 +607,7 @@ export async function driverStep(
           // control plane (Codex initial-review MINOR #7).
           const base = gate2.readOk ? 'owner_stop_during_run' : 'controls_unreadable_during_run';
           const reason = requeue.ok ? base : base + ':requeue_deferred';
-          return { halted: true, reason, actions: s.actions, persisted, lockRequired };
+          return { ...none, halt: reason };
         }
         const to = res.outcome === 'completed' ? 'completed' : 'failed';
         // Evidence, persisted idempotently and BOUND to this run (audit #15):
@@ -611,7 +638,6 @@ export async function driverStep(
           run_lease_expires_at: null,
         }, nowIso);
         if (t.ok) {
-          persisted++;
           // Bridge B2: ONE bounded, redacted, human-readable result record per
           // attempt, appended to os_events AFTER (and only after) the run-owned
           // terminal CAS won - so exactly the owning run records it, once.
@@ -641,21 +667,46 @@ export async function driverStep(
               result_excerpt: real?.report?.result_excerpt ?? null,
               files_changed: (real?.report?.files_changed ?? []).slice(0, 50),
               evidence_refs: evidenceRefs.slice(0, 10),
+              // Fast-track Phase B/E telemetry: the versioned structured
+              // result block (already schema-validated + secret-scanned by
+              // the adapter; null when absent), why parsing declined, the
+              // provider model the routing table selected, and the real
+              // process duration. All optional, additive, backward
+              // compatible with pre-fast-track consumers.
+              structured: real?.report?.structured ?? null,
+              structured_error: real?.report?.structured_error ?? null,
+              provider_model: real?.provider_model ?? null,
+              routing_reason: real?.routing_reason ?? null,
+              duration_ms: real?.duration_ms ?? null,
             },
           });
           const rec = await insertEvent(client, ev);
-          if (!rec.ok) resultEventUnrecorded = true;
+          return { ...none, persisted: 1, eventGap: !rec.ok };
         }
+        return none;
       } finally {
         // Guaranteed release (audit #10): the lock is released on every path -
         // success, skip, adapter throw, or mid-run halt.
         if (acquired) await releaseWorktreeLock(client, worktreeId, token, fence, nowIso);
       }
+    }
+  };
+
+  for (const act of s.actions) {
+    const jobId = (act as { job_id?: string }).job_id;
+    const job = jobId ? byId.get(jobId) : undefined;
+    if (act.type === 'run' && job) {
+      runQueue.push(job);
     } else if (act.type === 'assign' && job) {
       const t = await transitionJob(client, job.id, job.status, 'assigned', { assigned_role: act.role }, nowIso);
       if (t.ok) persisted++;
     } else if (act.type === 'retry' && job) {
-      const t = await transitionJob(client, job.id, job.status, 'ready', { failure_reason: null }, nowIso);
+      // Phase G2: the PRIOR failure_reason is deliberately KEPT on the retried
+      // row (it used to be nulled) so the next attempt's adapter can show the
+      // worker bounded previous-attempt context ("your last attempt failed
+      // because X"). The next terminal transition overwrites it; the outcome
+      // authority (outcomes.ts) already ruled it RETRYABLE.
+      const t = await transitionJob(client, job.id, job.status, 'ready', {}, nowIso);
       if (t.ok) persisted++;
     } else if (act.type === 'dead_letter' && job) {
       const t = await transitionJob(client, job.id, job.status, 'dead_lettered', { failure_reason: act.reason }, nowIso);
@@ -671,6 +722,25 @@ export async function driverStep(
     }
     // audit / escalate: recorded by the engine status; the driver decides no
     // approvals (owner-only) - handled by the approval gate + owner.
+  }
+
+  // Execute the collected run actions with BOUNDED parallelism (D1). Batch
+  // width is clamped 1..4; each batch settles fully before the next starts,
+  // and a halt (owner stop / unreadable controls) surfaces after its batch
+  // settles - every sibling run performs its own fail-closed control checks
+  // and releases its own lock, so nothing is orphaned by the halt.
+  const width = Math.max(1, Math.min(4, Math.floor(maxParallel) || 1));
+  for (let i = 0; i < runQueue.length; i += width) {
+    const outs = await Promise.all(runQueue.slice(i, i + width).map(runOne));
+    for (const o of outs) {
+      persisted += o.persisted;
+      if (o.lockRequired) lockRequired = true;
+      if (o.eventGap) resultEventUnrecorded = true;
+    }
+    const halted = outs.find((o) => o.halt !== null);
+    if (halted?.halt) {
+      return { halted: true, reason: halted.halt, actions: s.actions, persisted, lockRequired };
+    }
   }
 
   // (The durable iteration was already RESERVED before work above - audit #12.)
@@ -736,6 +806,7 @@ export async function driveGoal(
   lockCtx?: DriverLockContext,
   newRunId: () => string = () => randomUUID(),
   executeReal?: RealJobExecutor,
+  maxParallel = 1,
 ): Promise<{ cycles: number; halted: boolean; reason: string; unlockRefusals?: Array<{ job_id: string; reason: string }> }> {
   let cycles = 0;
   let lastReason = 'noop';
@@ -747,7 +818,7 @@ export async function driveGoal(
     eventGap && !reason.includes('result_event_unrecorded')
       ? `${reason}:result_event_unrecorded` : reason;
   while (cycles++ < Math.min(maxCycles, 5000)) {
-    const r = await driverStep(client, goalId, now(), depends, lockCtx, newRunId, executeReal);
+    const r = await driverStep(client, goalId, now(), depends, lockCtx, newRunId, executeReal, maxParallel);
     lastReason = r.reason;
     lastRefusals = r.unlockRefusals;
     if (r.reason.includes('result_event_unrecorded')) eventGap = true;

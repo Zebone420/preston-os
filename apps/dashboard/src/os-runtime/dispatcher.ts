@@ -36,6 +36,8 @@ import { isMigrationAbsentError } from '../lib/ai-os/orchestration/read-model';
 import { consumeRemoteIntakeOnce } from '../lib/ai-os/orchestration/remote-intake';
 import type { ComposerClient } from '../lib/ai-os/orchestration/composer-persist';
 import { resolveExecutionLevel } from '../lib/ai-os/execution-capability';
+import { notifyAttentionOnce } from '../lib/ai-os/notifications';
+import { runtimeNotifyOwner } from './telegram-notify';
 import { buildRealExecutor } from './real-executor';
 import { missingRuntimeEnv } from './supabase-runtime';
 
@@ -248,23 +250,6 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
     return { exitCode: EXIT.config, summary: { error: 'unsafe controls posture', reasons: capability.reasons } };
   }
 
-  // GLOBAL simulation-pin probe (Codex final-review MAJOR #2): if ANY goal
-  // row anywhere carries simulation_only=false, the schema pins have drifted
-  // (0010 CHECK forbids it) - refuse the whole run, not just windowed rows.
-  const pinProbe = await probeSimulationPinViolations(client);
-  if (!pinProbe.ok) {
-    if (isMigrationAbsentError(pinProbe.error ?? '')) {
-      log({ level: 'error', command, correlationId, event: 'orchestrate_once', error: 'migration 0010 not applied (fail-closed)' });
-      return { exitCode: EXIT.config, summary: { error: 'migration 0010 not applied' } };
-    }
-    log({ level: 'error', command, correlationId, event: 'orchestrate_once', error: 'pin probe unreadable: ' + pinProbe.error });
-    return { exitCode: EXIT.error, summary: { error: 'pin probe unreadable' } };
-  }
-  if (pinProbe.rows.length > 0) {
-    log({ level: 'error', command, correlationId, event: 'orchestrate_once', error: 'simulation pin violated somewhere in master_goals (fail-closed)' });
-    return { exitCode: EXIT.error, summary: { error: 'simulation pin violated' } };
-  }
-
   // Phase 8: consume REMOTE INTAKE requests (bounded, oldest-first) through
   // the owner-equivalent composer pipeline BEFORE goal selection, so a
   // phone/ChatGPT request submitted between ticks becomes a driveable goal
@@ -286,7 +271,52 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
     log({ level: 'error', command, correlationId, event: 'remote_intake', error: e instanceof Error ? e.message.slice(0, 200) : 'intake failed' });
   }
 
-  // Deterministic single-goal selection (fail-closed on every ambiguity).
+  // Fast-track C1 idle fast path: the cheapest reliable "is there driveable
+  // work?" test - one indexed limit-1 read per driveable status, short-
+  // circuiting on the first hit. No pin probe, no goal-window hydration, no
+  // per-candidate job reads, no executor composition happen on an idle tick;
+  // the tick logs its measured duration and exits 0 cleanly. The pin probe
+  // still guards every tick that DRIVES (it protects driving, and nothing is
+  // driven on an idle tick).
+  const tickStartMs = seams.clock();
+  let anyDriveable = false;
+  for (const status of DRIVEABLE_GOAL_STATUSES) {
+    const probe = await listGoalsByStatus(client, status, 1);
+    if (!probe.ok) {
+      if (isMigrationAbsentError(probe.error ?? '')) {
+        log({ level: 'error', command, correlationId, event: 'orchestrate_once', error: 'migration 0010 not applied (fail-closed)' });
+        return { exitCode: EXIT.config, summary: { error: 'migration 0010 not applied' } };
+      }
+      log({ level: 'error', command, correlationId, event: 'orchestrate_once', error: 'goals unreadable: ' + probe.error });
+      return { exitCode: EXIT.error, summary: { error: 'goals unreadable' } };
+    }
+    if (probe.rows.length > 0) { anyDriveable = true; break; }
+  }
+  if (!anyDriveable) {
+    const idleMs = seams.clock() - tickStartMs;
+    log({ level: 'info', command, correlationId, event: 'orchestrate_once', stoppedReason: 'no_eligible_goal', idle: true, duration_ms: idleMs });
+    return { exitCode: EXIT.ok, summary: { selected: null, stoppedReason: 'no_eligible_goal', idle: true, duration_ms: idleMs } };
+  }
+
+  // GLOBAL simulation-pin probe (Codex final-review MAJOR #2): if ANY goal
+  // row anywhere carries simulation_only=false, the schema pins have drifted
+  // (0010 CHECK forbids it) - refuse the whole run, not just windowed rows.
+  // Runs on every DRIVING tick (idle ticks exit above without driving).
+  const pinProbe = await probeSimulationPinViolations(client);
+  if (!pinProbe.ok) {
+    if (isMigrationAbsentError(pinProbe.error ?? '')) {
+      log({ level: 'error', command, correlationId, event: 'orchestrate_once', error: 'migration 0010 not applied (fail-closed)' });
+      return { exitCode: EXIT.config, summary: { error: 'migration 0010 not applied' } };
+    }
+    log({ level: 'error', command, correlationId, event: 'orchestrate_once', error: 'pin probe unreadable: ' + pinProbe.error });
+    return { exitCode: EXIT.error, summary: { error: 'pin probe unreadable' } };
+  }
+  if (pinProbe.rows.length > 0) {
+    log({ level: 'error', command, correlationId, event: 'orchestrate_once', error: 'simulation pin violated somewhere in master_goals (fail-closed)' });
+    return { exitCode: EXIT.error, summary: { error: 'simulation pin violated' } };
+  }
+
+  // Deterministic goal selection (fail-closed on every ambiguity).
   // One OLDEST-FIRST read per driveable status, merged: the globally oldest
   // driveable goal is always inside the window, so no goal can starve behind
   // newer ones (Codex initial-review MAJOR #4).
@@ -334,19 +364,44 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
   // driver's authoritative verification remains the only unlock authority.
   const skippedParked: string[] = [];
   const unverifiableApprovals: Array<{ goal: string; job_id: string; reason: string }> = [];
-  let selected: Record<string, unknown> | null = null;
+
+  // Fast-track D1/D2 bounded-throughput knobs (env-tunable, clamped, with the
+  // master-goal starting posture as defaults): parallel jobs inside a goal,
+  // driveable goals per tick, and a soft wall budget that stops SELECTING new
+  // goals once the tick has already run long (the current goal still finishes
+  // its bounded pass; systemd's TimeoutStartSec stays the hard ceiling).
+  const intEnv = (name: string, dflt: number, lo: number, hi: number): number => {
+    const v = Number(env[name]);
+    return Number.isFinite(v) ? Math.max(lo, Math.min(hi, Math.floor(v))) : dflt;
+  };
+  const maxParallel = intEnv('ORCH_MAX_PARALLEL_JOBS', 2, 1, 4);
+  const maxGoalsPerTick = intEnv('ORCH_MAX_GOALS_PER_TICK', 2, 1, 5);
+  const softBudgetMs = intEnv('ORCH_TICK_SOFT_BUDGET_MS', 240_000, 30_000, 3_300_000);
+
+  // Scan the ordered window for the next goal that can make progress,
+  // skipping goals this tick already drove and provably-parked goals
+  // (identical semantics to the former single-goal scan; every read failure
+  // still fails the whole run fail-closed).
+  const parkedSet = new Set<string>();
+  const selectNext = async (
+    exclude: ReadonlySet<string>,
+  ): Promise<
+    | { ok: true; selected: Record<string, unknown> | null }
+    | { ok: false; result: DispatcherResult }
+  > => {
   for (const cand of ordered) {
     const candId = String(cand.id);
+    if (exclude.has(candId) || parkedSet.has(candId)) continue;
     const jobsRes = await listJobsForGoal(client, candId, JOB_READ_LIMIT);
     if (!jobsRes.ok) {
       log({ level: 'error', command, correlationId, event: 'orchestrate_once', goal: candId, error: 'jobs unreadable: ' + jobsRes.error });
-      return { exitCode: EXIT.error, summary: { error: 'jobs unreadable', goal: candId } };
+      return { ok: false, result: { exitCode: EXIT.error, summary: { error: 'jobs unreadable', goal: candId } } };
     }
     if (jobsRes.rows.length > MAX_GOAL_JOBS) {
       // More rows than the model/DB bound allows: completeness is unprovable
       // (Codex CRITICAL #1). Refuse rather than risk finalizing a partial graph.
       log({ level: 'error', command, correlationId, event: 'orchestrate_once', goal: candId, error: 'job read exceeded the model bound; completeness unprovable (fail-closed)' });
-      return { exitCode: EXIT.error, summary: { error: 'job graph overflow', goal: candId } };
+      return { ok: false, result: { exitCode: EXIT.error, summary: { error: 'job graph overflow', goal: candId } } };
     }
     const nonTerminal = jobsRes.rows.filter((j) => !TERMINAL_JOB_STATUSES.has(String(j.status)));
     const allParked = nonTerminal.length > 0 &&
@@ -378,44 +433,18 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
       if (!unlockable) {
         log({ level: 'info', command, correlationId, event: 'orchestrate_once', goal: candId, stoppedReason: 'awaiting_owner_approval', skipped: true });
         skippedParked.push(candId);
+        parkedSet.add(candId);
         continue;
       }
     }
-    selected = cand;
-    break;
+    return { ok: true, selected: cand };
   }
-  if (selected === null) {
-    // Every candidate in the window is parked: undecided owner approvals
-    // and/or decided-but-unverifiable residue (reasons surfaced below).
-    log({ level: 'info', command, correlationId, event: 'orchestrate_once', stoppedReason: 'awaiting_owner_approval', skipped: true, skippedParked, ...(unverifiableApprovals.length ? { unverifiableApprovals } : {}) });
-    return { exitCode: EXIT.ok, summary: { goal: skippedParked[0], skippedParked, stoppedReason: 'awaiting_owner_approval', skipped: true, ...(unverifiableApprovals.length ? { unverifiableApprovals } : {}) } };
-  }
-  const goalId = String(selected.id);
+  return { ok: true, selected: null };
+  };
 
-  // Dependency edges: driving without them could run jobs out of order. A
-  // FULL read (limit hit) is unprovably complete - missing edges would look
-  // "satisfied" - so it refuses exactly like a read error (Codex #2).
-  const depsRes = await listDependenciesForGoal(client, goalId, DEP_READ_LIMIT);
-  if (!depsRes.ok) {
-    log({ level: 'error', command, correlationId, event: 'orchestrate_once', goal: goalId, error: 'dependencies unreadable: ' + depsRes.error });
-    return { exitCode: EXIT.error, summary: { error: 'dependencies unreadable', goal: goalId } };
-  }
-  if (depsRes.rows.length >= DEP_READ_LIMIT) {
-    log({ level: 'error', command, correlationId, event: 'orchestrate_once', goal: goalId, error: 'dependency graph read hit its bound; completeness unprovable (fail-closed)' });
-    return { exitCode: EXIT.error, summary: { error: 'dependency graph overflow', goal: goalId } };
-  }
-  const depMap = new Map<string, string[]>();
-  for (const r of depsRes.rows) {
-    const jobId = String(r.job_id ?? '');
-    const dep = String(r.depends_on_job_id ?? '');
-    if (!jobId || !dep) continue;
-    depMap.set(jobId, [...(depMap.get(jobId) ?? []), dep]);
-  }
-  const depends = (jobId: string) => depMap.get(jobId) ?? [];
-
-  // Drive one bounded pass. The per-invocation lock-token seed makes every
-  // worktree ownership token unique to THIS invocation; run ids are minted by
-  // the driver (crypto-random) unless a test injects a deterministic seam.
+  // Shared per-tick drive context: the per-invocation lock-token seed makes
+  // every worktree ownership token unique to THIS invocation; run ids are
+  // minted by the driver (crypto-random) unless a test injects a seam.
   const seed = seams.lockTokenSeed();
   const lockCtx: DriverLockContext = {
     base_commit: baseCommit,
@@ -426,7 +455,8 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
   // BOUNDED_CODE_EXECUTION posture. buildRealExecutor itself re-checks the
   // capability and returns null on any gap, and the executor re-resolves
   // per job - so a mid-run owner downgrade (owner_stop, pause, flag flip)
-  // takes effect on the very next job without a restart.
+  // takes effect on the very next job without a restart. Composed ONCE per
+  // tick and shared by every goal this tick drives.
   const executeReal = capability.realExecutionAllowed
     ? await buildRealExecutor({
       client, env,
@@ -439,38 +469,98 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
     log({ level: 'info', command, correlationId, event: 'capability', level_resolved: 'BOUNDED_CODE_EXECUTION', executor: executeReal ? 'composed' : 'declined_missing_host_config' });
   }
 
-  // An undefined newRunId falls through to driveGoal's own default: the
-  // driver mints crypto-random run ids (node:crypto randomUUID).
-  const r = await driveGoal(
-    client, goalId, seams.clock, input.maxIterations ?? 5, depends, lockCtx,
-    seams.newRunId, executeReal ?? undefined,
-  );
-  log({ level: 'info', command, correlationId, event: 'orchestrate_once', goal: goalId, cycles: r.cycles, halted: r.halted, reason: r.reason, ...(capability.realExecutionAllowed ? { execution_level: 'BOUNDED_CODE_EXECUTION' } : {}), ...(skippedParked.length ? { skippedParked } : {}), ...(unverifiableApprovals.length ? { unverifiableApprovals } : {}), ...(r.unlockRefusals?.length ? { unlockRefusals: r.unlockRefusals } : {}) });
+  // Fast-track D2: drive up to maxGoalsPerTick goals this tick (bounded,
+  // oldest-first, budget-aware). Each goal gets the same bounded driveGoal
+  // pass as before; a halt exits with the halt's mapping immediately.
+  const driven: Array<Record<string, unknown>> = [];
+  const drivenIds = new Set<string>();
+  for (let gi = 0; gi < maxGoalsPerTick; gi++) {
+    if (gi > 0 && seams.clock() - tickStartMs > softBudgetMs) {
+      log({ level: 'info', command, correlationId, event: 'orchestrate_once', stoppedReason: 'tick_soft_budget_reached', goalsDriven: driven.length });
+      break;
+    }
+    const sel = await selectNext(drivenIds);
+    if (!sel.ok) return sel.result;
+    if (sel.selected === null) break;
+    const goalId = String(sel.selected.id);
+    drivenIds.add(goalId);
 
-  if (r.halted) {
-    if (r.reason.includes('owner_stop')) {
-      // Owner halt (stop/pause) - the intended operational halt state.
-      return { exitCode: EXIT.halted, summary: { goal: goalId, cycles: r.cycles, stoppedReason: r.reason } };
+    // Dependency edges: driving without them could run jobs out of order. A
+    // FULL read (limit hit) is unprovably complete - missing edges would look
+    // "satisfied" - so it refuses exactly like a read error (Codex #2).
+    const depsRes = await listDependenciesForGoal(client, goalId, DEP_READ_LIMIT);
+    if (!depsRes.ok) {
+      log({ level: 'error', command, correlationId, event: 'orchestrate_once', goal: goalId, error: 'dependencies unreadable: ' + depsRes.error });
+      return { exitCode: EXIT.error, summary: { error: 'dependencies unreadable', goal: goalId } };
     }
-    if (r.reason.includes('controls_unreadable')) {
-      // Control-plane outage, NOT an owner decision (Codex MINOR #7).
-      return { exitCode: EXIT.error, summary: { goal: goalId, error: r.reason } };
+    if (depsRes.rows.length >= DEP_READ_LIMIT) {
+      log({ level: 'error', command, correlationId, event: 'orchestrate_once', goal: goalId, error: 'dependency graph read hit its bound; completeness unprovable (fail-closed)' });
+      return { exitCode: EXIT.error, summary: { error: 'dependency graph overflow', goal: goalId } };
     }
-    if (r.reason === 'iteration_reserved_by_other') {
-      // A concurrent worker holds this cycle - clean skip, not a failure.
-      return { exitCode: EXIT.ok, summary: { goal: goalId, cycles: r.cycles, stoppedReason: 'lease_conflict_skip' } };
+    const depMap = new Map<string, string[]>();
+    for (const r of depsRes.rows) {
+      const jobId = String(r.job_id ?? '');
+      const dep = String(r.depends_on_job_id ?? '');
+      if (!jobId || !dep) continue;
+      depMap.set(jobId, [...(depMap.get(jobId) ?? []), dep]);
     }
-    if (r.reason === 'lock_context_required') {
-      return { exitCode: EXIT.config, summary: { goal: goalId, error: r.reason } };
+    const depends = (jobId: string) => depMap.get(jobId) ?? [];
+
+    // An undefined newRunId falls through to driveGoal's own default: the
+    // driver mints crypto-random run ids (node:crypto randomUUID).
+    const r = await driveGoal(
+      client, goalId, seams.clock, input.maxIterations ?? 5, depends, lockCtx,
+      seams.newRunId, executeReal ?? undefined, maxParallel,
+    );
+    log({ level: 'info', command, correlationId, event: 'orchestrate_once', goal: goalId, cycles: r.cycles, halted: r.halted, reason: r.reason, duration_ms: seams.clock() - tickStartMs, ...(capability.realExecutionAllowed ? { execution_level: 'BOUNDED_CODE_EXECUTION' } : {}), ...(skippedParked.length ? { skippedParked } : {}), ...(unverifiableApprovals.length ? { unverifiableApprovals } : {}), ...(r.unlockRefusals?.length ? { unlockRefusals: r.unlockRefusals } : {}) });
+
+    if (r.halted) {
+      if (r.reason.includes('owner_stop')) {
+        // Owner halt (stop/pause) - the intended operational halt state.
+        return { exitCode: EXIT.halted, summary: { goal: goalId, cycles: r.cycles, stoppedReason: r.reason, goalsDriven: driven.length } };
+      }
+      if (r.reason.includes('controls_unreadable')) {
+        // Control-plane outage, NOT an owner decision (Codex MINOR #7).
+        return { exitCode: EXIT.error, summary: { goal: goalId, error: r.reason, goalsDriven: driven.length } };
+      }
+      if (r.reason === 'iteration_reserved_by_other') {
+        // A concurrent worker holds this cycle - clean skip, not a failure.
+        return { exitCode: EXIT.ok, summary: { goal: goalId, cycles: r.cycles, stoppedReason: 'lease_conflict_skip', goalsDriven: driven.length } };
+      }
+      if (r.reason === 'lock_context_required') {
+        return { exitCode: EXIT.config, summary: { goal: goalId, error: r.reason } };
+      }
+      if (['goal_not_found', 'iteration_reserve_error', 'execution_clock_invalid'].includes(r.reason)) {
+        return { exitCode: EXIT.error, summary: { goal: goalId, error: r.reason, goalsDriven: driven.length } };
+      }
+      // Cycle budget exhausted mid-goal: progress is persisted; the next bounded
+      // invocation resumes from the durable state (restart-safe by design).
+      return { exitCode: EXIT.ok, summary: { goal: goalId, cycles: r.cycles, stoppedReason: 'cycle_budget_exhausted', lastReason: r.reason, goalsDriven: driven.length } };
     }
-    if (['goal_not_found', 'iteration_reserve_error', 'execution_clock_invalid'].includes(r.reason)) {
-      return { exitCode: EXIT.error, summary: { goal: goalId, error: r.reason } };
-    }
-    // Cycle budget exhausted mid-goal: progress is persisted; the next bounded
-    // invocation resumes from the durable state (restart-safe by design).
-    return { exitCode: EXIT.ok, summary: { goal: goalId, cycles: r.cycles, stoppedReason: 'cycle_budget_exhausted', lastReason: r.reason } };
+    driven.push({ goal: goalId, cycles: r.cycles, reason: r.reason, ...(r.unlockRefusals?.length ? { unlockRefusals: r.unlockRefusals } : {}) });
   }
-  return { exitCode: EXIT.ok, summary: { goal: goalId, cycles: r.cycles, stoppedReason: r.reason, ...(skippedParked.length ? { skippedParked } : {}), ...(unverifiableApprovals.length ? { unverifiableApprovals } : {}), ...(r.unlockRefusals?.length ? { unlockRefusals: r.unlockRefusals } : {}) } };
+
+  if (driven.length === 0) {
+    // Every candidate in the window is parked: undecided owner approvals
+    // and/or decided-but-unverifiable residue (reasons surfaced below).
+    log({ level: 'info', command, correlationId, event: 'orchestrate_once', stoppedReason: 'awaiting_owner_approval', skipped: true, skippedParked, ...(unverifiableApprovals.length ? { unverifiableApprovals } : {}) });
+    return { exitCode: EXIT.ok, summary: { goal: skippedParked[0], skippedParked, stoppedReason: 'awaiting_owner_approval', skipped: true, ...(unverifiableApprovals.length ? { unverifiableApprovals } : {}) } };
+  }
+  const first = driven[0] as { goal: string; cycles: number; reason: string; unlockRefusals?: unknown[] };
+  return {
+    exitCode: EXIT.ok,
+    summary: {
+      // Single-goal fields keep their legacy shape (existing log/consumer
+      // contract); goalsDriven/goals extend it additively for multi-goal ticks.
+      goal: first.goal, cycles: first.cycles, stoppedReason: first.reason,
+      goalsDriven: driven.length,
+      ...(driven.length > 1 ? { goals: driven } : {}),
+      duration_ms: seams.clock() - tickStartMs,
+      ...(skippedParked.length ? { skippedParked } : {}),
+      ...(unverifiableApprovals.length ? { unverifiableApprovals } : {}),
+      ...(first.unlockRefusals?.length ? { unlockRefusals: first.unlockRefusals } : {}),
+    },
+  };
 }
 
 export async function runDispatcher(input: DispatcherInput): Promise<DispatcherResult> {
@@ -596,6 +686,18 @@ export async function runDispatcher(input: DispatcherInput): Promise<DispatcherR
       const o = await hermesObserveOrchestration(client, now);
       orch = { status: o.status, approval_attention: o.approval_attention, recorded: o.recorded };
     } catch { orch = null; }
+    // Fast-track Phase H: observe -> evaluate -> needs_attention -> notifier
+    // -> owner. Hermes keeps ZERO execution authority; the notifier is fully
+    // inert until the owner activates the Telegram env on this host, dedups
+    // durably (one send per event, ever), and a notification failure never
+    // affects orchestration.
+    let notify: { configured: boolean; candidates: number; sent: number; deduped: number; errors: string[] } | null = null;
+    try {
+      notify = await notifyAttentionOnce(
+        client, env, now,
+        (text) => runtimeNotifyOwner(text, env),
+      );
+    } catch { notify = null; }
     // P0.1 (2026-08-26): orchestration_recorded surfaces a SILENT status-row
     // insert failure (RLS/CHECK) that previously left no trace - the bucket
     // simply stopped advancing with every tick "clean".
@@ -606,6 +708,11 @@ export async function runDispatcher(input: DispatcherInput): Promise<DispatcherR
         orchestration_status: orch.status,
         orchestration_recorded: orch.recorded,
         ...(orch.approval_attention ? { approval_attention: true } : {}),
+      } : {}),
+      ...(notify?.configured ? {
+        notify_sent: notify.sent, notify_deduped: notify.deduped,
+        notify_candidates: notify.candidates,
+        ...(notify.errors.length ? { notify_errors: notify.errors.slice(0, 5) } : {}),
       } : {}),
     });
     return {
