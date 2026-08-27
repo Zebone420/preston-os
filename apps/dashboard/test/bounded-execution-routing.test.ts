@@ -117,13 +117,18 @@ describe('3. code behavior unchanged', () => {
 });
 
 describe('4. genuinely ambiguous work stays fail-closed', () => {
-  it('lexicon miss -> kind unknown; the real adapter still refuses kind_not_eligible', async () => {
-    const jobs = await persistedJobs(
-      'Create one task to zorble the frobnicator gently.',
-      'pc-route-unknown-1');
-    expect(jobs[0].kind).toBe('unknown');
-    const c = contract(claimImage(jobs[0]));
-    expect(c).toEqual({ ok: false, reason: 'kind_not_eligible' });
+  it('lexicon miss -> composer rejects task_kind_unresolved at the boundary (fast-track A2)', () => {
+    // Previously an unresolvable task composed as kind 'unknown' and burned
+    // attempts on deterministic adapter refusals before dead-lettering. The
+    // composer now fails CLOSED at the boundary with a readable reason; the
+    // engine additionally dead-letters any unknown-kind row that slips in
+    // through another path (completion-engine unsupported_kind pin).
+    const composed = composeRequest(
+      'Create one task to zorble the frobnicator gently.');
+    expect(composed.ok).toBe(false);
+    if (!composed.ok) {
+      expect(composed.errors.join(' ')).toContain('ambiguous_request:task_kind_unresolved');
+    }
   });
 });
 
@@ -160,18 +165,17 @@ describe('5-9. gated and prohibited classes remain exactly as before', () => {
     }
   });
 
-  it('airtable write stays blocked: RED mobile-gate (approval-required) AND an adapter-ineligible kind', async () => {
-    // Not composer-rejected outright, but doubly blocked: the mobile-gate
-    // classifies airtable_write as RED/approval-required, and it never
-    // classifies into an eligible implementer kind, so it can never
-    // real-execute even if an owner approval were somehow granted.
-    const jobs = await persistedJobs(
-      'Create one task to airtable-write the drill results into the base.',
-      'pc-route-airtable-1');
-    expect(jobs[0].requires_approval).toBe(true);
-    expect(jobs[0].kind).not.toBe('code');
-    const c = contract(claimImage(jobs[0]));
-    expect(c.ok).toBe(false);
+  it('airtable write stays blocked: now rejected at the composer boundary (fast-track A2)', () => {
+    // Pre-fast-track this composed as an unresolved ('unknown') kind that was
+    // doubly blocked downstream (RED mobile-gate + adapter-ineligible kind).
+    // The unresolved kind now fails CLOSED even earlier - at the composer -
+    // which is strictly stronger: no row is ever created for it.
+    const composed = composeRequest(
+      'Create one task to airtable-write the drill results into the base.');
+    expect(composed.ok).toBe(false);
+    if (!composed.ok) {
+      expect(composed.errors.join(' ')).toContain('ambiguous_request:task_kind_unresolved');
+    }
   });
 });
 

@@ -72,7 +72,9 @@ describe('resolveWorkerToken - service mode (durable store required)', () => {
     const t = await resolveWorkerToken({ ...BASE, SUPABASE_RUNTIME_REFRESH_TOKEN: 'BOOT' }, mock, store, { allowBootstrap: true });
     expect(t).toBe('A1');
     expect(calls[0]).toContain('BOOT'); // bootstrap token used once
-    expect(store.value).toBe('RT1'); // rotated token persisted
+    // C2: the store persists a v2 JSON payload; the rotated refresh token is
+    // inside it (no expiry in this mock response => no access-token caching).
+    expect(JSON.parse(store.value ?? '{}')).toEqual({ v: 2, refresh_token: 'RT1' });
   });
 
   it('an empty store WITHOUT allowBootstrap fails closed (no env re-use)', async () => {
@@ -84,9 +86,45 @@ describe('resolveWorkerToken - service mode (durable store required)', () => {
     const calls: string[] = [];
     const mock = vi.fn(async (_u: string, init?: { body?: string }) => { calls.push(String(init?.body ?? '')); return { ok: true, json: async () => ({ access_token: 'A2', refresh_token: 'RT2' }) } as unknown as Response; }) as unknown as typeof fetch;
     await resolveWorkerToken({ ...BASE, SUPABASE_RUNTIME_REFRESH_TOKEN: 'STALE-ENV' }, mock, store);
-    expect(calls[0]).toContain('RT-current');
+    expect(calls[0]).toContain('RT-current'); // legacy bare-string store accepted
     expect(calls[0]).not.toContain('STALE-ENV'); // env ignored once bootstrapped
-    expect(store.value).toBe('RT2');
+    expect(JSON.parse(store.value ?? '{}').refresh_token).toBe('RT2');
+  });
+
+  // --- fast-track C2: persisted access-token reuse -------------------------
+
+  it('reuses a persisted unexpired access token WITHOUT a network refresh', async () => {
+    const store = memStore(JSON.stringify({
+      v: 2, refresh_token: 'RT-live', access_token: 'A-cached',
+      access_expires_at_ms: Date.now() + 30 * 60_000,
+    }));
+    const t = await resolveWorkerToken(BASE, noFetch, store);
+    expect(t).toBe('A-cached'); // noFetch would throw if a refresh happened
+    expect(JSON.parse(store.value ?? '{}').refresh_token).toBe('RT-live'); // untouched
+  });
+
+  it('refreshes (and rotates) when the cached access token is near expiry', async () => {
+    const store = memStore(JSON.stringify({
+      v: 2, refresh_token: 'RT-old', access_token: 'A-stale',
+      access_expires_at_ms: Date.now() + 30_000, // inside the 120s margin
+    }));
+    const mock = (async () => ({
+      ok: true,
+      json: async () => ({ access_token: 'A-new', refresh_token: 'RT-new', expires_in: 3600 }),
+    }) as unknown as Response) as unknown as typeof fetch;
+    const t = await resolveWorkerToken(BASE, mock, store);
+    expect(t).toBe('A-new');
+    const p = JSON.parse(store.value ?? '{}');
+    expect(p.refresh_token).toBe('RT-new');
+    expect(p.access_token).toBe('A-new'); // expiry declared => cached for reuse
+    expect(p.access_expires_at_ms).toBeGreaterThan(Date.now());
+  });
+
+  it('fails closed on a malformed v2 store payload (never falls back to env)', async () => {
+    const store = memStore('{not json');
+    await expect(
+      resolveWorkerToken({ ...BASE, SUPABASE_RUNTIME_REFRESH_TOKEN: 'ENV' }, noFetch, store),
+    ).rejects.toThrow('malformed');
   });
 
   it('fails closed when the store is unreadable/insecure (does NOT fall back to env)', async () => {
