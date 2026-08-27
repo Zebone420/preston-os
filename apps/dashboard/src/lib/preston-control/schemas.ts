@@ -11,7 +11,12 @@ export const UUID = z.string().regex(
 export const RUNTIME_ID = z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/, 'must match ^[A-Za-z0-9._:-]{8,128}$');
 
 export const SUBMIT_GOAL_SHAPE = {
-  request: z.string().min(1).max(4000).describe("The owner's request in plain language."),
+  request: z.string().min(1).max(4000).describe(
+    "The owner's request. A single clear sentence becomes one task " +
+    "('Audit the repository.'). For multi-step work enumerate the tasks " +
+    "explicitly - 'Task 1: ... Task 2: ... after task 1.' or 'Create tasks " +
+    "to A, B, and C.' - free multi-sentence prose is rejected as ambiguous.",
+  ),
   context: z.string().max(2000).optional().describe('Optional extra context (data only).'),
   priority: z.enum(['normal', 'high']).optional(),
   request_id: RUNTIME_ID.optional().describe('Optional idempotency key; reuse to retry safely.'),

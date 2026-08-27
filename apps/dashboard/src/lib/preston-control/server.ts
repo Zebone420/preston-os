@@ -77,8 +77,10 @@ export function buildPrestonControlServer(ctx: ToolContext): McpServer {
       'Submit a build / fix / investigate / audit / research / implement mission into the Preston ' +
       'control plane. Preston decomposes it deterministically, classifies risk, parks gated work ' +
       'behind owner approval, and the runtime (Hermes + Claude/Codex workers) executes it. Nothing ' +
-      'executes inside this call. Idempotent: re-sending the same request_id replays the same result. ' +
-      'Returns accepted | duplicate | rejected with goal and job ids.',
+      'executes inside this call. A single clear sentence becomes one task; multi-step work must ' +
+      "enumerate tasks explicitly ('Task 1: ... Task 2: ... after task 1.') - free multi-sentence " +
+      'prose is rejected as ambiguous. Idempotent: re-sending the same request_id replays the same ' +
+      'result. Returns accepted | duplicate | rejected with goal and job ids.',
     inputSchema: SUBMIT_GOAL_SHAPE,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async (args) => result(await prestonSubmitGoal(ctx, args)));

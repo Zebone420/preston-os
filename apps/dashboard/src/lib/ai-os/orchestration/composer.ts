@@ -216,7 +216,12 @@ export function composeRequest(raw: unknown): ComposeOutcome {
   const sentences = splitSentences(text);
   const constraints: string[] = [];
   const warnings: string[] = [];
-  const goals: Array<{ title: string; objective: string; tasks: RawTask[] }> = [];
+  // implicit marks a goal minted from a bare opening sentence (no explicit
+  // "goal"/"task" marker) - the only shape eligible for the single-sentence
+  // task derivation below.
+  const goals: Array<{
+    title: string; objective: string; tasks: RawTask[]; implicit?: boolean;
+  }> = [];
   const current = () => goals[goals.length - 1];
 
   const goalStart = /^(?:please\s+)?create\s+(?:an?\s+)?(?:[\w-]+[-\s])*?goal\s+(?:to|for|that)\s+(.+)$/i;
@@ -258,11 +263,15 @@ export function composeRequest(raw: unknown): ComposeOutcome {
       current().tasks.push({ text: m[1].trim(), explicit_number: null });
       continue;
     }
+    // Adapter metadata: preston_submit_goal appends "Priority: high." to the
+    // raw text (tools.ts). It is not owner work - recognize it so it never
+    // counts as dropped content, exactly the literal adapter-generated form.
+    if (/^priority\s*:\s*(normal|high)\.?$/i.test(sentence)) continue;
     if (!goals.length) {
       // The opening sentence, when not an explicit goal marker, is read as
       // the goal statement itself.
       errors.push(...scanProhibited(sentence));
-      goals.push({ title: titleOf(sentence), objective: sentence, tasks: [] });
+      goals.push({ title: titleOf(sentence), objective: sentence, tasks: [], implicit: true });
       continue;
     }
     errors.push(...scanProhibited(sentence));
@@ -283,8 +292,24 @@ export function composeRequest(raw: unknown): ComposeOutcome {
       return;
     }
     if (g.tasks.length === 0) {
-      errors.push(`ambiguous_request:goal_${gi + 1}_has_no_tasks`);
-      return;
+      // Live ChatGPT-path finding (2026-08-27): a request that is EXACTLY one
+      // clear imperative sentence ("Audit the repository.") is not ambiguous -
+      // the sentence IS the task, in the owner's own words. Derive it only
+      // when nothing else was dropped: the goal was implicit (no explicit
+      // goal marker asking for decomposition the owner never supplied), it is
+      // the only goal, and no sentence fell through unparsed (a multi-step
+      // prose request must keep rejecting, never silently mis-shape - see
+      // tmode-compose-repro). The derived task passes through the SAME kind
+      // resolution, prohibited scans, and policy classification as any other;
+      // an unresolvable kind still rejects fail-closed.
+      const dropped = warnings.some((w) => w.startsWith('unparsed_sentence:'));
+      if (g.implicit && goals.length === 1 && !dropped) {
+        g.tasks.push({ text: g.objective, explicit_number: null });
+        warnings.push('task_derived_from_goal_objective');
+      } else {
+        errors.push(`ambiguous_request:goal_${gi + 1}_has_no_tasks`);
+        return;
+      }
     }
     if (g.tasks.length > MAX_COMPOSED_TASKS) {
       errors.push('too_many_tasks');

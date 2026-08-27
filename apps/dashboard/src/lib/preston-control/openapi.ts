@@ -74,7 +74,7 @@ export function buildOpenApiDocument(origin: string): Record<string, unknown> {
           additionalProperties: false,
           required: ['request'],
           properties: {
-            request: { type: 'string', minLength: 1, maxLength: 4000, description: "The owner's request in plain language." },
+            request: { type: 'string', minLength: 1, maxLength: 4000, description: "The owner's request. A single clear sentence becomes one task ('Audit the repository.'). For multi-step work enumerate the tasks explicitly - 'Task 1: ... Task 2: ... after task 1.' or 'Create tasks to A, B, and C.' - free multi-sentence prose is rejected as ambiguous." },
             context: { type: 'string', maxLength: 2000, description: 'Optional extra context (data only).' },
             priority: { type: 'string', enum: ['normal', 'high'] },
             request_id: { type: 'string', pattern: RUNTIME_ID_PATTERN, description: 'Optional idempotency key; reuse to retry safely.' },
