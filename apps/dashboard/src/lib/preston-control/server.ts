@@ -11,6 +11,7 @@ import {
   CANCEL_GOAL_SHAPE,
   DECIDE_APPROVAL_SHAPE,
   FOLLOW_UP_GOAL_SHAPE,
+  GET_ARTIFACT_SHAPE,
   GET_EVIDENCE_SHAPE,
   GET_GOAL_SHAPE,
   GET_JOB_SHAPE,
@@ -20,6 +21,7 @@ import {
   prestonCancelGoal,
   prestonDecideApproval,
   prestonFollowUpGoal,
+  prestonGetArtifact,
   prestonGetEvidence,
   prestonGetGoal,
   prestonGetJob,
@@ -42,6 +44,7 @@ export const TOOL_NAMES = [
   'preston_decide_approval',
   'preston_cancel_goal',
   'preston_get_evidence',
+  'preston_get_artifact',
 ] as const;
 
 function result(payload: unknown) {
@@ -150,6 +153,16 @@ export function buildPrestonControlServer(ctx: ToolContext): McpServer {
     inputSchema: GET_EVIDENCE_SHAPE,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async (args) => result(await prestonGetEvidence(ctx, args)));
+
+  server.registerTool('preston_get_artifact', {
+    title: 'Get a Preston artifact',
+    description:
+      'Read-only: one durable artifact by id (art-<32 hex>) - provenance (goal/job/run), type, ' +
+      'name, sha256, size, retention state - plus a SHORT-LIVED signed download URL when storage ' +
+      'is active. Storage credentials are never exposed; there is no bucket browsing.',
+    inputSchema: GET_ARTIFACT_SHAPE,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, async (args) => result(await prestonGetArtifact(ctx, args.artifact_id)));
 
   return server;
 }

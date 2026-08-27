@@ -52,6 +52,11 @@ export const FOLLOW_UP_GOAL_SHAPE = {
   request_id: RUNTIME_ID.optional().describe('Optional idempotency key; reuse to retry safely.'),
 };
 
+export const GET_ARTIFACT_SHAPE = {
+  artifact_id: z.string().regex(/^art-[0-9a-f]{32}$/,
+    'must match ^art-[0-9a-f]{32}$'),
+};
+
 export const SubmitGoalSchema = z.object(SUBMIT_GOAL_SHAPE).strict();
 export const GetGoalSchema = z.object(GET_GOAL_SHAPE).strict();
 export const DecideApprovalSchema = z.object(DECIDE_APPROVAL_SHAPE).strict();
@@ -59,3 +64,4 @@ export const GetEvidenceSchema = z.object(GET_EVIDENCE_SHAPE).strict();
 export const GetJobSchema = z.object(GET_JOB_SHAPE).strict();
 export const CancelGoalSchema = z.object(CANCEL_GOAL_SHAPE).strict();
 export const FollowUpGoalSchema = z.object(FOLLOW_UP_GOAL_SHAPE).strict();
+export const GetArtifactSchema = z.object(GET_ARTIFACT_SHAPE).strict();

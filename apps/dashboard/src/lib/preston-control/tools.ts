@@ -30,9 +30,11 @@ import {
   type ComposerClient,
 } from '@/lib/ai-os/orchestration/composer-persist';
 import {
+  isMigrationAbsentError,
   loadLatestHermesStatus,
   loadOrchestrationReadModel,
 } from '@/lib/ai-os/orchestration/read-model';
+import { bindSupabaseArtifactStorage } from '@/lib/ai-os/artifacts';
 import {
   listJobsForGoal,
   listOpenApprovals,
@@ -931,5 +933,84 @@ export async function prestonGetEvidence(
         updated_at: j.updated_at,
       };
     }),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 10. preston_get_artifact (READ ONLY) - power-station master goal section 7.
+// The smallest safe retrieval surface for durable artifacts: authenticate
+// through the existing owner auth, read metadata from the SSOT artifacts
+// table (RLS-bound), and mint a SHORT-LIVED signed URL for the object.
+// Storage credentials are never exposed; there is no bucket-browsing
+// operation (one artifact id per call, id format art-<32 hex>).
+const ARTIFACT_ID_RE = /^art-[0-9a-f]{32}$/;
+export const ARTIFACT_SIGNED_URL_TTL_SECONDS = 300;
+
+export async function prestonGetArtifact(ctx: ToolContext, artifactId: string) {
+  const id = String(artifactId ?? '').trim();
+  if (!ARTIFACT_ID_RE.test(id)) {
+    return { found: false as const, error: 'artifact_id_invalid' };
+  }
+  const client = ctx.client as unknown as RuntimeClient;
+  let rows: Row[] = [];
+  try {
+    const r = await client.from('artifacts').select('*')
+      .eq('artifact_id', id).limit(1);
+    if (r.error) {
+      // Migration 0027 not applied => the platform is not activated in this
+      // environment; distinguish it from a transient read failure.
+      const gone = isMigrationAbsentError(String(r.error.message ?? ''));
+      return {
+        found: false as const,
+        error: gone ? 'artifact_platform_not_activated' : 'read_failed',
+      };
+    }
+    rows = r.data ?? [];
+  } catch {
+    return { found: false as const, error: 'read_failed' };
+  }
+  if (rows.length === 0) return { found: false as const, error: 'not_found' };
+  const row = rows[0];
+  const artifact = {
+    artifact_id: String(row['artifact_id'] ?? ''),
+    goal_id: String(row['goal_id'] ?? ''),
+    job_id: String(row['job_id'] ?? ''),
+    run_id: String(row['run_id'] ?? ''),
+    artifact_type: String(row['artifact_type'] ?? ''),
+    name: safeText(row['name'], 300),
+    sha256: String(row['sha256'] ?? ''),
+    mime_type: String(row['mime_type'] ?? ''),
+    size_bytes: Number(row['size_bytes'] ?? 0),
+    created_by: String(row['created_by'] ?? ''),
+    provider: row['provider'] == null ? null : String(row['provider']),
+    commit_sha: row['commit_sha'] == null ? null : String(row['commit_sha']),
+    environment: String(row['environment'] ?? ''),
+    classification: String(row['classification'] ?? ''),
+    retention_state: String(row['retention_state'] ?? ''),
+    created_at: String(row['created_at'] ?? ''),
+  };
+  // Short-lived signed retrieval. Fail-closed: no storage surface on this
+  // client, or a non-active retention state, yields metadata WITHOUT a URL.
+  let signedUrl: string | null = null;
+  let retrieval: 'ok' | 'retention_not_active' | 'storage_unavailable' = 'storage_unavailable';
+  if (artifact.retention_state !== 'active') {
+    retrieval = 'retention_not_active';
+  } else {
+    const storage = bindSupabaseArtifactStorage(client);
+    if (storage) {
+      const signed = await storage.createSignedUrl(
+        String(row['object_path'] ?? ''), ARTIFACT_SIGNED_URL_TTL_SECONDS);
+      if (signed.ok && signed.url) {
+        signedUrl = signed.url;
+        retrieval = 'ok';
+      }
+    }
+  }
+  return {
+    found: true as const,
+    artifact,
+    retrieval,
+    signed_url: signedUrl,
+    signed_url_expires_in_seconds: signedUrl ? ARTIFACT_SIGNED_URL_TTL_SECONDS : null,
   };
 }

@@ -226,7 +226,7 @@ describe('GPT Actions REST surface', () => {
     const ops = Object.values(doc.paths as Record<string, Record<string, { operationId: string; 'x-openai-isConsequential': boolean }>>)
       .flatMap((p) => Object.values(p));
     expect(ops.map((o) => o.operationId).sort()).toEqual(
-      ['cancelPrestonGoal', 'decidePrestonApproval', 'followUpPrestonGoal', 'getPrestonEvidence', 'getPrestonGoal', 'getPrestonJob', 'getPrestonStatus', 'listPrestonApprovals', 'submitPrestonGoal'],
+      ['cancelPrestonGoal', 'decidePrestonApproval', 'followUpPrestonGoal', 'getPrestonArtifact', 'getPrestonEvidence', 'getPrestonGoal', 'getPrestonJob', 'getPrestonStatus', 'listPrestonApprovals', 'submitPrestonGoal'],
     );
     const byId = Object.fromEntries(ops.map((o) => [o.operationId, o]));
     // Least-privilege transport friction: ONLY the owner-decision write is
@@ -246,6 +246,8 @@ describe('GPT Actions REST surface', () => {
     expect(byId.getPrestonJob['x-openai-isConsequential']).toBe(false);
     expect(byId.listPrestonApprovals['x-openai-isConsequential']).toBe(false);
     expect(byId.getPrestonEvidence['x-openai-isConsequential']).toBe(false);
+    // Artifact readback is read-only metadata + a short-lived signed URL.
+    expect(byId.getPrestonArtifact['x-openai-isConsequential']).toBe(false);
     const flow = doc.components.securitySchemes.prestonOAuth.flows.authorizationCode;
     expect(flow.authorizationUrl).toBe(ORIGIN + '/oauth/gpt/authorize');
     expect(flow.tokenUrl).toBe(ORIGIN + '/oauth/gpt/token');

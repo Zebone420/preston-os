@@ -243,6 +243,19 @@ export function buildOpenApiDocument(origin: string): Record<string, unknown> {
           responses: { '200': { description: 'Evidence items', content: { 'application/json': { schema: { $ref: '#/components/schemas/Result' } } } }, '400': { description: 'Invalid input' }, '401': { description: 'Not authenticated' } },
         },
       },
+      '/api/control/artifacts/{artifact_id}': {
+        get: {
+          operationId: 'getPrestonArtifact',
+          summary: 'Get one durable Preston artifact',
+          description:
+            'Read-only: one durable artifact by id (from a job\'s artifact:<id> evidence ref) - ' +
+            'provenance, type, name, sha256, size, retention state, plus a short-lived signed ' +
+            'download URL when storage is active. No bucket browsing; no credentials.',
+          'x-openai-isConsequential': false,
+          parameters: [{ name: 'artifact_id', in: 'path', required: true, schema: { type: 'string', pattern: '^art-[0-9a-f]{32}$' } }],
+          responses: { '200': { description: 'Artifact metadata and retrieval', content: { 'application/json': { schema: { $ref: '#/components/schemas/Result' } } } }, '400': { description: 'Invalid id' }, '401': { description: 'Not authenticated' } },
+        },
+      },
     },
   };
 }
