@@ -65,16 +65,54 @@ export function looksSecret(s: string): boolean {
   return hasSecretText(s) || TOKEN_SHAPES.test(s);
 }
 
+// Fast-track Phase J: SPAN-level redaction. The old behavior dropped the
+// ENTIRE field whenever looksSecret fired, so a result that merely MENTIONED
+// the word "token" became unreadable (B5 defect 5, fail-safe direction).
+// These patterns localize the actual secret-VALUE shapes so the span is
+// replaced and the surrounding useful text survives. Protection stays
+// stronger than readability: after span redaction, any surviving
+// value-shaped leak (TOKEN_SHAPES) still drops the whole field.
+const SECRET_SPAN_PATTERNS: readonly RegExp[] = [
+  /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}(?:\.[A-Za-z0-9_-]{5,})?/g, // JWT
+  /\bsk-[A-Za-z0-9_-]{10,}/g, // provider API keys
+  /\bghp_[A-Za-z0-9]{10,}/g, // GitHub PATs
+  /\bxox[baprs]-[A-Za-z0-9-]{5,}/g, // Slack tokens
+  /\bAKIA[0-9A-Z]{16}\b/g, // AWS access key ids
+  // key/token/secret/password/bearer assignments: keep the label, drop the value
+  /\b([a-z_-]*(?:secret|password|passwd|token|key|credential|bearer|authorization|pat)\s*[=:]\s*)\S{4,}/gi,
+  /-----BEGIN[\s\S]{0,4000}?-----END[^\n]*-----/g, // PEM blocks
+  /\bssh-(?:rsa|ed25519)\s+[A-Za-z0-9+/=]{20,}/g, // SSH public-key material
+];
+
+export function redactSecretSpans(s: string): string {
+  let t = String(s ?? '');
+  for (const re of SECRET_SPAN_PATTERNS) {
+    t = t.replace(re, (m, label) =>
+      typeof label === 'string' && label.length > 0 && m.startsWith(label)
+        ? label + REDACTED
+        : REDACTED);
+  }
+  return t;
+}
+
 function safeText(v: unknown, max = 2000): string {
   const s = String(v ?? '');
-  if (looksSecret(s)) return REDACTED;
-  return s.length > max ? s.slice(0, max) + '...' : s;
+  let t = s;
+  if (looksSecret(s)) {
+    t = redactSecretSpans(s);
+    // Fallback stays all-or-nothing: a value-shaped leak the span patterns
+    // could not localize redacts the entire field (never weaker than before
+    // for actual secret VALUES; only keyword-mention prose is now readable).
+    if (TOKEN_SHAPES.test(t)) return REDACTED;
+  }
+  return t.length > max ? t.slice(0, max) + '...' : t;
 }
 
 function safeJsonList(v: unknown, max = 50): unknown[] {
   if (!Array.isArray(v)) return [];
   return v.slice(0, max).map((item) => {
-    const s = typeof item === 'string' ? item : JSON.stringify(item);
+    if (typeof item === 'string') return safeText(item, 500);
+    const s = JSON.stringify(item);
     return looksSecret(s) ? REDACTED : item;
   });
 }
@@ -479,6 +517,18 @@ export async function readJobResultReports(ctx: ToolContext, jobId: string) {
         result_excerpt: p['result_excerpt'] == null ? null : safeText(p['result_excerpt'], 2000),
         files_changed: safeJsonList(p['files_changed']).map((f) => safeText(f, 300)),
         evidence_refs: safeJsonList(p['evidence_refs']),
+        // Fast-track Phase B/E: the validated machine result block + routing
+        // telemetry (additive; absent on pre-fast-track rows). The block was
+        // schema-validated and secret-scrubbed at record time; the whole-value
+        // secret screen still guards a drifted row.
+        structured: (() => {
+          const s = p['structured'];
+          if (s == null || typeof s !== 'object' || Array.isArray(s)) return null;
+          return looksSecret(JSON.stringify(s)) ? null : s;
+        })(),
+        structured_error: p['structured_error'] == null ? null : safeText(p['structured_error'], 120),
+        provider_model: p['provider_model'] == null ? null : safeText(p['provider_model'], 80),
+        duration_ms: Number.isFinite(Number(p['duration_ms'])) ? Number(p['duration_ms']) : null,
         recorded_at: String(row['created_at'] ?? ''),
       };
     });

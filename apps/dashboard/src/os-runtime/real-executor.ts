@@ -218,7 +218,11 @@ export async function buildRealExecutor(
       ],
       failure_reason: `real_required:${reason}`,
       summary: 'strict real mode: decline is a failure, not a simulation',
-      report: { result_excerpt: null, files_changed: [] },
+      report: {
+        result_excerpt: null, files_changed: [],
+        structured: null, structured_error: null,
+      },
+      provider_model: null, routing_reason: null, duration_ms: null,
     }, { job_id: job.id, goal_id: job.goal_id, run_id: runId, role });
 
     // Re-resolve the capability EVERY job (owner may have downgraded).
@@ -330,11 +334,19 @@ export async function buildRealExecutor(
       // Bridge B2: the bounded, sanitized readable report the driver persists
       // as a JobResultRecorded event. result_excerpt comes from the adapter
       // (parsed CLI result text, already redacted + bounded); files_changed
-      // from the post-run worktree audit (relative repo paths only).
+      // from the post-run worktree audit (relative repo paths only). The
+      // fast-track structured block + routing/duration telemetry ride along.
       const report = (touched: string[]) => ({
         result_excerpt: result.result_excerpt ?? null,
         files_changed: touched.slice(0, 50),
+        structured: result.structured ?? null,
+        structured_error: result.structured_error ?? null,
       });
+      const telemetry = {
+        provider_model: result.provider_model ?? null,
+        routing_reason: result.routing_reason ?? null,
+        duration_ms: result.process?.duration_ms ?? null,
+      };
       if (!audit.ok || !audit.audit) {
         return logResult({
           outcome: 'failed', executed: true,
@@ -346,6 +358,7 @@ export async function buildRealExecutor(
           failure_reason: 'worktree_audit_unreadable',
           summary: 'real run completed but confinement could not be proven',
           report: report([]),
+          ...telemetry,
         }, ids);
       }
       if (!audit.audit.ok) {
@@ -361,8 +374,13 @@ export async function buildRealExecutor(
           summary: 'real run touched paths outside the allowlist; ' +
             'edits discarded with the worktree',
           // Deliberately NO result excerpt on a confinement violation: the
-          // run's output is untrusted alongside its discarded edits.
-          report: { result_excerpt: null, files_changed: [] },
+          // run's output is untrusted alongside its discarded edits - the
+          // structured block is equally untrusted and equally withheld.
+          report: {
+            result_excerpt: null, files_changed: [],
+            structured: null, structured_error: null,
+          },
+          ...telemetry,
         }, ids);
       }
 
@@ -380,6 +398,7 @@ export async function buildRealExecutor(
         failure_reason: result.failure_reason,
         summary: result.summary,
         report: report(audit.audit.touched ?? []),
+        ...telemetry,
       }, ids);
     } finally {
       // Always remove the worktree: results live in evidence + job rows;

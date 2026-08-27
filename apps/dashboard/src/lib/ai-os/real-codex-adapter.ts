@@ -41,7 +41,7 @@ import {
   buildLevel1Prompt,
   checkWorktreeConfinement,
   clampTimeoutMs,
-  extractResultText,
+  extractResultParts,
   makeNodeProcessRunner,
   mapProcessOutcome,
   realEvidenceRef,
@@ -54,6 +54,8 @@ import {
   type RealOutcome,
   type RealProcessEvidence,
 } from './real-claude-adapter';
+import { routeModel } from './orchestration/routing';
+import type { StructuredResult } from './structured-result';
 
 // --- constants (fixed contracts; changing any is an owner-gated change) ----
 
@@ -259,8 +261,13 @@ export function checkRealCodexJobContract(
 // non-interactive form; `--json` emits structured events. If the installed
 // Codex CLI's contract differs, this constant is the single reviewable point
 // changed at the owner activation gate.
-export function buildCodexArgs(prompt: string): string[] {
-  return ['exec', '--json', prompt];
+export function buildCodexArgs(prompt: string, model?: string | null): string[] {
+  // Optional routing-table model (Phase E): flags stay BEFORE the prompt so
+  // the prompt remains the final positional element; the model value passed
+  // here has already been shape-validated by the routing table.
+  return model
+    ? ['exec', '--json', '--model', model, prompt]
+    : ['exec', '--json', prompt];
 }
 
 // --- result -----------------------------------------------------------------
@@ -281,6 +288,11 @@ export interface RealCodexAdapterResult {
   // adapter's extractResultText. Codex `exec --json` emits event lines, so
   // this is usually the raw sanitized tail rather than a parsed field.
   result_excerpt: string | null;
+  // Fast-track Phase B/E parity with the claude adapter result.
+  structured: StructuredResult | null;
+  structured_error: string | null;
+  provider_model: string | null;
+  routing_reason: string | null;
 }
 
 function processEvidence(o: ProcessOutcome): RealProcessEvidence {
@@ -332,6 +344,10 @@ function refuse(
     summary: `real codex adapter refused: ${reason}`,
     failure_reason: reason,
     result_excerpt: null,
+    structured: null,
+    structured_error: null,
+    provider_model: null,
+    routing_reason: null,
   };
 }
 
@@ -365,10 +381,11 @@ export async function runRealCodexJob(
     nowMs: i.nowMs, realpath: i.realpath,
   });
   if (!confined.ok) return refuse(i, 'blocked', confined.reason);
+  const routed = routeModel(i.job.kind, i.env);
   const prompt = buildLevel1Prompt({ job: i.job, config: probe.config });
   const spec: ProcessSpec = {
     executable: probe.config.executable,
-    args: buildCodexArgs(prompt),
+    args: buildCodexArgs(prompt, routed.model),
     cwd: confined.cwd,
     timeout_ms: clampTimeoutMs(i.timeoutMs),
     max_output_bytes: REAL_CLAUDE_MAX_OUTPUT_BYTES,
@@ -376,6 +393,7 @@ export async function runRealCodexJob(
   const runner = i.runner ?? makeNodeProcessRunner(i.env);
   const o = await runner(spec);
   const mapped = mapProcessOutcome(o);
+  const parts = extractResultParts(o.stdout);
   return {
     job_id: i.job.id, role: 'codex', mode: 'real', outcome: mapped.outcome,
     executed: mapped.executed, simulated: false, run_id: i.runId,
@@ -388,6 +406,10 @@ export async function runRealCodexJob(
       : `REAL level-1 ${i.job.kind} codex run did not complete: ` +
         (mapped.failure_reason ?? 'unknown'),
     failure_reason: mapped.failure_reason,
-    result_excerpt: extractResultText(o.stdout),
+    result_excerpt: parts.excerpt,
+    structured: parts.structured,
+    structured_error: parts.structured_error,
+    provider_model: routed.model,
+    routing_reason: routed.reason,
   };
 }
