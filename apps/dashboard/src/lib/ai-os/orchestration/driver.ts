@@ -79,6 +79,11 @@ export interface RealExecutionResult {
     // adapters supply the validated StructuredResult shape).
     structured?: object | null;
     structured_error?: string | null;
+    // Power-station artifact durability: artifact:<id> refs persisted for
+    // this run, and the explicit condition when persistence FAILED after
+    // successful work (never silently lost - master goal section 6).
+    artifact_refs?: string[];
+    artifact_unrecorded?: boolean;
   };
   // Fast-track Phase E telemetry (optional, additive): the model the routing
   // table requested for this run, why, and the real process duration.
@@ -678,6 +683,10 @@ export async function driverStep(
               provider_model: real?.provider_model ?? null,
               routing_reason: real?.routing_reason ?? null,
               duration_ms: real?.duration_ms ?? null,
+              // Power-station artifact durability (additive): what this run
+              // durably persisted, and the explicit unrecorded condition.
+              artifact_refs: (real?.report?.artifact_refs ?? []).slice(0, 10),
+              artifact_unrecorded: real?.report?.artifact_unrecorded === true,
             },
           });
           const rec = await insertEvent(client, ev);

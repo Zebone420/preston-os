@@ -28,9 +28,16 @@
 // exactly the prior behavior. Any other role has no real adapter and declines.
 
 import { spawn } from 'node:child_process';
-import { isAbsolute } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { isAbsolute, resolve as resolvePath, sep } from 'node:path';
 import type { RuntimeClient } from '../lib/ai-os/store';
 import { readSystemControlsChecked } from '../lib/ai-os/store';
+import {
+  artifactsEnabled,
+  bindSupabaseArtifactStorage,
+  persistArtifacts,
+  type ArtifactStorage,
+} from '../lib/ai-os/artifacts';
 import {
   resolveExecutionLevel,
 } from '../lib/ai-os/execution-capability';
@@ -117,6 +124,22 @@ export interface RealExecutorDeps {
   codexRunner?: Parameters<typeof runRealCodexJob>[0]['runner'];
   fileExists?: (p: string) => boolean;
   realpath?: (p: string) => string;
+  // Artifact seams (power-station). Omitted in production: storage binds to
+  // the runtime supabase client, bytes read from the audited worktree.
+  artifactStorage?: ArtifactStorage | null;
+  readArtifactBytes?: (worktreePath: string, rel: string) => Uint8Array;
+}
+
+// Contained worktree file read for artifact persistence: resolves the
+// audited relative path INSIDE the worktree and refuses anything that
+// escapes it (belt on top of the path validation in artifacts.ts).
+function readWorktreeFile(worktreePath: string, rel: string): Uint8Array {
+  const root = resolvePath(worktreePath);
+  const abs = resolvePath(root, rel);
+  if (abs !== root && !abs.startsWith(root + sep)) {
+    throw new Error('artifact path escapes worktree');
+  }
+  return readFileSync(abs);
 }
 
 // Evidence ref for a declined-real / audit outcome so the decision trail is
@@ -387,6 +410,44 @@ export async function buildRealExecutor(
       const summaryNote = audit.audit.dirty
         ? `touched:${audit.audit.touched.length}`
         : 'clean';
+      // Power-station artifact durability: persist the audited touched files
+      // BEFORE the finally block releases the worktree. Fully env-gated
+      // (ORCH_ARTIFACTS_ENABLED): unset => zero storage/DB operations. A
+      // persistence failure NEVER fabricates or destroys success - the job
+      // result stands, with the explicit artifact_unrecorded condition on
+      // its evidence + report (master goal section 6).
+      let artifactRefs: string[] = [];
+      let artifactUnrecorded = false;
+      const touched = audit.audit.touched ?? [];
+      if (result.outcome === 'completed' && touched.length > 0 &&
+          artifactsEnabled(deps.env)) {
+        const storage = deps.artifactStorage !== undefined
+          ? deps.artifactStorage
+          : bindSupabaseArtifactStorage(deps.client);
+        const commitSha = (result.structured as { commit_sha?: string | null } | null
+          )?.commit_sha ?? null;
+        const readBytes = deps.readArtifactBytes ?? readWorktreeFile;
+        const pass = await persistArtifacts({
+          client: deps.client,
+          storage,
+          env: deps.env,
+          readFileBytes: (rel) => readBytes(prov.target.worktreePath, rel),
+          now: () => nowMs,
+          log: (fields) => deps.log?.({ ...fields, job_id: job.id, run_id: runId }),
+        }, {
+          goal_id: job.goal_id, job_id: job.id, run_id: runId,
+          files: touched, created_by: role, provider: role,
+          commit_sha: commitSha,
+        });
+        artifactRefs = pass.artifact_refs;
+        artifactUnrecorded = pass.condition === 'artifact_unrecorded';
+        deps.log?.({
+          event: 'artifact_persist', condition: pass.condition,
+          persisted: pass.artifact_refs.length,
+          rejected: pass.rejected.length, failed: pass.failed.length,
+          job_id: job.id, goal_id: job.goal_id, run_id: runId,
+        });
+      }
       return logResult({
         outcome: result.outcome === 'completed' ? 'completed' : 'failed',
         executed: result.executed,
@@ -394,10 +455,17 @@ export async function buildRealExecutor(
           ...result.evidence_refs,
           auditRef(job.id, runId, `paths_ok:${summaryNote}`),
           providerRef(job.id, runId, role),
+          ...artifactRefs,
+          ...(artifactUnrecorded
+            ? [auditRef(job.id, runId, 'artifact_unrecorded')] : []),
         ],
         failure_reason: result.failure_reason,
         summary: result.summary,
-        report: report(audit.audit.touched ?? []),
+        report: {
+          ...report(touched),
+          artifact_refs: artifactRefs,
+          artifact_unrecorded: artifactUnrecorded,
+        },
         ...telemetry,
       }, ids);
     } finally {

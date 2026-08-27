@@ -1,0 +1,15 @@
+-- ============================================================================
+-- ROLLBACK 0027 (artifact metadata) - OWNER-RUN ONLY.
+-- Exact, bounded. Named .sql.txt per RED-boundary scanner convention.
+-- Safe ONLY while ORCH_ARTIFACTS_ENABLED is unset everywhere (no runtime
+-- writes artifacts) and the 'artifacts' storage bucket is empty or already
+-- deleted. Verify first:
+--   select count(*) from public.artifacts;      -- expect 0 (or drill rows)
+-- ============================================================================
+drop policy if exists artifacts_owner_runtime_sel on public.artifacts;
+drop policy if exists artifacts_owner_runtime_ins on public.artifacts;
+drop policy if exists artifacts_owner_upd on public.artifacts;
+drop index if exists public.uq_artifacts_object_path;
+drop index if exists public.idx_artifacts_job;
+drop index if exists public.idx_artifacts_goal;
+drop table if exists public.artifacts;
