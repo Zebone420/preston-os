@@ -135,7 +135,10 @@ export type EventType =
   // Bridge B3: owner-confirmed goal cancellation audit record.
   | 'GoalCancelRequested'
   // Bridge B4: parent->child continuation linkage record.
-  | 'GoalLinked';
+  | 'GoalLinked'
+  // Fast-track Phase H: durable dedup ledger row for an owner attention
+  // notification (the insert winning the PK race authorizes the single send).
+  | 'OwnerNotificationRecorded';
 
 export interface OsEvent {
   id: string;
