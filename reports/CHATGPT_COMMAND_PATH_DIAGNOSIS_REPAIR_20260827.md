@@ -206,3 +206,84 @@ Explicitly preserved (validation NOT weakened):
 Push and deploy to staging, run the one-sentence drill from a fresh
 ChatGPT chat, and on PASS schedule the production promotion under the
 standard RED gate.
+
+---
+
+# ADDENDUM: Staging deployment + live ChatGPT drill — ALL PASS (2026-08-27)
+
+Owner pushed the branch (origin = ce5e6c4, verified on GitHub) and
+authorized staging deployment + the live drill.
+
+## A1. Staging deployment
+
+- Branch push produced Ready preview `CRMugvwp2Cc19DKi2dTAieLBqpM4`
+  (commit ce5e6c4, feature/final-build-fast-track, build 29s).
+- Promoted via Vercel dashboard (owner browser session) to Production of
+  project preston-os-staging: deployment `8HsD472PsEpgF1r3gWcuMmRMGzLX`,
+  aliased ONLY to preston-os-staging.vercel.app.
+- **Staging deployment commit: ce5e6c4** (contains fix 4fd7613).
+- Smoke: /api/health 200 `{"ok":true,"mode":"connected"}`; OpenAPI 200 with
+  10 operations (getPrestonStatus, submitPrestonGoal, getPrestonGoal,
+  followUpPrestonGoal, cancelPrestonGoal, getPrestonJob,
+  listPrestonApprovals, decidePrestonApproval, getPrestonEvidence,
+  getPrestonArtifact) and the NEW grammar description live; /api/control/
+  status without token -> HTTP 401 fail-closed.
+- Production project (preston-os-prod) untouched, not restarted, not
+  redeployed; master not promoted.
+
+## A2. Live one-sentence goal drill (ChatGPT path, NEW chat, connector
+"Preston Control MCP - Staging Clean")
+
+preston_submit_goal request="Audit the repository."
+request_id=pc-drill-20260827-bare-1 -> raw result:
+
+- status **accepted**, approvals_required 0,
+  warnings ["task_derived_from_goal_objective"] (the repair's derivation
+  path, observed live)
+- goal_id **07646def-9581-428c-9305-294ffc4aea58**
+  (correlation cmp-pc-drill-20260827-bare-1-g1-fb77f21f78f4, replayed false)
+- exactly ONE job: **11a6dcf4-2273-4870-ae86-43885358d66c**
+  "Audit the repository", requires_approval false
+
+preston_get_job readback: kind **audit**, risk_class **GREEN**,
+assigned_role **claude**, status **in_progress**, run.active **true**,
+lease_expires_at 2026-08-27T21:24:55Z, created 21:14:41Z, leased 21:14:55Z
+-> persisted AND actually dispatched: the staging runtime leased the job to
+the Claude worker within one tick (~14s). Bounded audit execution was
+in flight at report time; result reports/evidence land on completion and
+are readable via preston_get_job / preston_get_evidence.
+
+## A3. Fail-closed drills (live, same path; both persisted NOTHING)
+
+- "Zorble the frobnicator." (pc-drill-20260827-neg-1) -> rejected
+  `ambiguous_request:task_kind_unresolved:t1`, goals [].
+- "Audit the repository. Then summarize what you found in a report."
+  (pc-drill-20260827-neg-2) -> rejected
+  `ambiguous_request:goal_1_has_no_tasks`, goals [] (multi-step prose pin
+  holds live).
+
+## A4. Controls intact (live)
+
+- preston_status: posture operating; controls readable
+  (execution_enabled true, remote_runner true, owner_stop false, paused
+  false, hermes observe_only); needs_attention correctly surfaces the
+  pre-existing 6 open approvals + 1 blocked goal (drill created no new
+  approvals: approvals_required 0).
+- preston_get_evidence(goal) ok:true with the live job row.
+- Classification came from the policy engine (GREEN audit, no approval);
+  approval/cancel/follow-up/artifact ops present in the live 10-op catalog;
+  unauthenticated access 401.
+
+## A5. Verdict
+
+End-to-end staging validation **PASS** on all five owner criteria:
+accepted; exactly one task; valid persisted + dispatched job; safety/
+classification/approval/evidence/artifact surfaces intact; invalid and
+ambiguous requests fail closed. **STOPPED at the production approval
+gate** — production untouched; promotion of ce5e6c4 (or a master merge)
+to preston-os-prod requires explicit owner RED-gate authorization.
+
+Remaining watch item: drill job 11a6dcf4 completes in the background;
+read its result via preston_get_job. Drill residue: one GREEN staging
+goal/job (honest terminal state expected), two rejected intake rows'
+worth of nothing (rejections persist no rows).
