@@ -18,9 +18,13 @@ const GOAL_EDGES: Record<GoalStatus, readonly GoalStatus[]> = {
 };
 
 const JOB_EDGES: Record<GoalJobStatus, readonly GoalJobStatus[]> = {
-  pending: ['ready', 'assigned', 'in_progress', 'awaiting_approval', 'cancelled'],
-  ready: ['assigned', 'in_progress', 'awaiting_approval', 'cancelled'],
-  assigned: ['in_progress', 'ready', 'cancelled'],
+  // 'dead_lettered' from the pre-run statuses is the fast-track A2 edge: an
+  // unknown/unsupported-kind job is terminalized honestly BEFORE it ever
+  // runs (fail-closed classification), instead of consuming attempts on
+  // deterministic adapter refusals. Never used for retryable outcomes.
+  pending: ['ready', 'assigned', 'in_progress', 'awaiting_approval', 'cancelled', 'dead_lettered'],
+  ready: ['assigned', 'in_progress', 'awaiting_approval', 'cancelled', 'dead_lettered'],
+  assigned: ['in_progress', 'ready', 'cancelled', 'dead_lettered'],
   // 'ready' is the RESTART-RECOVERY edge (audit #4): an orphaned in_progress
   // job (worker crashed/stopped mid-run, no live lease) is requeued to ready to
   // re-run, without consuming a retry.

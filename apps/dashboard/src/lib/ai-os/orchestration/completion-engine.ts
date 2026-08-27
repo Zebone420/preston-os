@@ -7,6 +7,7 @@
 // it only decides; a separate adapter (simulation-only) performs bounded work.
 
 import type { GoalJob, GoalState } from './model';
+import { classifyFailure, isSupportedKind } from './outcomes';
 
 export type EngineAction =
   | { type: 'assign'; job_id: string; role: string }
@@ -80,10 +81,31 @@ export function step(state: GoalState, nowMs: number): EngineStep {
   for (const job of state.jobs) {
     if (terminal(job.status)) continue;
 
+    // Unknown/unsupported kind fails CLOSED as an immediate honest terminal
+    // state (Phase A2): it must never execute, never consume repeated
+    // attempts on deterministic adapter refusals, and must carry a readable
+    // reason. in_progress is exempt (a run already owns the row; its own
+    // terminal transition lands first).
+    if (!isSupportedKind(job.kind) && job.status !== 'in_progress') {
+      actions.push({
+        type: 'dead_letter', job_id: job.id,
+        reason: `unsupported_kind:${job.kind}`,
+      });
+      continue;
+    }
+
     switch (job.status) {
       case 'failed': {
-        // Repeated identical failure or retry budget exhausted => dead-letter.
-        if (job.attempts > g.budget.max_job_retries) {
+        // Retry-vs-terminal is decided by the CENTRAL outcome authority
+        // (Phase A1, orchestration/outcomes.ts) - never re-derived here or in
+        // any adapter. A TERMINAL classification dead-letters immediately
+        // (no attempts burned on a deterministic refusal); a RETRYABLE one
+        // retries within the unchanged bounded budget. The classification
+        // reason is persisted so evidence stays readable.
+        const cls = classifyFailure(job.failure_reason);
+        if (cls.outcome_class === 'TERMINAL') {
+          actions.push({ type: 'dead_letter', job_id: job.id, reason: cls.reason });
+        } else if (job.attempts > g.budget.max_job_retries) {
           actions.push({ type: 'dead_letter', job_id: job.id, reason: job.failure_reason ?? 'retry_exhausted' });
         } else {
           actions.push({ type: 'retry', job_id: job.id });

@@ -119,7 +119,12 @@ export function decomposeGoal(
     const role = assignRole(s.kind);
     // Bounded worktree simulation job: GREEN unless the objective names a
     // gated (RED/mobile) action, in which case it requires owner approval.
-    const policy = classifyJob(s.kind, s.objective || s.title);
+    // Fast-track A3: the TITLE is classified TOGETHER with the objective -
+    // the worker prompt includes both fields, so a gated action named only
+    // in a caller-supplied title must escalate exactly as one named in the
+    // objective (composer-path titles are objective substrings, so this
+    // only strengthens the direct-decomposition path).
+    const policy = classifyJob(s.kind, `${s.title} ${s.objective || ''}`);
     const risk_class = policy.risk_class;
     return {
       id: jobIdByLocal.get(localId)!,

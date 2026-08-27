@@ -348,6 +348,14 @@ export function composeRequest(raw: unknown): ComposeOutcome {
       }
 
       const kind = inferKind(item);
+      // Fast-track A2: a task whose kind cannot be resolved is rejected AT
+      // THE BOUNDARY with a readable reason, instead of composing an
+      // 'unknown'-kind job that the engine would immediately dead-letter
+      // (unknown kinds never execute - fail-closed at every layer).
+      if (kind === 'unknown') {
+        errors.push(`ambiguous_request:task_kind_unresolved:${localId}`);
+        return;
+      }
       // An explicitly requested role must be contract-capable of the work:
       // the audit role has no edit_repo, so it can never take an edit kind.
       if (requestedRole === 'audit' &&
