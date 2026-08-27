@@ -40,5 +40,40 @@ export function deploymentEnvironment(
 // environment's database (symmetric cross-env URL denylist; adversarial
 // review of 89f49a6, findings 1+2). Refs appear in public URLs; not
 // secrets. Compare case-insensitively - hostnames are case-insensitive.
+//
+// Instance configuration contract (Gate 2, 2026-08-27): these constants
+// are THIS instance's (Preston's) refs and remain the DEFAULTS, so every
+// existing deployment stays byte-identical. A cloned business instance
+// sets its OWN refs via ORCH_STAGING_PROJECT_REF /
+// ORCH_PRODUCTION_PROJECT_REF, and lists every ref it must NEVER touch in
+// ANY environment (for a clone: both Preston refs) via
+// ORCH_FOREIGN_PROJECT_REFS (comma-separated). The foreign denylist is a
+// strictly additive refusal - it can only ever REDUCE what a deployment
+// may point at.
 export const STAGING_PROJECT_REF = 'vcqtlmlaxxankxyezlul';
 export const PRODUCTION_PROJECT_REF = 'hiqsymsiwonmvrbbqhhe';
+
+const REF_RE = /^[a-z0-9]{16,24}$/;
+
+function refOf(env: EnvMap, name: string, fallback: string): string {
+  const v = String(env[name] ?? '').trim().toLowerCase();
+  return REF_RE.test(v) ? v : fallback;
+}
+
+export function instanceStagingRef(env: EnvMap = process.env as EnvMap): string {
+  return refOf(env, 'ORCH_STAGING_PROJECT_REF', STAGING_PROJECT_REF);
+}
+
+export function instanceProductionRef(env: EnvMap = process.env as EnvMap): string {
+  return refOf(env, 'ORCH_PRODUCTION_PROJECT_REF', PRODUCTION_PROJECT_REF);
+}
+
+// Refs this deployment must never point at in ANY environment (a clone
+// lists the origin instance's refs here). Malformed entries are dropped
+// rather than silently widening or narrowing anything else.
+export function foreignProjectRefs(env: EnvMap = process.env as EnvMap): string[] {
+  return String(env['ORCH_FOREIGN_PROJECT_REFS'] ?? '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => REF_RE.test(s));
+}

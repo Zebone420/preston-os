@@ -104,6 +104,48 @@ describe('dispatcher - runtime packaging entry (pure)', () => {
     expect(r.exitCode).toBe(EXIT.ok);
   });
 
+  it('CLONE ISOLATION: a foreign (origin-instance) ref is refused in EVERY environment', async () => {
+    // A cloned business lists the origin's refs in ORCH_FOREIGN_PROJECT_REFS;
+    // the gate then refuses them regardless of the environment label.
+    for (const runtimeEnv of ['staging', 'production']) {
+      for (const foreign of ['vcqtlmlaxxankxyezlul', 'hiqsymsiwonmvrbbqhhe']) {
+        const env = {
+          ...RUNTIME_ENV, SUPABASE_RUNTIME_ENV: runtimeEnv,
+          ORCH_STAGING_PROJECT_REF: 'northstarclonestag00',
+          ORCH_PRODUCTION_PROJECT_REF: 'northstarcloneprod00',
+          ORCH_FOREIGN_PROJECT_REFS: 'vcqtlmlaxxankxyezlul,hiqsymsiwonmvrbbqhhe',
+          SUPABASE_URL: `https://${foreign}.supabase.co`,
+        };
+        const r = await runDispatcher({ command: 'db-health', client: fakeClient({ hermes_mode: 'disabled' }), env, now: NOW, correlationId: 'c', log: noop });
+        expect(r.exitCode).toBe(EXIT.config);
+        expect(r.summary.error).toBe('foreign instance target refused');
+      }
+    }
+  });
+
+  it('CLONE ISOLATION: instance-ref overrides enforce the clone\'s OWN cross-env denylist', async () => {
+    const cloneEnv = {
+      ...RUNTIME_ENV,
+      ORCH_STAGING_PROJECT_REF: 'northstarclonestag00',
+      ORCH_PRODUCTION_PROJECT_REF: 'northstarcloneprod00',
+      ORCH_FOREIGN_PROJECT_REFS: 'vcqtlmlaxxankxyezlul,hiqsymsiwonmvrbbqhhe',
+    };
+    // Clone staging must refuse the clone's own production ref...
+    const r1 = await runDispatcher({ command: 'db-health', client: fakeClient({ hermes_mode: 'disabled' }), env: { ...cloneEnv, SUPABASE_URL: 'https://northstarcloneprod00.supabase.co' }, now: NOW, correlationId: 'c', log: noop });
+    expect(r1.exitCode).toBe(EXIT.config);
+    // ...and accept its own staging ref.
+    const r2 = await runDispatcher({ command: 'db-health', client: fakeClient({ hermes_mode: 'disabled' }), env: { ...cloneEnv, SUPABASE_URL: 'https://northstarclonestag00.supabase.co' }, now: NOW, correlationId: 'c', log: noop });
+    expect(r2.exitCode).toBe(EXIT.ok);
+  });
+
+  it('CLONE ISOLATION: a malformed instance-ref override falls back to the pinned default', async () => {
+    // Garbage in the override can never widen the gate: the Preston default
+    // still refuses the Preston production ref from staging.
+    const env = { ...RUNTIME_ENV, ORCH_PRODUCTION_PROJECT_REF: 'not a ref!', SUPABASE_URL: 'https://hiqsymsiwonmvrbbqhhe.supabase.co' };
+    const r = await runDispatcher({ command: 'db-health', client: fakeClient({ hermes_mode: 'disabled' }), env, now: NOW, correlationId: 'c', log: noop });
+    expect(r.exitCode).toBe(EXIT.config);
+  });
+
   it('db-health fails when the control plane returns zero readable rows (RLS denial)', async () => {
     const r = await runDispatcher({ command: 'db-health', client: fakeClient(null), env: RUNTIME_ENV, now: NOW, correlationId: 'c', log: noop });
     expect(r.exitCode).toBe(EXIT.error); // rows 0 => not healthy

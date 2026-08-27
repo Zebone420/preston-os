@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { redactSecrets } from '../lib/ai-os/memory';
 import {
   deploymentEnvironment, strictRuntimeEnvironment,
-  PRODUCTION_PROJECT_REF, STAGING_PROJECT_REF,
+  foreignProjectRefs, instanceProductionRef, instanceStagingRef,
 } from '../lib/ai-os/runtime-environment';
 import {
   workerHealth,
@@ -142,12 +142,21 @@ function stagingGate(
     return { exitCode: EXIT.config, summary: { error: 'not marked staging' } };
   }
   const url = String(env['SUPABASE_URL'] ?? '').toLowerCase();
+  // Foreign-instance denylist (Gate 2 instance contract): a deployment
+  // configured as a clone must NEVER touch the origin instance's projects
+  // in ANY environment. Strictly additive refusal; empty for Preston.
+  for (const foreign of foreignProjectRefs(env)) {
+    if (url.includes(foreign)) {
+      log({ level: 'error', command, correlationId, event: 'staging_gate', error: 'foreign instance target refused' });
+      return { exitCode: EXIT.config, summary: { error: 'foreign instance target refused' } };
+    }
+  }
   if (runtimeEnv === 'staging' &&
-      (/\bprod(uction)?\b/.test(url) || url.includes(PRODUCTION_PROJECT_REF))) {
+      (/\bprod(uction)?\b/.test(url) || url.includes(instanceProductionRef(env)))) {
     log({ level: 'error', command, correlationId, event: 'staging_gate', error: 'production target refused' });
     return { exitCode: EXIT.config, summary: { error: 'production target refused' } };
   }
-  if (runtimeEnv === 'production' && url.includes(STAGING_PROJECT_REF)) {
+  if (runtimeEnv === 'production' && url.includes(instanceStagingRef(env))) {
     log({ level: 'error', command, correlationId, event: 'staging_gate', error: 'staging target refused in production' });
     return { exitCode: EXIT.config, summary: { error: 'staging target refused' } };
   }

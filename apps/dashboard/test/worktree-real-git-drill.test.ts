@@ -43,7 +43,7 @@ describe.skipIf(!GIT)('PF1 real-git worktree drill', () => {
         ...env,
         GIT_AUTHOR_NAME: 'drill', GIT_AUTHOR_EMAIL: 'drill@test.local',
         GIT_COMMITTER_NAME: 'drill', GIT_COMMITTER_EMAIL: 'drill@test.local',
-      } as NodeJS.ProcessEnv,
+      } as unknown as NodeJS.ProcessEnv,
     });
 
   beforeAll(() => {
