@@ -22,6 +22,7 @@ import {
   CANONICAL_REPO_ENV,
   GIT_EXECUTABLE_ENV,
 } from '../src/os-runtime/real-executor';
+import { buildStatusArgs } from '../src/lib/ai-os/worktree-provision';
 import { EXECUTION_LEVEL_ENV } from '../src/lib/ai-os/execution-capability';
 import type { GoalJob } from '../src/lib/ai-os/orchestration/model';
 
@@ -342,6 +343,18 @@ async function runWiredExecutor(opts: {
   });
   return { res, db };
 }
+
+describe('worktree audit feeds artifacts real file paths', () => {
+  it('status runs with -uall so a new untracked directory cannot collapse to "dir/"', () => {
+    // Live staging finding 2026-08-27 (goal cee1f143): without -uall the
+    // touched list carried "apps/dashboard/docs/" and the artifact step
+    // rightly rejected the directory entry - the created file was never
+    // persisted. -uall yields per-file paths; allowlist enforcement is
+    // unchanged-or-stricter.
+    expect(buildStatusArgs('/wt')).toEqual(
+      ['-C', '/wt', 'status', '--porcelain', '-uall']);
+  });
+});
 
 describe('real-executor artifact wiring', () => {
   it('gate off: a completed real run carries NO artifact operations', async () => {

@@ -102,7 +102,15 @@ export function buildWorktreeAddArgs(
 }
 
 export function buildStatusArgs(worktreePath: string): string[] {
-  return ['-C', worktreePath, 'status', '--porcelain'];
+  // -uall enumerates every UNTRACKED FILE individually. Without it, git
+  // collapses a new untracked directory to a single "dir/" entry, which
+  // (a) hides the actual file names from the audit evidence and (b) starved
+  // artifact persistence of real file paths (live staging finding
+  // 2026-08-27, goal cee1f143: touched showed "apps/dashboard/docs/" and
+  // the artifact step rightly rejected the directory entry). Enforcement
+  // semantics are unchanged-or-stricter: per-file paths prefix-match the
+  // allowlist exactly as their parent directory did.
+  return ['-C', worktreePath, 'status', '--porcelain', '-uall'];
 }
 
 export function buildWorktreeRemoveArgs(
