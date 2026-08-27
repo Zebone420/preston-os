@@ -344,3 +344,92 @@ Staging evidence is COMPLETE. Still stopped at the production approval
 gate: no production deployment, modification, or master promotion has
 occurred. Owner actions next: push the report commits, then rule on the
 production RED gate.
+
+---
+
+# ADDENDUM 2: PRODUCTION PROMOTION — ALL PASS (2026-08-27, owner RED gate)
+
+Owner RED-gate authorization: promote ONLY the verified ChatGPT
+command-path repair and its evidence.
+
+## P1. Promotion workflow (non-force)
+
+- Pre-merge verification: `git diff master...feature/final-build-fast-track`
+  = exactly 7 files (composer.ts, preston-control schemas/openapi/server,
+  composer-bare-goal.test.ts, this report, the production-seal doc);
+  full source diff read line-by-line - only the approved repair. NO
+  migrations, NO env/credential files, NO security-policy or guard
+  changes, NO conflicts. Pre-merge suites: 116/116 (7 files).
+- Merge: `git merge --ff-only` master 5f15afa -> **60b212b** (clean
+  fast-forward, no merge commit). Owner pushed master; first push attempt
+  did not land (ls-remote still showed 5f15afa - caught and stopped until
+  verified), second confirmed: origin/master = 60b212b.
+- **Production deployment: 4Aup3ibyxG59uxEk8zWEow87qyoN** - Vercel
+  auto-built master in project preston-os-prod, Ready 31s, Environment
+  Production (Current), source master @ 60b212b, alias
+  **preston-os-prod.vercel.app**.
+- **Rollback point**: prior Production deployment at master 5f15afa
+  (Vercel Instant Rollback available); git anchor 5f15afa (golden
+  baseline; deeper anchor b3c0003 per production seal).
+
+## P2. Post-deployment verification
+
+- /api/health -> 200 `{"ok":true,"mode":"connected"}`.
+- /api/control/status without token -> HTTP 401 fail-closed.
+- OpenAPI: exactly 10 operations (status, submit, get_goal, follow_up,
+  cancel, get_job, list_approvals, decide_approval, get_evidence,
+  get_artifact); origin URLs are the prod alias; zero staging references;
+  new grammar description live.
+- Connector: "Preston Control MCP - Prod" Reconnect -> "now connected"
+  (OAuth handshake against the new deployment; connection
+  info@preston.nyc). The current ChatGPT UI exposes no separate
+  catalogue-Refresh control (the 2026-08-26 Information->Refresh flow);
+  the tool SET is unchanged in this promotion (10 ops, same schemas -
+  only the submit_goal description text changed), and the live drill in a
+  NEW chat confirmed correct behavior end-to-end.
+
+## P3. Production drill (NEW chat, connector "Preston Control MCP - Prod")
+
+preston_submit_goal request="Audit the repository."
+request_id=pc-prod-drill-20260827-bare-1 -> **accepted**,
+approvals_required 0, warnings ["task_derived_from_goal_objective"]:
+
+- goal_id **9edcc875-7b9c-4259-b949-853e3005a506**
+  (correlation cmp-pc-prod-drill-20260827-b-g1-fb77f21f78f4)
+- exactly ONE job **eeaf3d37-02fc-416b-a206-1ef1336cc094**
+  "Audit the repository", requires_approval false.
+
+preston_get_job readbacks: kind **audit**, risk **GREEN**, assigned_role
+**claude**; created 21:46:23Z status pending; **leased by the prod
+runtime at 21:47:11Z** (48s, one tick) -> in_progress, run.active true,
+lease to 21:57:11Z. Persisted, valid, dispatched.
+
+## P4. Fail-closed on production (both persisted NOTHING)
+
+- "Zorble the frobnicator." (pc-prod-drill-20260827-neg-1) -> rejected
+  `ambiguous_request:task_kind_unresolved:t1`, goals [].
+- "Audit the repository. Then summarize what you found in a report."
+  (pc-prod-drill-20260827-neg-2) -> rejected
+  `ambiguous_request:goal_1_has_no_tasks`, goals [].
+
+## P5. Remaining notes
+
+- Drill job eeaf3d37 completes in the background on the prod host; its
+  result report/evidence are readable via preston_get_job (same pattern
+  the staging drill proved end-to-end, §A6).
+- The prod HOST runtime (/srv/preston-os) remains pinned at the sealed
+  5f15afa. The ChatGPT MCP path runs entirely in the Vercel app (fixed);
+  only the host's REMOTE-INTAKE consumption path (0011 gateway rows)
+  still parses with the pre-fix composer until an owner-run host repin to
+  60b212b - optional follow-up, not part of this gate.
+- Codex outcome-classification (F1) and worktree provisioning remain
+  owner-directed backlog, untouched per gate instruction.
+
+## P6. Verdict
+
+Production promotion **COMPLETE AND VERIFIED**: master 60b212b, deployment
+4Aup3ibyxG59uxEk8zWEow87qyoN live on preston-os-prod.vercel.app, health
+and fail-closed auth verified, 10-op catalogue intact, connector
+reconnected, live drill accepted with exactly one task and one valid
+dispatched job, invalid/ambiguous requests reject with zero persistence.
+Rollback = Instant Rollback to the 5f15afa deployment.
