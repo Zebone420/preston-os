@@ -327,12 +327,15 @@ export async function buildRealExecutor(
           : null;
       }
 
-      // POST-RUN PATH ENFORCEMENT: enumerate every touched path; any edit
-      // outside the allowlist fails the job regardless of agent exit code.
+      // POST-RUN PATH ENFORCEMENT: enumerate every touched path - both
+      // uncommitted (status) and committed relative to the authoritative
+      // base (diff, PF1) - any edit outside the allowlist fails the job
+      // regardless of agent exit code.
       const audit = await auditWorktree({
         gitExecutable: gitExe,
         worktreePath: prov.target.worktreePath,
         allowedPaths: lock.allowed_paths,
+        baseCommit,
         runner: gitRunner,
       });
       // Bounded, already-sanitized child output excerpts travel with the
@@ -375,7 +378,7 @@ export async function buildRealExecutor(
           outcome: 'failed', executed: true,
           evidence_refs: [
             ...result.evidence_refs,
-            auditRef(job.id, runId, 'status_unreadable'),
+            auditRef(job.id, runId, audit.reason ?? 'status_unreadable'),
             providerRef(job.id, runId, role),
           ],
           failure_reason: 'worktree_audit_unreadable',

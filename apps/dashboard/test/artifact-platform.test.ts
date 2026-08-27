@@ -135,7 +135,10 @@ describe('artifact path validation (fail-closed)', () => {
   });
   it('derives deterministic ids from the object path', () => {
     const p = artifactObjectPath('g', 'j', 'r', 'docs/a.md');
-    expect(p).toBe('goal/g/job/j/run/r/docs__a.md');
+    // PF3: the key embeds an 8-hex tag of the ORIGINAL relative path so
+    // distinct sources can never flatten onto one destination.
+    expect(p).toMatch(/^goal\/g\/job\/j\/run\/r\/[0-9a-f]{8}-docs__a\.md$/);
+    expect(artifactObjectPath('g', 'j', 'r', 'docs/a.md')).toBe(p); // stable
     expect(deriveArtifactId(p)).toBe(deriveArtifactId(p));
     expect(deriveArtifactId(p)).toMatch(/^art-[0-9a-f]{32}$/);
   });
@@ -165,7 +168,8 @@ describe('persistArtifacts', () => {
     expect(res.condition).toBe('ok');
     expect(res.artifact_refs.length).toBe(1);
     expect(res.artifact_refs[0]).toMatch(/^artifact:art-[0-9a-f]{32}$/);
-    expect(uploads[0].path).toBe('goal/goal-art-1/job/job-art-1/run/run-art-1/docs__a.md');
+    expect(uploads[0].path).toMatch(
+      /^goal\/goal-art-1\/job\/job-art-1\/run\/run-art-1\/[0-9a-f]{8}-docs__a\.md$/);
     const row = db.rowsOf('artifacts')[0];
     expect(String(row.sha256)).toMatch(/^[0-9a-f]{64}$/);
     expect(row.size_bytes).toBe(11);

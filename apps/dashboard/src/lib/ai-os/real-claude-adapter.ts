@@ -530,9 +530,18 @@ export function buildLevel1Prompt(i: {
     '- No modifying safety hooks, scanners, approvals, or this contract.',
     '- No enabling services, timers, or workflows.',
     '== REQUIRED ==',
-    '- Run the repository tests and scanners relevant to your change.',
-    '- Report files changed and test results as plain evidence.',
-    '- At most one LOCAL commit; never push it.',
+    // Prod audit finding PF2 (2026-08-27): the prompt used to require tests,
+    // scanners, and a local commit that the fixed FILE-TOOLS-ONLY contract
+    // cannot perform - workers then either failed the impossible steps or
+    // reported around them. The prompt now states the real capability bound
+    // and demands honest limitations instead.
+    '- You have FILE TOOLS ONLY (read, search, edit, write). You have no',
+    '  shell, no git, and no way to run commands, tests, or scanners.',
+    '- Never commit; leave every change uncommitted in the working tree.',
+    '  The runtime audits and collects your changes after you finish.',
+    '- Do not claim any test, scanner, build, or command result you could',
+    '  not actually run; list unrun validation explicitly in limitations.',
+    '- Report files changed and your reasoning as plain evidence.',
     structuredResultPromptClause(),
     '== STOP CONDITIONS ==',
     '- Stop and report if any required check fails, if the task would',

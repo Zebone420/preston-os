@@ -46,6 +46,25 @@ const EXT_TABLE: Readonly<Record<string, { mime: string; type: string; text: boo
   '.patch': { mime: 'text/plain', type: 'diff', text: true },
   '.pdf': { mime: 'application/pdf', type: 'document', text: false },
   '.png': { mime: 'image/png', type: 'image', text: false },
+  // Prod audit finding PF4 (2026-08-27): a completed CODE job's edits exist
+  // ONLY in its worktree, which is force-removed after the run - and every
+  // source extension was refused here, so the entire work product was
+  // silently dropped with condition 'ok'. Deliberate widening (this is the
+  // change review the header demands): the source types the platform's own
+  // code/test/migration jobs produce, all TEXT (secret-screened) and served
+  // as text/plain so a retrieved artifact can never execute in a browser.
+  // Shell/PowerShell scripts stay refused (pinned in artifact-platform
+  // tests): workers have no reason to produce them and they are the
+  // platform's own guard surface.
+  '.ts': { mime: 'text/plain', type: 'code', text: true },
+  '.tsx': { mime: 'text/plain', type: 'code', text: true },
+  '.js': { mime: 'text/plain', type: 'code', text: true },
+  '.mjs': { mime: 'text/plain', type: 'code', text: true },
+  '.cjs': { mime: 'text/plain', type: 'code', text: true },
+  '.sql': { mime: 'text/plain', type: 'code', text: true },
+  '.yml': { mime: 'text/plain', type: 'code', text: true },
+  '.yaml': { mime: 'text/plain', type: 'code', text: true },
+  '.css': { mime: 'text/plain', type: 'code', text: true },
 };
 
 const SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/;
@@ -80,8 +99,19 @@ export function artifactObjectPath(
 ): string {
   // Flatten the relative path into a single safe filename segment so the
   // object key depth is fixed (goal/<g>/job/<j>/run/<r>/<file>).
+  //
+  // Prod audit finding PF3 (2026-08-27): bare '__' flattening COLLIDED for
+  // distinct sources ('a/b.md' and a literal file 'a__b.md' both flattened
+  // to 'a__b.md'), so the second upsert overwrote the first object while
+  // its metadata row deduplicated as a replay - the stored sha256 then
+  // described the WRONG bytes. The object key now embeds an 8-hex sha256
+  // tag of the ORIGINAL relative path: distinct sources get distinct keys
+  // deterministically, and an idempotent replay of the same source still
+  // converges on the same key. persistArtifacts additionally fails closed
+  // on any residual in-pass destination conflict.
   const flat = rel.replace(/\//g, '__');
-  return `goal/${goalId}/job/${jobId}/run/${runId}/${flat}`;
+  const tag = createHash('sha256').update(rel, 'utf8').digest('hex').slice(0, 8);
+  return `goal/${goalId}/job/${jobId}/run/${runId}/${tag}-${flat}`;
 }
 
 export function deriveArtifactId(objectPath: string): string {
@@ -213,6 +243,10 @@ export async function persistArtifacts(
     }
   }
 
+  // Belt on top of the hash-tagged object path (PF3): two candidates in the
+  // SAME pass must never target one destination - the second is refused,
+  // never uploaded over the first.
+  const usedObjectPaths = new Set<string>();
   for (const rel of candidates) {
     const val = validateArtifactPath(rel);
     if (!val.ok) { res.rejected.push({ path: rel, reason: val.reason }); continue; }
@@ -235,6 +269,11 @@ export async function persistArtifacts(
     }
     const objectPath = artifactObjectPath(
       input.goal_id, input.job_id, input.run_id, rel);
+    if (usedObjectPaths.has(objectPath)) {
+      res.rejected.push({ path: rel, reason: 'object_path_conflict' });
+      continue;
+    }
+    usedObjectPaths.add(objectPath);
     const artifactId = deriveArtifactId(objectPath);
     const sha256 = createHash('sha256').update(bytes).digest('hex');
     const up = await deps.storage.upload(objectPath, bytes, meta.mime);

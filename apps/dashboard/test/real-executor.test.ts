@@ -100,16 +100,24 @@ const execInput = (j: GoalJob = job()) => ({
   },
 });
 
-// Recording git runner: worktree add / status / remove.
-function makeGitFake(statusStdout: string, opts: { addFails?: boolean; statusFails?: boolean } = {}) {
+// Recording git runner: worktree add / status / diff (PF1 committed-change
+// surface) / remove.
+function makeGitFake(statusStdout: string, opts: {
+  addFails?: boolean; statusFails?: boolean;
+  diffStdout?: string; diffFails?: boolean;
+} = {}) {
   const calls: string[][] = [];
   const runner = async (s: ProvisionSpec): Promise<ProvisionOutcome> => {
     calls.push(s.args);
     const op = s.args.includes('add') ? 'add'
-      : s.args.includes('status') ? 'status' : 'remove';
+      : s.args.includes('status') ? 'status'
+      : s.args.includes('diff') ? 'diff' : 'remove';
     if (op === 'add' && opts.addFails) return { status: 'ok', exit_code: 128, stdout: '', stderr: 'exists' };
     if (op === 'status' && opts.statusFails) return { status: 'error', exit_code: 1, stdout: '', stderr: '' };
-    return { status: 'ok', exit_code: 0, stdout: op === 'status' ? statusStdout : '', stderr: '' };
+    if (op === 'diff' && opts.diffFails) return { status: 'ok', exit_code: 128, stdout: '', stderr: 'fatal: bad object' };
+    const stdout = op === 'status' ? statusStdout
+      : op === 'diff' ? (opts.diffStdout ?? '') : '';
+    return { status: 'ok', exit_code: 0, stdout, stderr: '' };
   };
   return { calls, runner };
 }
@@ -212,9 +220,11 @@ describe('buildRealExecutor - the real bounded run', () => {
     expect(r!.executed).toBe(true);
     expect(r!.evidence_refs.join()).toContain('executed:true');
     expect(r!.evidence_refs.join()).toContain('paths_ok');
-    // worktree lifecycle: add -> status -> remove, confined shapes
-    const ops = git.calls.map((a) => a.includes('add') ? 'add' : a.includes('status') ? 'status' : 'remove');
-    expect(ops).toEqual(['add', 'status', 'remove']);
+    // worktree lifecycle: add -> status -> diff (PF1) -> remove
+    const ops = git.calls.map((a) => a.includes('add') ? 'add'
+      : a.includes('status') ? 'status'
+      : a.includes('diff') ? 'diff' : 'remove');
+    expect(ops).toEqual(['add', 'status', 'diff', 'remove']);
     const addArgs = git.calls[0];
     expect(addArgs.join(' ')).toContain('/srv/worktrees/wt-job-real-0001');
     expect(addArgs.join(' ')).toContain(BASE);
@@ -260,6 +270,55 @@ describe('buildRealExecutor - the real bounded run', () => {
     const r = await exec!(execInput());
     expect(r!.outcome).toBe('failed');
     expect(r!.failure_reason).toBe('worktree_audit_unreadable');
+    expect(git.calls.some((a) => a.includes('remove'))).toBe(true);
+  });
+
+  it('PF1 REGRESSION: an out-of-allowlist edit hidden in a LOCAL COMMIT is a path_violation', async () => {
+    // Reproduces the prod audit finding: the working tree is CLEAN (status
+    // empty - the agent committed), but the base-vs-HEAD diff reveals an
+    // edit outside the allowlist. Pre-fix this passed vacuously.
+    const db = makeFakeDb();
+    const git = makeGitFake('', {
+      diffStdout: 'packages/guards/src/index.ts\n',
+    });
+    const exec = await buildRealExecutor({
+      client: db.client, env: fullEnv, gitRunner: git.runner,
+      claudeRunner: claudeOk, ...seams,
+    });
+    const r = await exec!(execInput());
+    expect(r!.outcome).toBe('failed');
+    expect(r!.failure_reason).toBe('path_violation');
+    expect(git.calls.some((a) => a.includes('remove'))).toBe(true);
+  });
+
+  it('PF1: committed IN-allowlist changes join files_changed (union, deduped)', async () => {
+    const db = makeFakeDb();
+    const git = makeGitFake(' M apps/dashboard/uncommitted.md\n', {
+      diffStdout: 'apps/dashboard/committed.md\napps/dashboard/uncommitted.md\n',
+    });
+    const exec = await buildRealExecutor({
+      client: db.client, env: fullEnv, gitRunner: git.runner,
+      claudeRunner: claudeOk, ...seams,
+    });
+    const r = await exec!(execInput());
+    expect(r!.outcome).toBe('completed');
+    const files = (r!.report as { files_changed: string[] }).files_changed;
+    expect(files.sort()).toEqual([
+      'apps/dashboard/committed.md', 'apps/dashboard/uncommitted.md',
+    ]);
+  });
+
+  it('PF1 FAIL-CLOSED: an uncomparable base cannot prove confinement => failed', async () => {
+    const db = makeFakeDb();
+    const git = makeGitFake('', { diffFails: true });
+    const exec = await buildRealExecutor({
+      client: db.client, env: fullEnv, gitRunner: git.runner,
+      claudeRunner: claudeOk, ...seams,
+    });
+    const r = await exec!(execInput());
+    expect(r!.outcome).toBe('failed');
+    expect(r!.failure_reason).toBe('worktree_audit_unreadable');
+    expect(r!.evidence_refs.join()).toContain('base_unverifiable');
     expect(git.calls.some((a) => a.includes('remove'))).toBe(true);
   });
 

@@ -60,6 +60,14 @@ const TERMINAL_REAL_REQUIRED = new Set([
   'kind_not_eligible',
   'risk_exceeds_allowed',
   'environment_not_staging',
+  // The Codex adapter's spelling of the SAME deterministic deployment-
+  // environment pin (real-codex-adapter.ts), and the spelling used by the
+  // approval/capability environment pins (orchestration/store.ts,
+  // capabilities/executor.ts). Live prod audit finding (2026-08-27, job
+  // 11a6dcf4): without this entry the refusal fell through to
+  // retryable:unrecognized and burned the full retry budget on an
+  // identical re-check.
+  'environment_mismatch',
   'simulation_pin_unexpected',
   'owner_identity_missing',
   'execution_clock_invalid',
