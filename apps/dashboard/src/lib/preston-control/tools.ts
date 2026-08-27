@@ -524,7 +524,11 @@ export async function readJobResultReports(ctx: ToolContext, jobId: string) {
         structured: (() => {
           const s = p['structured'];
           if (s == null || typeof s !== 'object' || Array.isArray(s)) return null;
-          return looksSecret(JSON.stringify(s)) ? null : s;
+          // Value-SHAPE screen only (TOKEN_SHAPES): the block's string fields
+          // were span-scrubbed at record time, and a keyword screen
+          // (looksSecret) nulled honest blocks that merely mention words like
+          // "secret_scan" (live staging finding, first fast-track drill).
+          return TOKEN_SHAPES.test(JSON.stringify(s)) ? null : s;
         })(),
         structured_error: p['structured_error'] == null ? null : safeText(p['structured_error'], 120),
         provider_model: p['provider_model'] == null ? null : safeText(p['provider_model'], 80),

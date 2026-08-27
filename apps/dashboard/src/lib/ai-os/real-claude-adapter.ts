@@ -542,14 +542,40 @@ export function buildLevel1Prompt(i: {
   ].join('\n');
 }
 
+// File tools the worker may use WITHOUT interactive prompting when the owner
+// sets ORCH_CLAUDE_EDIT_TOOLS=true on the host. FIXED list: file operations
+// only - deliberately NO Bash/shell, NO web/network tools, NO subagents - so
+// the worker can produce actual file changes inside its isolated worktree
+// (the post-run auditWorktree path-allowlist enforcement and worktree
+// disposal were built for exactly this) while command execution stays denied
+// by the CLI's own permission layer as before.
+//
+// Live staging finding (first fast-track drill, 2026-08-27): without this,
+// the non-interactive CLI denies EVERY write, so documentation/code jobs
+// could only analyze and report - files_changed was [] on every run B5/B6
+// ever recorded. The env gate keeps the pre-existing behavior until a host
+// explicitly opts in.
+export const CLAUDE_EDIT_TOOLS_ENV = 'ORCH_CLAUDE_EDIT_TOOLS';
+export const CLAUDE_EDIT_TOOLS_ALLOWLIST =
+  'Read,Glob,Grep,LS,Edit,Write,MultiEdit';
+
 // FIXED argument contract: '-p <prompt> --output-format json' plus an
-// OPTIONAL routing-table model ('--model <name>'). The prompt is ONE element
-// and always starts with the fixed header (never '-'), so task text can
-// neither add arguments nor be parsed as a flag; the model value is validated
-// by the routing table's conservative name shape before it can reach argv.
-export function buildClaudeArgs(prompt: string, model?: string | null): string[] {
+// OPTIONAL routing-table model ('--model <name>') and the OPTIONAL fixed
+// file-tools allowlist. The prompt is ONE element and always starts with the
+// fixed header (never '-'), so task text can neither add arguments nor be
+// parsed as a flag; the model value is validated by the routing table's
+// conservative name shape before it can reach argv; the tools list is a
+// constant, never derived from any input.
+export function buildClaudeArgs(
+  prompt: string,
+  model?: string | null,
+  editTools?: boolean,
+): string[] {
   const base = ['-p', prompt, '--output-format', 'json'];
-  return model ? [...base, '--model', model] : base;
+  const withModel = model ? [...base, '--model', model] : base;
+  return editTools
+    ? [...withModel, '--allowedTools', CLAUDE_EDIT_TOOLS_ALLOWLIST]
+    : withModel;
 }
 
 // --- bounded process invocation (requirement 3) ---------------------------
@@ -896,9 +922,10 @@ export async function runRealClaudeJob(
   //    selection (Phase E; null => provider CLI default, prior behavior).
   const routed = routeModel(i.job.kind, i.env);
   const prompt = buildLevel1Prompt({ job: i.job, config: probe.config });
+  const editTools = i.env[CLAUDE_EDIT_TOOLS_ENV] === 'true';
   const spec: ProcessSpec = {
     executable: probe.config.executable,
-    args: buildClaudeArgs(prompt, routed.model),
+    args: buildClaudeArgs(prompt, routed.model, editTools),
     cwd: confined.cwd,
     timeout_ms: clampTimeoutMs(i.timeoutMs),
     max_output_bytes: REAL_CLAUDE_MAX_OUTPUT_BYTES,

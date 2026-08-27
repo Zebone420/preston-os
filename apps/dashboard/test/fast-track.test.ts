@@ -350,6 +350,13 @@ describe('E. explicit routing table', () => {
     expect(buildCodexArgs('P')).toEqual(['exec', '--json', 'P']);
     expect(buildCodexArgs('P', 'm-2')).toEqual(['exec', '--json', '--model', 'm-2', 'P']);
   });
+
+  it('the edit-tools gate appends ONLY the fixed file-tools allowlist (no shell, no network)', () => {
+    const args = buildClaudeArgs('P', null, true);
+    expect(args).toEqual(['-p', 'P', '--output-format', 'json',
+      '--allowedTools', 'Read,Glob,Grep,LS,Edit,Write,MultiEdit']);
+    expect(args.join(',')).not.toMatch(/Bash|WebFetch|WebSearch|Task/);
+  });
 });
 
 // --- D1: bounded parallel run execution -------------------------------------
