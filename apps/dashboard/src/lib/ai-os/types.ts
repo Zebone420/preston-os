@@ -138,7 +138,13 @@ export type EventType =
   | 'GoalLinked'
   // Fast-track Phase H: durable dedup ledger row for an owner attention
   // notification (the insert winning the PK race authorizes the single send).
-  | 'OwnerNotificationRecorded';
+  | 'OwnerNotificationRecorded'
+  // Power-station foundation: capability side-effect lifecycle history
+  // (append-only trail of every ledger disposition, per attempt).
+  | 'SideEffectRecorded'
+  // Power-station foundation: durable artifact persisted (or the explicit
+  // artifact_unrecorded condition when persistence failed after real work).
+  | 'ArtifactRecorded';
 
 export interface OsEvent {
   id: string;

@@ -1,0 +1,15 @@
+-- ============================================================================
+-- ROLLBACK 0026 (side-effect ledger) - OWNER-RUN ONLY.
+-- Exact, bounded. Named .sql.txt per RED-boundary scanner convention.
+-- Safe ONLY while no side-effect capability is activated (the table would
+-- then hold live idempotency evidence; removing it could allow a duplicate
+-- external action on a later re-activation). Verify first:
+--   select count(*) from public.side_effects;   -- expect 0 (or drill rows)
+-- ============================================================================
+drop policy if exists side_effects_owner_runtime on public.side_effects;
+drop policy if exists side_effects_owner_runtime_ins on public.side_effects;
+drop policy if exists side_effects_owner_runtime_upd on public.side_effects;
+drop index if exists public.uq_side_effects_idempotency_key;
+drop index if exists public.idx_side_effects_status;
+drop index if exists public.idx_side_effects_job;
+drop table if exists public.side_effects;
