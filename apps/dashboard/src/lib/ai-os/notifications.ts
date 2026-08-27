@@ -37,7 +37,8 @@ export type NotifySender = (
 export const MAX_NOTIFY_PER_TICK = 5;
 
 export interface AttentionEvent {
-  kind: 'approval_required' | 'job_dead_lettered' | 'goal_failed';
+  kind: 'approval_required' | 'job_dead_lettered' | 'goal_failed'
+    | 'artifact_unrecorded';
   entity_id: string; // approval id / job id / goal id
   text: string; // bounded, identifier + reason-code only
 }
@@ -65,9 +66,13 @@ async function collectAttention(
 ): Promise<AttentionEvent[]> {
   const out: AttentionEvent[] = [];
   try {
+    // orchestration_approvals keys on approval_id and has NO id column
+    // (0010; store.ts insertRow note) - selecting 'id' made PostgREST
+    // reject the whole read, so approval notifications could NEVER fire
+    // (latent defect found in the power-station baseline audit, 2026-08-27).
     const ap = await client
       .from(ORCH_TABLES.approvals)
-      .select('id, action, risk_class, expires_at')
+      .select('approval_id, action, risk_class, expires_at')
       .eq('status', 'pending')
       .order('created_at', { ascending: false })
       .limit(10);
@@ -75,9 +80,9 @@ async function collectAttention(
     for (const r of (ap.data ?? []) as Array<Record<string, unknown>>) {
       out.push({
         kind: 'approval_required',
-        entity_id: String(r.id ?? ''),
+        entity_id: String(r.approval_id ?? ''),
         text: `Preston: approval required (${bounded(r.risk_class, 8)}) ` +
-          `${bounded(r.id, 40)} - ${bounded(r.action, 120)}. ` +
+          `${bounded(r.approval_id, 40)} - ${bounded(r.action, 120)}. ` +
           `Expires ${bounded(r.expires_at, 30)}. Decide in Preston Control.`,
       });
     }
@@ -117,6 +122,30 @@ async function collectAttention(
       });
     }
   } catch { errors.push('failed_goals_unreadable'); }
+  try {
+    // Power-station section 6: an artifact_unrecorded condition (real work
+    // done, persistence failed) must reach the owner - never silent loss.
+    // Bounded read of recent ArtifactRecorded events; the payload condition
+    // filters client-side (os_events has no jsonb index; window is tiny).
+    const ar = await client
+      .from('os_events')
+      .select('id, payload, created_at')
+      .eq('type', 'ArtifactRecorded')
+      .order('created_at', { ascending: false })
+      .limit(10);
+    if (ar.error) errors.push('artifact_events_unreadable');
+    for (const r of (ar.data ?? []) as Array<Record<string, unknown>>) {
+      const p = (r.payload ?? {}) as Record<string, unknown>;
+      if (String(p.condition) !== 'artifact_unrecorded') continue;
+      out.push({
+        kind: 'artifact_unrecorded',
+        entity_id: String(r.id ?? ''),
+        text: `Preston: artifact UNRECORDED for job ${bounded(p.job_id, 40)} ` +
+          `(goal ${bounded(p.goal_id, 40)}): work succeeded but ` +
+          `persistence failed. See evidence in Preston Control.`,
+      });
+    }
+  } catch { errors.push('artifact_events_unreadable'); }
   return out.filter((e) => e.entity_id);
 }
 
