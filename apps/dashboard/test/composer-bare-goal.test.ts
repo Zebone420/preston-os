@@ -30,10 +30,13 @@ describe('bare single-sentence goal derives exactly one task', () => {
     expect(p.warnings).toContain('task_derived_from_goal_objective');
   });
 
-  it('repair request composes one repair task', () => {
+  it('fix request composes one CODE task (owner-approved 2026-08-28 remap)', () => {
+    // Fix/repair verbs previously minted kind 'repair', which the Level-1
+    // real adapters exclude by design - the live kind_not_eligible
+    // dead-letter path. Repository fix work is code work.
     const p = okOf(composeRequest('Fix the goal composer.'));
     expect(p.goals[0].tasks).toHaveLength(1);
-    expect(p.goals[0].tasks[0].kind).toBe('repair');
+    expect(p.goals[0].tasks[0].kind).toBe('code');
   });
 
   it('implementation request composes one code task', () => {
