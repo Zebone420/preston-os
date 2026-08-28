@@ -182,9 +182,40 @@ fail-closed (system_controls seeded halted; classification gate row 9).
   pushed.
 - Rollback point: branch base `6ea49a2` (sealed master lineage).
 
+## Phase 4 — Marker-scoped teardown (EXECUTED; verdict was PASS)
+
+Each target was resolved to its exact name + marker before deletion; all
+carried the `northstar-clone-proof-20260827` marker. Deletion order and
+receipts:
+
+| Order | Resource | Identifier | Confirmation | Result |
+|---|---|---|---|---|
+| 1 | Vercel project | `northstar-clone-proof-20260827` (+ alias, deployment `dpl_3rEme19hxFHafqukTK8neYtrKTvK`) | typed project name + "delete my project" | DELETED (redirect `?projectDeleted=…`; alias → 404) |
+| 2 | Supabase project A | `northstar-clone-proof-20260827-a` / `tjndmioqwzdolqjtxjvh` (incl. OAuth client `5e9f0019…` + storage bucket/objects) | typed project name | DELETED |
+| 3 | Supabase project B | `northstar-clone-proof-20260827-b` / `orzjfkqgyevxaezldbro` | typed project name | DELETED |
+| 4 | Supabase org | `northstar-clone-proof-20260827` (slug `jzrhzweeuxtmxvfvyzwf`) — after both projects gone | typed org slug | DELETED |
+
+The OAuth client and storage objects were removed as part of project A's
+deletion (both lived inside that project); no separate step was needed.
+
+### Post-teardown verification
+
+- `northstar-clone-proof-20260827.vercel.app/api/health` → **404** (gone).
+- `tjndmioqwzdolqjtxjvh.supabase.co` and `orzjfkqgyevxaezldbro.supabase.co`
+  → **unresolvable** (projects gone).
+- Supabase Organizations list shows ONLY `info@preston.nyc's Org`
+  (Pro Plan, 4 projects) — the disposable org is absent; Preston's org
+  untouched.
+- **Preston non-impact (after teardown)**: prod `/api/health` 200
+  connected; prod control no-token → **401**; prod **10 ops**;
+  staging `/api/health` 200 connected; `origin/master` = **`6ea49a2`**.
+
 ## Remaining risks / owner actions
 
-- The §C6 live Preston-token rejection test is intentionally not run
-  (prohibited); enforced structurally + identity-layer.
-- Signed-URL live cross-retrieval is structural (per-project signing).
-- Teardown of the disposable resources follows in Phase 4 (marker-scoped).
+- The §C6 live Preston-token rejection test was intentionally not run
+  (prohibited by the credential rule); enforced structurally + proven at
+  the identity layer.
+- Signed-URL live cross-retrieval is structural (per-project signing key).
+- All disposable resources have been deleted; nothing remains to tear down.
+- The evidence commits on `hardening/audit-repairs-clone-proof` remain
+  local and UNPUSHED (owner push gate).
