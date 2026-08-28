@@ -119,6 +119,11 @@ const EDIT_KINDS = new Set(['code', 'test', 'migration', 'repair', 'documentatio
 // How long a job's in_progress execution lease is valid before restart recovery
 // may requeue it. Bounds orphan recovery latency; the deployment's oneshot runs
 // well within this. (Simulation adapters complete within a single step.)
+// Owner-approved timeout work unit (2026-08-28): callers with a composed REAL
+// executor pass runLeaseMs = resolveRunLeaseMs(env) (the configured child
+// timeout + a fixed margin for provisioning/audit/persist), so a configured
+// timeout can never outlive the lease protecting its run. This constant is
+// the parameter default, preserving simulation-path behavior.
 const RUN_LEASE_MS = 10 * 60 * 1000;
 import type {
   AgentRole,
@@ -291,6 +296,11 @@ export async function driverStep(
   // Fast-track D1: bounded run-action parallelism (clamped 1..4). Default 1
   // preserves the sequential Phase 7/8 behavior exactly.
   maxParallel = 1,
+  // Execution-lease duration for jobs claimed THIS step. Callers composing a
+  // real executor derive it from the configured worker timeout
+  // (resolveRunLeaseMs) so the lease always outlives the child process; the
+  // default preserves the prior fixed behavior.
+  runLeaseMs = RUN_LEASE_MS,
 ): Promise<DriverStepResult> {
   // Fail closed on a bad execution clock at the boundary (audit MINOR): a
   // non-finite nowMs would otherwise throw at new Date(nowMs).toISOString().
@@ -545,7 +555,7 @@ export async function driverStep(
         // RESULT ownership on the single job row - decoupled, no cross-table
         // TOCTOU. A lost claim (another run took it) skips; finally releases.
         const runId = `${job.id}:${newRunId()}`; // globally unique per claim
-        const runLeaseIso = new Date(nowMs + RUN_LEASE_MS).toISOString();
+        const runLeaseIso = new Date(nowMs + runLeaseMs).toISOString();
         const mark = await transitionJob(client, job.id, job.status, 'in_progress',
           { run_id: runId, run_lease_expires_at: runLeaseIso }, nowIso);
         if (!mark.ok) return none;
@@ -587,7 +597,7 @@ export async function driverStep(
                 base_commit: lockCtx?.base_commit ?? '',
                 branch: `wt/${job.id}`,
                 allowed_paths: lockCtx?.allowed_paths ?? [],
-                expires_at: new Date(nowMs + RUN_LEASE_MS).toISOString(),
+                expires_at: new Date(nowMs + runLeaseMs).toISOString(),
               },
             });
           } catch (e) {
@@ -816,6 +826,7 @@ export async function driveGoal(
   newRunId: () => string = () => randomUUID(),
   executeReal?: RealJobExecutor,
   maxParallel = 1,
+  runLeaseMs = RUN_LEASE_MS, // see driverStep: derived from the worker timeout
 ): Promise<{ cycles: number; halted: boolean; reason: string; unlockRefusals?: Array<{ job_id: string; reason: string }> }> {
   let cycles = 0;
   let lastReason = 'noop';
@@ -827,7 +838,7 @@ export async function driveGoal(
     eventGap && !reason.includes('result_event_unrecorded')
       ? `${reason}:result_event_unrecorded` : reason;
   while (cycles++ < Math.min(maxCycles, 5000)) {
-    const r = await driverStep(client, goalId, now(), depends, lockCtx, newRunId, executeReal, maxParallel);
+    const r = await driverStep(client, goalId, now(), depends, lockCtx, newRunId, executeReal, maxParallel, runLeaseMs);
     lastReason = r.reason;
     lastRefusals = r.unlockRefusals;
     if (r.reason.includes('result_event_unrecorded')) eventGap = true;

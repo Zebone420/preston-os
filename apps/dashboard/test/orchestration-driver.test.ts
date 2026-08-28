@@ -648,3 +648,86 @@ describe('terminal reflection from decomposed (starvation liveness fix)', () => 
     expect(r.reason).toBe('cancelled');
   });
 });
+
+// Owner-approved timeout work unit (2026-08-28): the run lease is now a
+// driveGoal/driverStep parameter derived (by the dispatcher) from the
+// configured worker timeout, so a configured timeout can never outlive the
+// lease protecting its run. These pins prove the stamp end-to-end and that
+// the default is byte-identical to the prior fixed 10-minute lease.
+describe('run lease duration parameter (timeout work unit)', () => {
+  const captureLeases = () => {
+    const seen: Array<{ leaseMs: number; lockMs: number }> = [];
+    const executeReal = async (input: {
+      job: { run_lease_expires_at: string | null };
+      nowMs: number;
+      lock: { expires_at: string };
+    }) => {
+      seen.push({
+        leaseMs: Date.parse(String(input.job.run_lease_expires_at)) - input.nowMs,
+        lockMs: Date.parse(input.lock.expires_at) - input.nowMs,
+      });
+      return null; // decline -> simulation completes the job as before
+    };
+    return { seen, executeReal };
+  };
+
+  it('default (param omitted): the stamped lease is the prior 10 minutes', async () => {
+    const db = makeFakeDb();
+    const depends = await seedGoal(db);
+    const cap = captureLeases();
+    let t = Date.parse(NOW);
+    const r = await driveGoal(db.client, 'goal-00000001', () => (t += 1000), 100,
+      depends, editLockCtx, undefined,
+      cap.executeReal as unknown as Parameters<typeof driveGoal>[7]);
+    expect(r.reason).toBe('completed');
+    expect(cap.seen.length).toBeGreaterThan(0);
+    for (const s of cap.seen) {
+      expect(s.leaseMs).toBe(10 * 60 * 1000);
+      expect(s.lockMs).toBe(10 * 60 * 1000);
+    }
+  });
+
+  it('a passed runLeaseMs stamps BOTH the job lease and the executor lock expiry', async () => {
+    const db = makeFakeDb();
+    const depends = await seedGoal(db);
+    const cap = captureLeases();
+    const runLeaseMs = 50 * 60 * 1000; // e.g. 45-min timeout + 5-min margin
+    let t = Date.parse(NOW);
+    const r = await driveGoal(db.client, 'goal-00000001', () => (t += 1000), 100,
+      depends, editLockCtx, undefined,
+      cap.executeReal as unknown as Parameters<typeof driveGoal>[7],
+      1, runLeaseMs);
+    expect(r.reason).toBe('completed');
+    expect(cap.seen.length).toBeGreaterThan(0);
+    for (const s of cap.seen) {
+      expect(s.leaseMs).toBe(runLeaseMs);
+      expect(s.lockMs).toBe(runLeaseMs);
+    }
+  });
+
+  it('lease recovery still leaves a LIVE lease alone at the stamped horizon', async () => {
+    // A worker running at minute 49 of a 50-minute lease is untouchable:
+    // driverStep's recovery only requeues DEFINITELY-expired leases.
+    const db = makeFakeDb();
+    const depends = await seedGoal(db);
+    const runLeaseMs = 50 * 60 * 1000;
+    const t0 = Date.parse(NOW);
+    // Stamp an in_progress row with a live long lease (as a claim with the
+    // derived runLeaseMs would), then step at minute 49: the job must NOT
+    // be requeued (run_id preserved) - a still-running worker is safe.
+    const rows = db.rowsOf('goal_jobs');
+    const a = rows.find((r) => String(r.id) === 'job-0000-a')!;
+    Object.assign(a, {
+      status: 'in_progress', run_id: 'job-0000-a:live-run',
+      run_lease_expires_at: new Date(t0 + runLeaseMs).toISOString(),
+    });
+    await driverStep(db.client, 'goal-00000001', t0 + 49 * 60 * 1000, depends,
+      editLockCtx, undefined, undefined, 1, runLeaseMs);
+    expect(String(a.run_id)).toBe('job-0000-a:live-run'); // untouched
+    expect(String(a.status)).toBe('in_progress');
+    // Past the horizon the same row IS recovered (existing semantics).
+    await driverStep(db.client, 'goal-00000001', t0 + runLeaseMs + 1000, depends,
+      editLockCtx, undefined, undefined, 1, runLeaseMs);
+    expect(a.run_id ?? null).toBeNull(); // requeued for a fresh claim
+  });
+});

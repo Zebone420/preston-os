@@ -48,6 +48,11 @@ import { readSystemControlsChecked } from './store';
 import type { GoalJob } from './orchestration/model';
 import type { WorktreeLock } from './orchestration/worktree-lock';
 import {
+  REAL_TIMEOUT_ABS_MAX_MS,
+  REAL_TIMEOUT_DEFAULT_MS,
+  resolveRealTimeoutMs,
+} from './real-timeout';
+import {
   transitionJobOwned,
   verifyAuthoritativeApproval,
 } from './orchestration/store';
@@ -80,8 +85,12 @@ export const REAL_CLAUDE_EXECUTABLE_BASENAMES: ReadonlySet<string> =
 
 // Timeout bounds: same 15-minute ceiling as the Phase 3 runner envelope and
 // the claude agent contract (timeout_ms 900_000).
-export const REAL_CLAUDE_MAX_TIMEOUT_MS = 15 * 60 * 1000;
-export const REAL_CLAUDE_DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
+// Owner-approved timeout work unit (2026-08-28): the ceiling and default
+// are now the shared compiled bounds in real-timeout.ts, and production
+// callers resolve the effective timeout from the owner-set
+// ORCH_REAL_TIMEOUT_MS env knob (fail-closed; test seam unchanged).
+export const REAL_CLAUDE_MAX_TIMEOUT_MS = REAL_TIMEOUT_ABS_MAX_MS;
+export const REAL_CLAUDE_DEFAULT_TIMEOUT_MS = REAL_TIMEOUT_DEFAULT_MS;
 
 // Hard cap on captured stdout+stderr bytes; exceeding it kills the process
 // and fails the run (bounded evidence, no unbounded memory).
@@ -959,7 +968,10 @@ export async function runRealClaudeJob(
     executable: probe.config.executable,
     args: buildClaudeArgs(prompt, routed.model, editTools),
     cwd: confined.cwd,
-    timeout_ms: clampTimeoutMs(i.timeoutMs),
+    // Owner env knob (ORCH_REAL_TIMEOUT_MS, fail-closed bounds) resolves
+    // the production timeout; the test seam (i.timeoutMs) keeps precedence
+    // and both pass through the compiled clamp.
+    timeout_ms: clampTimeoutMs(i.timeoutMs ?? resolveRealTimeoutMs(i.env)),
     max_output_bytes: REAL_CLAUDE_MAX_OUTPUT_BYTES,
   };
   const runner = i.runner ?? makeNodeProcessRunner(i.env);

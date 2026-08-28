@@ -55,6 +55,7 @@ import {
   type RealProcessEvidence,
 } from './real-claude-adapter';
 import { routeModel } from './orchestration/routing';
+import { resolveRealTimeoutMs } from './real-timeout';
 import type { StructuredResult } from './structured-result';
 
 // --- constants (fixed contracts; changing any is an owner-gated change) ----
@@ -391,7 +392,10 @@ export async function runRealCodexJob(
     executable: probe.config.executable,
     args: buildCodexArgs(prompt, routed.model),
     cwd: confined.cwd,
-    timeout_ms: clampTimeoutMs(i.timeoutMs),
+    // Same shared execution policy as the Claude adapter: owner env knob
+    // (ORCH_REAL_TIMEOUT_MS) resolves the production timeout, test seam
+    // keeps precedence, compiled clamp bounds both.
+    timeout_ms: clampTimeoutMs(i.timeoutMs ?? resolveRealTimeoutMs(i.env)),
     max_output_bytes: REAL_CLAUDE_MAX_OUTPUT_BYTES,
   };
   const runner = i.runner ?? makeNodeProcessRunner(i.env);

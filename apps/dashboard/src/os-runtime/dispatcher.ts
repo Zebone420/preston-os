@@ -36,6 +36,7 @@ import { isMigrationAbsentError } from '../lib/ai-os/orchestration/read-model';
 import { consumeRemoteIntakeOnce } from '../lib/ai-os/orchestration/remote-intake';
 import type { ComposerClient } from '../lib/ai-os/orchestration/composer-persist';
 import { resolveExecutionLevel } from '../lib/ai-os/execution-capability';
+import { resolveRunLeaseMs } from '../lib/ai-os/real-timeout';
 import { notifyAttentionOnce } from '../lib/ai-os/notifications';
 import { runtimeNotifyOwner } from './telegram-notify';
 import { buildRealExecutor } from './real-executor';
@@ -531,9 +532,14 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
 
     // An undefined newRunId falls through to driveGoal's own default: the
     // driver mints crypto-random run ids (node:crypto randomUUID).
+    // With a composed REAL executor the run lease derives from the
+    // owner-configured worker timeout (resolveRunLeaseMs: timeout + fixed
+    // margin), so a configured timeout can never outlive its lease; the
+    // simulation path keeps the driver's own default lease unchanged.
     const r = await driveGoal(
       client, goalId, seams.clock, input.maxIterations ?? 5, depends, lockCtx,
       seams.newRunId, executeReal ?? undefined, maxParallel,
+      executeReal ? resolveRunLeaseMs(env) : undefined,
     );
     log({ level: 'info', command, correlationId, event: 'orchestrate_once', goal: goalId, cycles: r.cycles, halted: r.halted, reason: r.reason, duration_ms: seams.clock() - tickStartMs, ...(capability.realExecutionAllowed ? { execution_level: 'BOUNDED_CODE_EXECUTION' } : {}), ...(skippedParked.length ? { skippedParked } : {}), ...(unverifiableApprovals.length ? { unverifiableApprovals } : {}), ...(r.unlockRefusals?.length ? { unlockRefusals: r.unlockRefusals } : {}) });
 
