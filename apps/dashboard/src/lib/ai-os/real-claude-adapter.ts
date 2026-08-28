@@ -137,12 +137,20 @@ const SECRET_TEXT_PATTERNS: readonly RegExp[] = [
   /\b((?:api[_-]?key|key|token|secret|password|credential|bearer|pat)\s*[=:]\s*)[^\s"']+/gi,
 ];
 
-export function sanitizeProcessText(text: string): string {
+// Redaction WITHOUT the excerpt bound: the full-report artifact path needs
+// the same secret scrubbing but must not lose content to the excerpt cap
+// (Gate 1 truncation follow-up: 2x live audits lost their itemized findings
+// to the 2,000-char bound with no recoverable record).
+export function redactProcessText(text: string): string {
   let t = String(text ?? '');
   t = t.replace(SECRET_TEXT_PATTERNS[0], '[REDACTED]');
   t = t.replace(SECRET_TEXT_PATTERNS[1], '[REDACTED]');
   t = t.replace(SECRET_TEXT_PATTERNS[2], '$1[REDACTED]');
-  return t.slice(0, REAL_CLAUDE_EXCERPT_CHARS);
+  return t;
+}
+
+export function sanitizeProcessText(text: string): string {
+  return redactProcessText(text).slice(0, REAL_CLAUDE_EXCERPT_CHARS);
 }
 
 // Bridge B2: extract the human-readable result text from the agent CLI's
@@ -170,11 +178,20 @@ export function extractResultText(stdout: string): string | null {
 // the static error code - never fabricated.
 export function extractResultParts(stdout: string): {
   excerpt: string | null;
+  // The SAME human text, redacted but NOT excerpt-bounded (its ceiling is
+  // the process capture cap). Persisted as a run-report artifact only when
+  // the excerpt cap actually truncated it; never stored in event rows.
+  full_text: string | null;
   structured: StructuredResult | null;
   structured_error: string | null;
 } {
   const t = String(stdout ?? '').trim();
-  if (!t) return { excerpt: null, structured: null, structured_error: 'no_output' };
+  if (!t) {
+    return {
+      excerpt: null, full_text: null,
+      structured: null, structured_error: 'no_output',
+    };
+  }
   let resultText = t;
   try {
     const j = JSON.parse(t) as Record<string, unknown>;
@@ -193,6 +210,7 @@ export function extractResultParts(stdout: string): {
   }
   return {
     excerpt: human ? sanitizeProcessText(human) : null,
+    full_text: human ? redactProcessText(human) : null,
     structured: parsed.ok ? parsed.value : null,
     structured_error: parsed.ok ? null : parsed.error,
   };
@@ -794,6 +812,10 @@ export interface RealAdapterResult {
   // Bridge B2: the readable result text extracted from the agent CLI output
   // (sanitized + bounded). Null when the run never spawned / produced none.
   result_excerpt: string | null;
+  // The same text redacted but unbounded (ceiling = process capture cap).
+  // The executor persists it as a run-report artifact when the excerpt cap
+  // truncated it; it never reaches an event row or the control surface raw.
+  result_full_text: string | null;
   // Fast-track Phase B: validated machine result block (or null + error).
   structured: StructuredResult | null;
   structured_error: string | null;
@@ -886,6 +908,7 @@ function refuse(
     summary: `real claude adapter refused: ${reason}`,
     failure_reason: reason,
     result_excerpt: null,
+    result_full_text: null,
     structured: null,
     structured_error: null,
     provider_model: null,
@@ -957,6 +980,7 @@ export async function runRealClaudeJob(
         (mapped.failure_reason ?? 'unknown'),
     failure_reason: mapped.failure_reason,
     result_excerpt: parts.excerpt,
+    result_full_text: parts.full_text,
     structured: parts.structured,
     structured_error: parts.structured_error,
     provider_model: routed.model,

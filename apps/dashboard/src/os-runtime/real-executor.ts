@@ -422,7 +422,26 @@ export async function buildRealExecutor(
       let artifactRefs: string[] = [];
       let artifactUnrecorded = false;
       const touched = audit.audit.touched ?? [];
-      if (result.outcome === 'completed' && touched.length > 0 &&
+      // Gate 1 truncation follow-up: two live worker audits lost their
+      // itemized findings to the result_excerpt cap with NO recoverable
+      // record. When the cap actually truncated the readable report, the
+      // FULL redacted text persists as a run-report artifact alongside the
+      // touched files (audit-kind runs touch none, so the report is their
+      // only durable work product). A report the cap did not cut persists
+      // nothing extra - prior behavior is unchanged. The report rides the
+      // SAME persist pass: same validation, secret screen, size cap, and
+      // ArtifactRecorded event; past the per-run artifact cap it is
+      // refused visibly (artifact_cap_exceeded), never silently.
+      const fullText = result.result_full_text ?? null;
+      const reportRel =
+        `run-report/${runId.replace(/[^A-Za-z0-9._-]/g, '-')}.md`;
+      const reportFiles =
+        result.outcome === 'completed' && fullText !== null &&
+        fullText.length > (result.result_excerpt ?? '').length &&
+        !touched.includes(reportRel)
+          ? [reportRel] : [];
+      if (result.outcome === 'completed' &&
+          (touched.length > 0 || reportFiles.length > 0) &&
           artifactsEnabled(deps.env)) {
         const storage = deps.artifactStorage !== undefined
           ? deps.artifactStorage
@@ -434,12 +453,16 @@ export async function buildRealExecutor(
           client: deps.client,
           storage,
           env: deps.env,
-          readFileBytes: (rel) => readBytes(prov.target.worktreePath, rel),
+          readFileBytes: (rel) =>
+            reportFiles.length > 0 && rel === reportRel
+              ? Buffer.from(fullText ?? '', 'utf8')
+              : readBytes(prov.target.worktreePath, rel),
           now: () => nowMs,
           log: (fields) => deps.log?.({ ...fields, job_id: job.id, run_id: runId }),
         }, {
           goal_id: job.goal_id, job_id: job.id, run_id: runId,
-          files: touched, created_by: role, provider: role,
+          files: [...touched, ...reportFiles],
+          created_by: role, provider: role,
           commit_sha: commitSha,
         });
         artifactRefs = pass.artifact_refs;
