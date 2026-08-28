@@ -106,7 +106,17 @@ const EXECUTION_MODE_MARKERS = /\b(real|live|remote|unrestricted)\s+(execution|m
 // Kind lexicon: FIRST match in this fixed order wins (deterministic).
 const KIND_LEXICON: Array<[JobKind, RegExp]> = [
   ['migration', /\b(migrat|schema\s+change)/i],
-  ['repair', /\b(repair|fix|remediate)/i],
+  // Owner-approved remap (live prod defect, 2026-08-28): fix/repair verbs
+  // minted kind 'repair', which the Level-1 real adapters exclude by
+  // design ('repair' = self-modification of failing runtime state), so in
+  // strict real mode every ordinary repository-fix job dead-lettered
+  // TERMINAL real_required:kind_not_eligible. Repository fix work is
+  // bounded worktree edit work: kind 'code'. Same lexicon position, so
+  // precedence over the test/audit words is unchanged. Risk/approval is
+  // unaffected (policy classifies the objective text, never the kind
+  // label); the 'repair' kind stays in the taxonomy but is no longer
+  // minted from ordinary fix language.
+  ['code', /\b(repair|fix|remediate)/i],
   ['test', /\b(test|validat|regression)/i],
   ['audit', /\b(audit|inspect|review|verif|check|examin)/i],
   ['documentation', /\b(document|summar|report|write[-\s]?up|record|attach|note|readiness)/i],

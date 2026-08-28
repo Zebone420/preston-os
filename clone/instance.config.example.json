@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "instance": {
+    "slug": "example-clone",
+    "display_name": "Example Business",
+    "mode": "clone",
+    "clone_of": "origin-platform"
+  },
+  "owner": {
+    "email": "owner@example-business.example",
+    "notification_channel": "telegram"
+  },
+  "environments": {
+    "staging_project_ref": "aaaaaaaaaaaaaaaaaaaa",
+    "production_project_ref": "bbbbbbbbbbbbbbbbbbbb",
+    "foreign_project_refs": [
+      "vcqtlmlaxxankxyezlul",
+      "hiqsymsiwonmvrbbqhhe"
+    ]
+  },
+  "deployment": {
+    "staging_origin": "https://example-clone-staging.example.app",
+    "production_origin": "https://example-clone-prod.example.app"
+  },
+  "branding": {
+    "product_name": "Example Business Command Center"
+  }
+}

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { redactSecrets } from '../lib/ai-os/memory';
 import {
   deploymentEnvironment, strictRuntimeEnvironment,
-  PRODUCTION_PROJECT_REF, STAGING_PROJECT_REF,
+  foreignProjectRefs, instanceProductionRef, instanceStagingRef,
 } from '../lib/ai-os/runtime-environment';
 import {
   workerHealth,
@@ -36,6 +36,7 @@ import { isMigrationAbsentError } from '../lib/ai-os/orchestration/read-model';
 import { consumeRemoteIntakeOnce } from '../lib/ai-os/orchestration/remote-intake';
 import type { ComposerClient } from '../lib/ai-os/orchestration/composer-persist';
 import { resolveExecutionLevel } from '../lib/ai-os/execution-capability';
+import { resolveRunLeaseMs } from '../lib/ai-os/real-timeout';
 import { notifyAttentionOnce } from '../lib/ai-os/notifications';
 import { runtimeNotifyOwner } from './telegram-notify';
 import { buildRealExecutor } from './real-executor';
@@ -142,12 +143,21 @@ function stagingGate(
     return { exitCode: EXIT.config, summary: { error: 'not marked staging' } };
   }
   const url = String(env['SUPABASE_URL'] ?? '').toLowerCase();
+  // Foreign-instance denylist (Gate 2 instance contract): a deployment
+  // configured as a clone must NEVER touch the origin instance's projects
+  // in ANY environment. Strictly additive refusal; empty for Preston.
+  for (const foreign of foreignProjectRefs(env)) {
+    if (url.includes(foreign)) {
+      log({ level: 'error', command, correlationId, event: 'staging_gate', error: 'foreign instance target refused' });
+      return { exitCode: EXIT.config, summary: { error: 'foreign instance target refused' } };
+    }
+  }
   if (runtimeEnv === 'staging' &&
-      (/\bprod(uction)?\b/.test(url) || url.includes(PRODUCTION_PROJECT_REF))) {
+      (/\bprod(uction)?\b/.test(url) || url.includes(instanceProductionRef(env)))) {
     log({ level: 'error', command, correlationId, event: 'staging_gate', error: 'production target refused' });
     return { exitCode: EXIT.config, summary: { error: 'production target refused' } };
   }
-  if (runtimeEnv === 'production' && url.includes(STAGING_PROJECT_REF)) {
+  if (runtimeEnv === 'production' && url.includes(instanceStagingRef(env))) {
     log({ level: 'error', command, correlationId, event: 'staging_gate', error: 'staging target refused in production' });
     return { exitCode: EXIT.config, summary: { error: 'staging target refused' } };
   }
@@ -522,9 +532,14 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
 
     // An undefined newRunId falls through to driveGoal's own default: the
     // driver mints crypto-random run ids (node:crypto randomUUID).
+    // With a composed REAL executor the run lease derives from the
+    // owner-configured worker timeout (resolveRunLeaseMs: timeout + fixed
+    // margin), so a configured timeout can never outlive its lease; the
+    // simulation path keeps the driver's own default lease unchanged.
     const r = await driveGoal(
       client, goalId, seams.clock, input.maxIterations ?? 5, depends, lockCtx,
       seams.newRunId, executeReal ?? undefined, maxParallel,
+      executeReal ? resolveRunLeaseMs(env) : undefined,
     );
     log({ level: 'info', command, correlationId, event: 'orchestrate_once', goal: goalId, cycles: r.cycles, halted: r.halted, reason: r.reason, duration_ms: seams.clock() - tickStartMs, ...(capability.realExecutionAllowed ? { execution_level: 'BOUNDED_CODE_EXECUTION' } : {}), ...(skippedParked.length ? { skippedParked } : {}), ...(unverifiableApprovals.length ? { unverifiableApprovals } : {}), ...(r.unlockRefusals?.length ? { unlockRefusals: r.unlockRefusals } : {}) });
 

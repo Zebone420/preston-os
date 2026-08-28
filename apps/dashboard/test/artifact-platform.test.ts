@@ -23,6 +23,12 @@ import {
   GIT_EXECUTABLE_ENV,
 } from '../src/os-runtime/real-executor';
 import { buildStatusArgs } from '../src/lib/ai-os/worktree-provision';
+import {
+  extractResultParts,
+  REAL_CLAUDE_EXCERPT_CHARS,
+  redactProcessText,
+  sanitizeProcessText,
+} from '../src/lib/ai-os/real-claude-adapter';
 import { EXECUTION_LEVEL_ENV } from '../src/lib/ai-os/execution-capability';
 import type { GoalJob } from '../src/lib/ai-os/orchestration/model';
 
@@ -135,7 +141,10 @@ describe('artifact path validation (fail-closed)', () => {
   });
   it('derives deterministic ids from the object path', () => {
     const p = artifactObjectPath('g', 'j', 'r', 'docs/a.md');
-    expect(p).toBe('goal/g/job/j/run/r/docs__a.md');
+    // PF3: the key embeds an 8-hex tag of the ORIGINAL relative path so
+    // distinct sources can never flatten onto one destination.
+    expect(p).toMatch(/^goal\/g\/job\/j\/run\/r\/[0-9a-f]{8}-docs__a\.md$/);
+    expect(artifactObjectPath('g', 'j', 'r', 'docs/a.md')).toBe(p); // stable
     expect(deriveArtifactId(p)).toBe(deriveArtifactId(p));
     expect(deriveArtifactId(p)).toMatch(/^art-[0-9a-f]{32}$/);
   });
@@ -165,7 +174,8 @@ describe('persistArtifacts', () => {
     expect(res.condition).toBe('ok');
     expect(res.artifact_refs.length).toBe(1);
     expect(res.artifact_refs[0]).toMatch(/^artifact:art-[0-9a-f]{32}$/);
-    expect(uploads[0].path).toBe('goal/goal-art-1/job/job-art-1/run/run-art-1/docs__a.md');
+    expect(uploads[0].path).toMatch(
+      /^goal\/goal-art-1\/job\/job-art-1\/run\/run-art-1\/[0-9a-f]{8}-docs__a\.md$/);
     const row = db.rowsOf('artifacts')[0];
     expect(String(row.sha256)).toMatch(/^[0-9a-f]{64}$/);
     expect(row.size_bytes).toBe(11);
@@ -305,23 +315,28 @@ const gitOk = (statusStdout: string) => {
   };
 };
 
-const claudeOk = async () => ({
+const claudeOutput = (result: string) => async () => ({
   spawned: true, exit_code: 0, timed_out: false, truncated: false,
-  stdout: '{"result":"wrote the report"}', stderr: '', error: null,
+  stdout: JSON.stringify({ result }), stderr: '', error: null,
   duration_ms: 900,
 });
+
+const claudeOk = claudeOutput('wrote the report');
 
 async function runWiredExecutor(opts: {
   env?: Record<string, string>;
   storage: ArtifactStorage | null;
+  claudeResult?: string;
+  gitStatus?: string;
 }) {
   const db = makeFakeDb();
   const { storage } = opts;
   const exec = await buildRealExecutor({
     client: db.client,
     env: { ...fullEnv, ...(opts.env ?? {}) },
-    gitRunner: gitOk(' M docs/report.md\n').runner,
-    claudeRunner: claudeOk,
+    gitRunner: gitOk(opts.gitStatus ?? ' M docs/report.md\n').runner,
+    claudeRunner: opts.claudeResult !== undefined
+      ? claudeOutput(opts.claudeResult) : claudeOk,
     fileExists: () => true,
     realpath: (p: string) => p,
     artifactStorage: storage,
@@ -387,5 +402,88 @@ describe('real-executor artifact wiring', () => {
     expect(res?.executed).toBe(true);
     expect(res?.report?.artifact_unrecorded).toBe(true);
     expect(res?.evidence_refs.some((r) => r.includes('artifact_unrecorded'))).toBe(true);
+  });
+});
+
+// --- run-report artifact (Gate 1 truncation follow-up) ----------------------
+// Two live worker audits (staging 11a6dcf4, prod eeaf3d37, 2026-08-27) lost
+// their itemized findings to the 2,000-char result_excerpt cap with NO
+// recoverable record. When the cap actually truncates the readable report,
+// the FULL redacted text must persist as a run-report artifact - the only
+// durable work product of an audit-kind run, which touches no files.
+
+describe('run-report artifact (excerpt-cap truncation follow-up)', () => {
+  const LONG = 'finding line\n'.repeat(400); // ~5,200 chars > 2,000 cap
+  const REPORT_REL = 'run-report/job-art-0001-run-1.md'; // runId ':' -> '-'
+
+  it('extractResultParts: full_text is redacted but NOT excerpt-bounded', () => {
+    const secret = 'token: sk-abcdefghijklmnop';
+    const parts = extractResultParts(
+      JSON.stringify({ result: LONG + secret }));
+    expect(parts.excerpt?.length).toBe(REAL_CLAUDE_EXCERPT_CHARS);
+    expect(parts.full_text?.length).toBeGreaterThan(REAL_CLAUDE_EXCERPT_CHARS);
+    expect(parts.full_text).toContain('finding line');
+    expect(parts.full_text).not.toContain('sk-abcdefghijklmnop');
+    expect(parts.full_text).toContain('[REDACTED]');
+    // The excerpt stays exactly the bounded form of the full text.
+    expect(parts.full_text?.slice(0, REAL_CLAUDE_EXCERPT_CHARS))
+      .toBe(parts.excerpt);
+  });
+
+  it('sanitizeProcessText remains redact + bound of redactProcessText', () => {
+    const t = 'x'.repeat(3000);
+    expect(sanitizeProcessText(t)).toBe(
+      redactProcessText(t).slice(0, REAL_CLAUDE_EXCERPT_CHARS));
+  });
+
+  it('clean worktree + truncated report: the FULL report persists as an artifact', async () => {
+    const { storage, uploads } = fakeStorage();
+    const { res, db } = await runWiredExecutor({
+      env: { [ARTIFACTS_ENABLED_ENV]: 'true' }, storage,
+      claudeResult: LONG, gitStatus: '',
+    });
+    expect(res?.outcome).toBe('completed');
+    expect(uploads.length).toBe(1);
+    expect(uploads[0].bytes).toBeGreaterThan(REAL_CLAUDE_EXCERPT_CHARS);
+    const rows = db.rowsOf('artifacts');
+    expect(rows.length).toBe(1);
+    expect(rows[0]['name']).toBe(REPORT_REL);
+    expect(rows[0]['artifact_type']).toBe('document');
+    expect(res?.evidence_refs.some((r) => r.startsWith('artifact:art-'))).toBe(true);
+    expect(res?.report?.artifact_unrecorded).toBe(false);
+  });
+
+  it('truncated report + touched file: BOTH persist in one pass', async () => {
+    const { storage, uploads } = fakeStorage();
+    const { res, db } = await runWiredExecutor({
+      env: { [ARTIFACTS_ENABLED_ENV]: 'true' }, storage,
+      claudeResult: LONG,
+    });
+    expect(res?.outcome).toBe('completed');
+    expect(uploads.length).toBe(2);
+    const names = db.rowsOf('artifacts').map((r) => r['name']).sort();
+    expect(names).toEqual(['docs/report.md', REPORT_REL]);
+  });
+
+  it('short report (excerpt not truncated): NO run-report artifact - prior behavior pinned', async () => {
+    const { storage, uploads } = fakeStorage();
+    const { res, db } = await runWiredExecutor({
+      env: { [ARTIFACTS_ENABLED_ENV]: 'true' }, storage,
+      claudeResult: 'all clear, 0 findings', gitStatus: '',
+    });
+    expect(res?.outcome).toBe('completed');
+    expect(uploads.length).toBe(0);
+    expect(db.rowsOf('artifacts').length).toBe(0);
+    expect(res?.report?.artifact_refs).toEqual([]);
+  });
+
+  it('gate off: a truncated report still performs ZERO artifact operations', async () => {
+    const { storage, uploads } = fakeStorage();
+    const { res } = await runWiredExecutor({
+      storage, claudeResult: LONG, gitStatus: '',
+    });
+    expect(res?.outcome).toBe('completed');
+    expect(uploads.length).toBe(0);
+    expect(res?.report?.artifact_refs).toEqual([]);
   });
 });

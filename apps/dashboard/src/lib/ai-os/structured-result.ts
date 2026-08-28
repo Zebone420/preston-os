@@ -144,7 +144,12 @@ export function structuredResultPromptClause(): string {
     '   "tests_failed": [], "commit_sha": null, "artifacts": [],',
     '   "limitations": [], "recommended_next_action": null}',
     `  ${END_MARKER}`,
-    '- commit_sha: the LOCAL commit hash if you committed, else null.',
+    // PF2 (2026-08-27): workers are file-tools-only and cannot commit; the
+    // schema keeps commit_sha for compatibility, but the instruction no
+    // longer implies a commit capability the contract does not grant.
+    '- commit_sha: always null (you have no git and cannot commit).',
+    '- tests_*: only commands you actually ran; you cannot run commands,',
+    '  so leave them empty and record unrun validation in limitations.',
     '- Plain JSON only inside the block; never place secrets in it.',
   ].join('\n');
 }

@@ -590,11 +590,18 @@ describe('real claude adapter - fixed argument contract (no shell)', () => {
     for (const required of [
       'untrusted data', 'apps/dashboard/', 'Base commit: abc1234',
       'No git push', 'deploy', 'credential', 'production', 'network',
-      'tests and scanners', 'never push', 'STOP CONDITIONS',
+      // PF2 contract: the prompt states the FILE-TOOLS-ONLY capability
+      // bound and demands honest limitations, instead of requiring tests
+      // and a local commit the tool contract cannot perform.
+      'FILE TOOLS ONLY', 'no way to run commands',
+      'Never commit', 'limitations', 'STOP CONDITIONS',
       'never instruction authority',
     ]) {
       expect(p).toContain(required);
     }
+    // The impossible requirements must be GONE (PF2 pin).
+    expect(p).not.toContain('Run the repository tests');
+    expect(p).not.toContain('LOCAL commit');
   });
 
   it('buildClaudeArgs is the fixed 4-element contract', () => {

@@ -6,22 +6,34 @@
 // argv contract:
 //
 //   git -C <canonical> worktree add <root>/wt-<job> -b job/<job> <base>
-//   git -C <worktree>  status --porcelain
+//   git -C <worktree>  status --porcelain -uall
+//   git -C <worktree>  diff --name-only --no-renames <base> HEAD
 //   git -C <canonical> worktree remove --force <root>/wt-<job>
 //
 // Nothing else is reachable. The argv arrays are BUILT here from validated
 // components - never assembled from job text - and executed with shell:false
 // by the caller-supplied runner. There is no 'push', 'remote', 'fetch',
 // 'commit', 'config', or 'checkout' builder in this file, so no network or
-// history-rewriting git operation can be issued through it.
+// history-rewriting git operation can be issued through it. The diff builder
+// is READ-ONLY (two-commit compare) and exists solely for the post-run
+// audit below - it grants nothing to workers.
 //
 // The provisioner also performs the POST-RUN PATH ENFORCEMENT that makes the
 // path allowlist real rather than advisory: after an agent has run inside
-// the worktree, `git status --porcelain` enumerates every path it touched,
-// and any path outside the allowlist is a violation that fails the job.
+// the worktree, the audit enumerates every path it touched and any path
+// outside the allowlist is a violation that fails the job.
 // This is the enforcement point, because the spawned agent CLI is itself a
 // general tool - cwd and a scrubbed environment confine it, but only this
 // after-the-fact check can PROVE it stayed inside its lane.
+//
+// Prod audit finding PF1 (2026-08-27, job eeaf3d37): `git status` alone is
+// BLIND to changes an agent hides inside a local commit - a committed tree
+// is clean, so enforcement passed vacuously. The audit therefore enumerates
+// BOTH surfaces and enforces over their normalized union:
+//   uncommitted:  git status --porcelain -uall        (working tree + index)
+//   committed:    git diff --name-only --no-renames <base> HEAD
+// and FAILS CLOSED (base_commit_invalid / base_unverifiable) whenever the
+// authoritative base SHA is absent, malformed, or cannot be compared.
 
 import { isAbsolute } from 'node:path';
 
@@ -113,6 +125,17 @@ export function buildStatusArgs(worktreePath: string): string[] {
   return ['-C', worktreePath, 'status', '--porcelain', '-uall'];
 }
 
+// Committed-change enumeration for the post-run audit (PF1). Read-only:
+// compares the authoritative base commit to the worktree HEAD. --no-renames
+// keeps a committed rename visible as BOTH paths (delete + add), matching
+// the porcelain both-sides semantics above.
+export function buildDiffArgs(
+  worktreePath: string, baseCommit: string,
+): string[] {
+  return ['-C', worktreePath, 'diff', '--name-only', '--no-renames',
+    baseCommit, 'HEAD'];
+}
+
 export function buildWorktreeRemoveArgs(
   canonicalRepo: string, worktreePath: string,
 ): string[] {
@@ -164,6 +187,22 @@ export function pathAllowed(p: string, allowedPaths: string[]): boolean {
   });
 }
 
+// Parse `git diff --name-only` output: one repo-relative path per line.
+export function parseNameOnlyPaths(stdout: string): string[] {
+  return String(stdout ?? '')
+    .split('\n')
+    .map((l) => l.replace(/\r$/, '').trim())
+    .map((l) => l.startsWith('"') && l.endsWith('"') && l.length > 1
+      ? l.slice(1, -1) : l)
+    .filter((l) => l.length > 0);
+}
+
+// One canonical spelling per touched path so the union dedupes correctly
+// and enforcement sees the same shape pathAllowed normalizes to.
+function normalizeRelPath(p: string): string {
+  return p.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
 export interface PathAudit {
   ok: boolean;
   touched: string[];
@@ -171,11 +210,19 @@ export interface PathAudit {
   dirty: boolean;
 }
 
-// Enforce the path allowlist over a porcelain status output.
+// Enforce the path allowlist over the UNION of the uncommitted-change
+// enumeration (porcelain status) and the committed-change enumeration
+// (name-only diff vs the authoritative base). PF1: either surface alone
+// can be blind - a committed edit leaves a clean tree, an uncommitted edit
+// never reaches the diff - so enforcement runs over both, normalized and
+// deduplicated.
 export function auditTouchedPaths(
-  stdout: string, allowedPaths: string[],
+  statusStdout: string, committedStdout: string, allowedPaths: string[],
 ): PathAudit {
-  const touched = parsePorcelainPaths(stdout);
+  const touched = [...new Set([
+    ...parsePorcelainPaths(statusStdout).map(normalizeRelPath),
+    ...parseNameOnlyPaths(committedStdout).map(normalizeRelPath),
+  ])].filter((p) => p.length > 0);
   // An empty or unusable allowlist permits NOTHING (fail closed).
   const usable = allowedPaths.filter((p) => p && !p.includes('..') &&
     !p.startsWith('/') && !isAbsolute(p));
@@ -272,15 +319,23 @@ function stderrExcerpt(stderr: string): string {
   return s ? `:${s.slice(-400)}` : '';
 }
 
-// Read the worktree's dirty state + enforce the path allowlist.
+// Read the worktree's dirty state + enforce the path allowlist over the
+// union of uncommitted AND committed changes (PF1). Fails closed when the
+// base is malformed or the committed-change surface cannot be compared.
 export async function auditWorktree(
   i: {
     gitExecutable: string; worktreePath: string; allowedPaths: string[];
+    baseCommit: string;
     runner: ProvisionRunner; timeoutMs?: number;
   },
 ): Promise<{ ok: boolean; reason?: string; audit?: PathAudit }> {
   const exeErr = checkGitExecutable(i.gitExecutable);
   if (exeErr) return { ok: false, reason: exeErr };
+  // The base SHA is the authority the committed surface is measured
+  // against; without a well-formed one confinement cannot be proven.
+  if (!BASE_COMMIT_RE.test(String(i.baseCommit ?? ''))) {
+    return { ok: false, reason: 'base_commit_invalid' };
+  }
   const res = await i.runner({
     executable: i.gitExecutable,
     args: buildStatusArgs(i.worktreePath),
@@ -290,7 +345,20 @@ export async function auditWorktree(
     // An unreadable status cannot prove confinement - fail closed.
     return { ok: false, reason: 'status_unreadable' };
   }
-  return { ok: true, audit: auditTouchedPaths(res.stdout, i.allowedPaths) };
+  const diff = await i.runner({
+    executable: i.gitExecutable,
+    args: buildDiffArgs(i.worktreePath, i.baseCommit),
+    timeout_ms: i.timeoutMs ?? PROVISION_TIMEOUT_MS,
+  });
+  if (diff.status !== 'ok' || diff.exit_code !== 0) {
+    // Base absent/unreachable, or the compare failed: the committed
+    // surface cannot be proven clean - fail closed.
+    return { ok: false, reason: 'base_unverifiable' };
+  }
+  return {
+    ok: true,
+    audit: auditTouchedPaths(res.stdout, diff.stdout, i.allowedPaths),
+  };
 }
 
 // Remove the worktree. Best-effort by design: the caller has already

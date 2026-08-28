@@ -55,6 +55,7 @@ import {
   type RealProcessEvidence,
 } from './real-claude-adapter';
 import { routeModel } from './orchestration/routing';
+import { resolveRealTimeoutMs } from './real-timeout';
 import type { StructuredResult } from './structured-result';
 
 // --- constants (fixed contracts; changing any is an owner-gated change) ----
@@ -288,6 +289,9 @@ export interface RealCodexAdapterResult {
   // adapter's extractResultText. Codex `exec --json` emits event lines, so
   // this is usually the raw sanitized tail rather than a parsed field.
   result_excerpt: string | null;
+  // Redacted, unbounded counterpart (claude adapter parity); the executor
+  // persists it as a run-report artifact when the excerpt cap truncated it.
+  result_full_text: string | null;
   // Fast-track Phase B/E parity with the claude adapter result.
   structured: StructuredResult | null;
   structured_error: string | null;
@@ -344,6 +348,7 @@ function refuse(
     summary: `real codex adapter refused: ${reason}`,
     failure_reason: reason,
     result_excerpt: null,
+    result_full_text: null,
     structured: null,
     structured_error: null,
     provider_model: null,
@@ -387,7 +392,10 @@ export async function runRealCodexJob(
     executable: probe.config.executable,
     args: buildCodexArgs(prompt, routed.model),
     cwd: confined.cwd,
-    timeout_ms: clampTimeoutMs(i.timeoutMs),
+    // Same shared execution policy as the Claude adapter: owner env knob
+    // (ORCH_REAL_TIMEOUT_MS) resolves the production timeout, test seam
+    // keeps precedence, compiled clamp bounds both.
+    timeout_ms: clampTimeoutMs(i.timeoutMs ?? resolveRealTimeoutMs(i.env)),
     max_output_bytes: REAL_CLAUDE_MAX_OUTPUT_BYTES,
   };
   const runner = i.runner ?? makeNodeProcessRunner(i.env);
@@ -407,6 +415,7 @@ export async function runRealCodexJob(
         (mapped.failure_reason ?? 'unknown'),
     failure_reason: mapped.failure_reason,
     result_excerpt: parts.excerpt,
+    result_full_text: parts.full_text,
     structured: parts.structured,
     structured_error: parts.structured_error,
     provider_model: routed.model,
