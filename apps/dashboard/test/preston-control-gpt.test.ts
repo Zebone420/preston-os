@@ -226,7 +226,7 @@ describe('GPT Actions REST surface', () => {
     const ops = Object.values(doc.paths as Record<string, Record<string, { operationId: string; 'x-openai-isConsequential': boolean }>>)
       .flatMap((p) => Object.values(p));
     expect(ops.map((o) => o.operationId).sort()).toEqual(
-      ['cancelPrestonGoal', 'decidePrestonApproval', 'followUpPrestonGoal', 'getPrestonArtifact', 'getPrestonEvidence', 'getPrestonGoal', 'getPrestonJob', 'getPrestonStatus', 'listPrestonApprovals', 'submitPrestonGoal'],
+      ['cancelPrestonGoal', 'decidePrestonApproval', 'followUpPrestonGoal', 'getPrestonArtifact', 'getPrestonEvidence', 'getPrestonGoal', 'getPrestonJob', 'getPrestonStatus', 'listPrestonApprovals', 'pollPrestonEvents', 'submitPrestonGoal'],
     );
     const byId = Object.fromEntries(ops.map((o) => [o.operationId, o]));
     // Least-privilege transport friction: ONLY the owner-decision write is

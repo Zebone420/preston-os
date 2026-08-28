@@ -62,6 +62,16 @@ export const GET_ARTIFACT_SHAPE = {
     'must match ^art-[0-9a-f]{32}$'),
 };
 
+export const POLL_EVENTS_SHAPE = {
+  cursor: z.string().max(240).optional().describe(
+    'Opaque cursor from a previous poll (next_cursor). Omit to read from ' +
+    'the start of the bounded window. Repeating a cursor returns the ' +
+    'identical page (idempotent); advancing it never re-emits an event.',
+  ),
+  limit: z.number().int().min(1).max(100).optional()
+    .describe('Max events per page (default 50).'),
+};
+
 export const SubmitGoalSchema = z.object(SUBMIT_GOAL_SHAPE).strict();
 export const GetGoalSchema = z.object(GET_GOAL_SHAPE).strict();
 export const DecideApprovalSchema = z.object(DECIDE_APPROVAL_SHAPE).strict();
@@ -70,3 +80,10 @@ export const GetJobSchema = z.object(GET_JOB_SHAPE).strict();
 export const CancelGoalSchema = z.object(CANCEL_GOAL_SHAPE).strict();
 export const FollowUpGoalSchema = z.object(FOLLOW_UP_GOAL_SHAPE).strict();
 export const GetArtifactSchema = z.object(GET_ARTIFACT_SHAPE).strict();
+export const PollEventsSchema = z.object(POLL_EVENTS_SHAPE).strict();
+// GET-query variant: search params arrive as strings, so limit is coerced
+// (same bounds; the tool clamps again defensively).
+export const PollEventsQuerySchema = z.object({
+  cursor: z.string().max(240).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+}).strict();

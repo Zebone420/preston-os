@@ -45,6 +45,11 @@ import {
 import { insertEvent } from '@/lib/ai-os/store';
 import { makeEnvelope } from '@/lib/ai-os/transport';
 import { deploymentEnvironment } from '@/lib/ai-os/runtime-environment';
+import {
+  decodeCursor,
+  normalizeSupervisorEvents,
+  pageAfterCursor,
+} from './supervisor-events';
 
 export interface ToolContext {
   client: ComposerClient;
@@ -284,27 +289,72 @@ export function normalizeRequestId(v: string | undefined): string {
   return RUNTIME_ID_RE.test(s) ? s : `pc-${randomUUID()}`;
 }
 
+// Supervisor bridge slice 1: durably record a submit-time REJECTION as one
+// idempotent os_events row (static error codes + request id ONLY - never the
+// request text, which may be the very thing that was rejected). Best-effort:
+// a write failure never changes the rejection response, and the supervisor
+// feed reports whether these records are readable rather than guessing.
+async function recordSubmitRejection(
+  ctx: ToolContext, requestId: string, errors: string[],
+): Promise<void> {
+  try {
+    const id = `ev-submit-rej-${requestId}`;
+    await insertEvent(ctx.client as unknown as RuntimeClient, makeEnvelope({
+      id,
+      type: 'GoalSubmitRejected',
+      actor: ctx.ownerEmail,
+      source: 'preston-control',
+      correlation_id: `submit:${requestId}`,
+      idempotency_key: id,
+      now: ctx.now,
+      payload: {
+        request_id: requestId,
+        errors: errors.slice(0, 8).map((e) => safeText(e, 120)),
+        rejected_at: ctx.now,
+      },
+    }));
+  } catch { /* best-effort: the rejection response is authoritative */ }
+}
+
+// Rejected-return shape with the success-path fields declared optional so
+// the union stays ergonomic for callers/tests (mirrors the prior inline
+// literal widening).
+interface SubmitGoalRejected {
+  status: 'rejected';
+  request_id: string;
+  errors: string[];
+  goals: never[];
+  compensated?: string[];
+  approvals_required?: number;
+  warnings?: string[];
+  note?: string;
+}
+
 export async function prestonSubmitGoal(ctx: ToolContext, input: SubmitGoalInput) {
   const requestId = normalizeRequestId(input.request_id);
+  const reject = async (errors: string[]): Promise<SubmitGoalRejected> => {
+    await recordSubmitRejection(ctx, requestId, errors);
+    return { status: 'rejected', request_id: requestId, errors, goals: [] };
+  };
   const base = String(input.request ?? '').trim();
   const extra = String(input.context ?? '').trim();
   if (!base) {
-    return { status: 'rejected' as const, request_id: requestId, errors: ['request_required'], goals: [] };
+    return reject(['request_required']);
   }
   // The composer interprets the whole text deterministically; context is
   // appended as plain sentences (data, never instruction authority).
   let raw = extra ? `${base}\n\n${extra}` : base;
   if (input.priority === 'high') raw += '\n\nPriority: high.';
   if (raw.length > MAX_REQUEST_CHARS) {
-    return { status: 'rejected' as const, request_id: requestId, errors: ['request_too_long'], goals: [] };
+    return reject(['request_too_long']);
   }
   if (looksSecret(raw)) {
-    return { status: 'rejected' as const, request_id: requestId, errors: ['secret_in_request'], goals: [] };
+    return reject(['secret_in_request']);
   }
 
   const composed = composeRequest(raw);
   if (!composed.ok) {
-    return { status: 'rejected' as const, request_id: requestId, errors: composed.errors.slice(0, 8), goals: [] };
+    return reject(composed.errors.slice(0, 8));
   }
   const outcome = await confirmComposedRequest(ctx.client, {
     ownerEmail: ctx.ownerEmail,
@@ -314,17 +364,23 @@ export async function prestonSubmitGoal(ctx: ToolContext, input: SubmitGoalInput
     now: ctx.now,
   });
   if (!outcome.ok) {
-    return {
-      status: 'rejected' as const,
+    const errors = outcome.errors.slice(0, 8).map((e) => safeText(e, 200));
+    await recordSubmitRejection(ctx, requestId, errors);
+    const rejected: SubmitGoalRejected = {
+      status: 'rejected',
       request_id: requestId,
-      errors: outcome.errors.slice(0, 8).map((e) => safeText(e, 200)),
+      errors,
       compensated: outcome.compensated,
       goals: [],
     };
+    return rejected;
   }
   return {
     status: outcome.replayed ? ('duplicate' as const) : ('accepted' as const),
     request_id: requestId,
+    // Union ergonomics only: lets callers narrow on r.errors without a
+    // status check first (undefined is dropped by JSON serialization).
+    errors: undefined as string[] | undefined,
     approvals_required: composed.approvals_required,
     warnings: composed.warnings.slice(0, 8),
     goals: outcome.created.map((g) => ({
@@ -1012,5 +1068,82 @@ export async function prestonGetArtifact(ctx: ToolContext, artifactId: string) {
     retrieval,
     signed_url: signedUrl,
     signed_url_expires_in_seconds: signedUrl ? ARTIFACT_SIGNED_URL_TTL_SECONDS : null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 11. preston_poll_events (READ ONLY) - ChatGPT Supervisor Bridge slice 1
+// (docs/PRESTON_CHATGPT_SUPERVISOR_BRIDGE_DESIGN_v1.md). A pull-based,
+// cursor-paginated, deduplicated feed of normalized state transitions
+// DERIVED from the same bounded read model the status tool uses, plus the
+// idempotent GoalSubmitRejected records. ZERO writes; no new authority -
+// the supervisor observes, and every action it may later take still flows
+// through the existing gated tools.
+
+const POLL_EVENTS_DEFAULT_LIMIT = 50;
+const POLL_REJECTION_ROWS = 50;
+
+export async function prestonPollEvents(
+  ctx: ToolContext,
+  input: { cursor?: string; limit?: number },
+) {
+  const decoded = decodeCursor(input.cursor);
+  if (decoded && !decoded.ok) {
+    // Fail closed: a malformed cursor is an error, never a silent reset -
+    // a reset would replay the whole window as duplicate notifications.
+    return { ok: false as const, error: 'cursor_invalid' };
+  }
+  const client = ctx.client as unknown as RuntimeClient;
+  const nowMs = Date.parse(ctx.now);
+  const ctl = await readSystemControlsChecked(client);
+  const model = await loadOrchestrationReadModel(client, 20, nowMs);
+
+  // Best-effort rejection records: absence of read authorization is
+  // REPORTED (rejections_readable:false), never silently treated as
+  // "no rejections happened".
+  let rejections: Row[] = [];
+  let rejectionsReadable = false;
+  try {
+    const r = await client.from('os_events').select('*')
+      .eq('type', 'GoalSubmitRejected').limit(POLL_REJECTION_ROWS);
+    if (!r.error && Array.isArray(r.data)) {
+      rejections = r.data;
+      rejectionsReadable = true;
+    }
+  } catch { /* reported below */ }
+
+  const normalized = normalizeSupervisorEvents({
+    goals: model.goals.rows,
+    jobs: model.jobs.rows,
+    controls: {
+      readable: ctl.readOk,
+      paused: ctl.controls.paused,
+      owner_stop: ctl.controls.owner_stop,
+      updated_at: ctl.controls.updated_at,
+    },
+    rejections,
+  });
+  const { page, next_cursor } = pageAfterCursor(
+    normalized.events, decoded, input.limit ?? POLL_EVENTS_DEFAULT_LIMIT);
+
+  return {
+    ok: true as const,
+    generated_at: ctx.now,
+    events: page,
+    next_cursor,
+    // Window honesty: this feed is derived from the BOUNDED read model
+    // (most recent goals + their jobs). Transitions older than the window
+    // age out; the supervisor should poll regularly and treat the window
+    // fields as the coverage statement.
+    window: {
+      goals_covered: model.goals.rows.length,
+      goals_state: model.goals.state,
+      jobs_state: model.jobs.state,
+      approvals_state: model.approvals.state,
+      controls_readable: ctl.readOk,
+      rejections_readable: rejectionsReadable,
+      migration_applied: model.applied,
+    },
+    unmapped_states: normalized.unmapped_states,
   };
 }

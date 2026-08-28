@@ -144,7 +144,12 @@ export type EventType =
   | 'SideEffectRecorded'
   // Power-station foundation: durable artifact persisted (or the explicit
   // artifact_unrecorded condition when persistence failed after real work).
-  | 'ArtifactRecorded';
+  | 'ArtifactRecorded'
+  // Supervisor bridge slice 1: idempotent record of a submit-time goal
+  // rejection (static error codes + request id only, never the request
+  // text) so the supervisor feed can distinguish "never entered the
+  // runtime" from a runtime failure.
+  | 'GoalSubmitRejected';
 
 export interface OsEvent {
   id: string;

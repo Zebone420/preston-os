@@ -243,6 +243,23 @@ export function buildOpenApiDocument(origin: string): Record<string, unknown> {
           responses: { '200': { description: 'Evidence items', content: { 'application/json': { schema: { $ref: '#/components/schemas/Result' } } } }, '400': { description: 'Invalid input' }, '401': { description: 'Not authenticated' } },
         },
       },
+      '/api/control/events': {
+        get: {
+          operationId: 'pollPrestonEvents',
+          summary: 'Poll normalized Preston supervisor events',
+          description:
+            'Read-only supervisor feed of normalized state transitions (queued, running, ' +
+            'completed, failed, timed_out, dead_lettered, blocked, paused, stopped, ' +
+            'approval_required, kind_not_eligible, task_kind_unresolved, submit_rejected). ' +
+            'Cursor-paginated, deduplicated; submit rejections carry goal_id null.',
+          'x-openai-isConsequential': false,
+          parameters: [
+            { name: 'cursor', in: 'query', required: false, schema: { type: 'string', maxLength: 240 } },
+            { name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 100 } },
+          ],
+          responses: { '200': { description: 'Event page with next_cursor', content: { 'application/json': { schema: { $ref: '#/components/schemas/Result' } } } }, '400': { description: 'Invalid cursor or input' }, '401': { description: 'Not authenticated' } },
+        },
+      },
       '/api/control/artifacts/{artifact_id}': {
         get: {
           operationId: 'getPrestonArtifact',

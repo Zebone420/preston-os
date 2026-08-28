@@ -15,6 +15,7 @@ import {
   GET_EVIDENCE_SHAPE,
   GET_GOAL_SHAPE,
   GET_JOB_SHAPE,
+  POLL_EVENTS_SHAPE,
   SUBMIT_GOAL_SHAPE,
 } from './schemas';
 import {
@@ -26,6 +27,7 @@ import {
   prestonGetGoal,
   prestonGetJob,
   prestonListApprovals,
+  prestonPollEvents,
   prestonStatus,
   prestonSubmitGoal,
   type ToolContext,
@@ -45,6 +47,7 @@ export const TOOL_NAMES = [
   'preston_cancel_goal',
   'preston_get_evidence',
   'preston_get_artifact',
+  'preston_poll_events',
 ] as const;
 
 function result(payload: unknown) {
@@ -165,6 +168,20 @@ export function buildPrestonControlServer(ctx: ToolContext): McpServer {
     inputSchema: GET_ARTIFACT_SHAPE,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async (args) => result(await prestonGetArtifact(ctx, args.artifact_id)));
+
+  server.registerTool('preston_poll_events', {
+    title: 'Poll Preston supervisor events',
+    description:
+      'Read-only supervisor feed: normalized state-transition events (queued, running, completed, ' +
+      'failed, timed_out, dead_lettered, blocked, paused, stopped, approval_required, ' +
+      'kind_not_eligible, task_kind_unresolved, submit_rejected) derived from the Preston SSOT, ' +
+      'cursor-paginated and deduplicated - repeating a cursor returns the identical page and an ' +
+      'advanced cursor never re-emits an event. Submit-time rejections are distinct from runtime ' +
+      'failures (goal_id null = never entered the runtime). Observability only: recovery actions ' +
+      'still go through preston_submit_goal and the approval gates.',
+    inputSchema: POLL_EVENTS_SHAPE,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, async (args) => result(await prestonPollEvents(ctx, args)));
 
   return server;
 }
