@@ -82,9 +82,21 @@ export function preflight(cfg, env) {
   const url = lc(env['SUPABASE_URL']);
   const pubUrl = lc(env['NEXT_PUBLIC_SUPABASE_URL']);
   if (isClone) {
+    // An origin project ref must not appear in ANY environment value, not
+    // only the two Supabase URL vars - a ref embedded in an OAuth redirect
+    // URI, callback, or any other URL-bearing value is refused too (live
+    // clone-proof hardening 2026-08-27: the runtime ORCH_FOREIGN_PROJECT_REFS
+    // gate blocks this at execution time, and the preflight now catches it
+    // pre-deploy across the whole env surface).
     for (const ref of ORIGIN_IDENTIFIERS.project_refs) {
-      for (const [name, v] of [['SUPABASE_URL', url], ['NEXT_PUBLIC_SUPABASE_URL', pubUrl]]) {
-        if (v.includes(ref)) block(`${name} points at an ORIGIN project ('${ref}') - refused`);
+      for (const [name, v] of Object.entries(env)) {
+        // ORCH_FOREIGN_PROJECT_REFS is the denylist itself: it is REQUIRED
+        // to name the origin refs so the runtime refuses them. Every other
+        // env value naming an origin ref is a misconfiguration.
+        if (name === 'ORCH_FOREIGN_PROJECT_REFS') continue;
+        if (lc(v).includes(ref)) {
+          block(`${name} contains an ORIGIN project ref ('${ref}') - refused`);
+        }
       }
     }
     for (const d of ORIGIN_IDENTIFIERS.domains) {
