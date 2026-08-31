@@ -102,9 +102,37 @@ export function encodeCursor(e: SupervisorEvent): string {
   return `v1:${ms(e.occurred_at)}:${e.event_id}`;
 }
 
+// Lifecycle rank for same-millisecond ordering (defect SB-1, staging drill
+// 2026-08-31): the runtime worker stamps every write of one oneshot cycle
+// with a single nowIso, so a job that leases AND completes inside one cycle
+// carries the SAME updated_at for its running and terminal states (live
+// example: job 0c87b3e5-... running and completed both at ...37.505Z). A
+// purely lexicographic tie-break then hides the terminal event from any
+// cursor advanced past the running event ('completed' < 'in_progress'), and
+// the supervisor silently loses the completion. Same-ms events are therefore
+// ordered by lifecycle progression, so a later state always sorts AFTER an
+// earlier one and stays visible to an advanced cursor. The rank derives from
+// the state token embedded in the DETERMINISTIC event id, so existing v1
+// cursors remain valid and replays stay exact.
+const STATE_RANK: Record<string, number> = {
+  pending: 0, ready: 0,
+  in_progress: 1, awaiting_approval: 1, blocked: 1, paused: 1, stopped: 1,
+  completed: 2, cancelled: 2, failed: 2, dead_lettered: 2,
+};
+
+function idStateRank(eventId: string): number {
+  const parts = eventId.split(':');
+  if (parts[1] === 'rej') return 1; // no state token; neutral mid rank
+  const state = parts.length >= 2 ? parts[parts.length - 2] : '';
+  return STATE_RANK[state] ?? 1;
+}
+
 function afterCursor(e: SupervisorEvent, c: { msWatermark: number; lastId: string }): boolean {
   const t = ms(e.occurred_at);
   if (t !== c.msWatermark) return t > c.msWatermark;
+  const er = idStateRank(e.event_id);
+  const lr = idStateRank(c.lastId);
+  if (er !== lr) return er > lr;
   return e.event_id > c.lastId;
 }
 
@@ -112,6 +140,8 @@ export function sortEvents(events: SupervisorEvent[]): SupervisorEvent[] {
   return [...events].sort((a, b) => {
     const d = ms(a.occurred_at) - ms(b.occurred_at);
     if (d !== 0) return d;
+    const r = idStateRank(a.event_id) - idStateRank(b.event_id);
+    if (r !== 0) return r;
     return a.event_id < b.event_id ? -1 : a.event_id > b.event_id ? 1 : 0;
   });
 }

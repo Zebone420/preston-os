@@ -315,6 +315,55 @@ describe('preston_poll_events end-to-end (fake DB)', () => {
   });
 });
 
+describe('SB-1 regression: same-millisecond lifecycle transitions stay visible', () => {
+  // Live staging drill 2026-08-31: the oneshot worker stamps lease AND
+  // completion with one cycle timestamp, so running and completed share the
+  // exact updated_at. A cursor advanced past the running event must still
+  // see the terminal event.
+  const TS = '2026-08-31T20:30:37.505Z';
+
+  it('a cursor at the running event still yields the same-ms completed event', () => {
+    const running = normalize({ jobs: [job({ status: 'in_progress', updated_at: TS })] });
+    expect(running.events).toHaveLength(1);
+    const cursor = encodeCursor(running.events[0]);
+
+    // The job completes within the same worker cycle: same updated_at.
+    const done = normalize({ jobs: [job({ status: 'completed', updated_at: TS })] });
+    const page = pageAfterCursor(done.events, decodeCursor(cursor), 50);
+    expect(page.page.map((e) => e.kind)).toEqual(['completed']);
+    expect(page.page[0].event_id.endsWith(`:completed:${Date.parse(TS)}`)).toBe(true);
+  });
+
+  it('same-ms events sort by lifecycle progression, not lexicographically', () => {
+    const pending = normalize({ jobs: [job({ status: 'pending', updated_at: TS })] }).events[0];
+    const runningE = normalize({ jobs: [job({ status: 'in_progress', updated_at: TS })] }).events[0];
+    const doneE = normalize({ jobs: [job({ status: 'completed', updated_at: TS })] }).events[0];
+    const sorted = sortEvents([doneE, pending, runningE]);
+    expect(sorted.map((e) => e.kind)).toEqual(['queued', 'running', 'completed']);
+  });
+
+  it('an advanced cursor never re-emits an earlier same-ms lifecycle state', () => {
+    const doneE = normalize({ jobs: [job({ status: 'completed', updated_at: TS })] }).events[0];
+    const cursor = decodeCursor(encodeCursor(doneE));
+    const runningE = normalize({ jobs: [job({ status: 'in_progress', updated_at: TS })] }).events[0];
+    const page = pageAfterCursor([runningE], cursor, 50);
+    expect(page.page).toHaveLength(0);
+  });
+
+  it('repeating the same cursor still returns an identical page', () => {
+    const events = [
+      normalize({ jobs: [job({ status: 'completed', updated_at: TS })] }).events[0],
+      normalize({ jobs: [job({ id: 'job-sup-0002', status: 'in_progress', updated_at: TS })] }).events[0],
+    ];
+    const sorted = sortEvents(events);
+    const cursor = decodeCursor(`v1:${Date.parse(TS) - 1}:sup:job:job-sup-0000:completed:${Date.parse(TS) - 1}`);
+    const a = pageAfterCursor(sorted, cursor, 50);
+    const b = pageAfterCursor(sorted, cursor, 50);
+    expect(a.page.map((e) => e.event_id)).toEqual(b.page.map((e) => e.event_id));
+    expect(a.next_cursor).toBe(b.next_cursor);
+  });
+});
+
 describe('surface registration (deliberate 11th operation)', () => {
   it('preston_poll_events is registered on the MCP catalogue (11 tools)', () => {
     expect(TOOL_NAMES).toContain('preston_poll_events');
