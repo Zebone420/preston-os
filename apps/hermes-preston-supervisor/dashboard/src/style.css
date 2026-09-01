@@ -1,0 +1,140 @@
+/* Preston Supervisor - plugin styles. Leans on the Hermes dashboard
+   theme variables (shadcn tokens: --color-*, --radius) so the module
+   follows every theme; only status tones carry fixed hues. */
+
+.ps-root { display: flex; flex-direction: column; gap: 1rem; }
+.ps-header { align-items: center; }
+.ps-title { font-size: 1.4rem; font-weight: 600; margin: 0; }
+
+.ps-stack { display: flex; flex-direction: column; gap: 1rem; }
+.ps-stack-sm { display: flex; flex-direction: column; gap: 0.4rem; }
+.ps-row { display: flex; align-items: center; }
+.ps-gap { gap: 0.5rem; }
+.ps-wrap { flex-wrap: wrap; }
+
+.ps-grid-2 { display: grid; gap: 1rem; }
+@media (min-width: 1100px) {
+  .ps-grid-2 { grid-template-columns: 1fr 1fr; }
+}
+
+.ps-section { overflow: hidden; }
+.ps-section-title {
+  display: flex; align-items: center; gap: 0.5rem;
+  flex-wrap: wrap; font-size: 1rem;
+}
+.ps-head-badge { font-weight: 400; }
+
+.ps-metric-grid {
+  display: grid; gap: 0.5rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media (min-width: 900px) {
+  .ps-metric-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+}
+.ps-metric {
+  border: 1px solid var(--color-border, #333);
+  background: var(--color-card, transparent);
+  border-radius: var(--radius, 6px);
+  padding: 0.6rem 0.75rem;
+}
+.ps-metric-label {
+  font-size: 0.65rem; text-transform: uppercase; opacity: 0.7;
+}
+.ps-metric-value { font-size: 1.25rem; font-weight: 600; }
+.ps-unknown { color: #d97706; }
+
+.ps-badge {
+  display: inline-block; padding: 0.05rem 0.45rem;
+  border-radius: var(--radius, 6px); font-size: 0.7rem;
+  border: 1px solid transparent; white-space: nowrap;
+}
+.ps-tone-ok { background: rgba(16, 185, 129, 0.18); color: #10b981; }
+.ps-tone-danger { background: rgba(239, 68, 68, 0.18); color: #ef4444; }
+.ps-tone-warn { background: rgba(217, 119, 6, 0.18); color: #d97706; }
+.ps-tone-info { background: rgba(14, 165, 233, 0.18); color: #0ea5e9; }
+.ps-tone-muted {
+  background: var(--color-muted, rgba(120, 120, 120, 0.15));
+  color: var(--color-muted-foreground, inherit);
+}
+.ps-tone-approval {
+  background: rgba(147, 51, 234, 0.18); color: #a855f7;
+}
+.ps-tone-intake {
+  background: rgba(217, 70, 239, 0.15); color: #d946ef;
+}
+
+.ps-kv-grid {
+  display: grid; gap: 0.25rem 1.5rem; margin-top: 0.5rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  font-size: 0.75rem;
+}
+@media (min-width: 900px) {
+  .ps-kv-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+.ps-kv { display: flex; flex-direction: column; }
+.ps-kv-label { opacity: 0.6; }
+.ps-kv-value { font-family: ui-monospace, monospace; word-break: break-all; }
+
+.ps-table-wrap { overflow-x: auto; }
+.ps-table {
+  width: 100%; border-collapse: collapse; font-size: 0.8rem;
+  text-align: left;
+}
+.ps-table th {
+  font-weight: 400; opacity: 0.65; padding: 0.25rem 0.75rem 0.25rem 0;
+}
+.ps-table td {
+  border-top: 1px solid var(--color-border, #333);
+  padding: 0.3rem 0.75rem 0.3rem 0; vertical-align: top;
+}
+
+.ps-feed {
+  max-height: 24rem; overflow-y: auto; display: flex;
+  flex-direction: column;
+}
+.ps-feed-row {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  border-top: 1px solid var(--color-border, #333);
+  padding: 0.3rem 0; font-size: 0.8rem;
+}
+.ps-dim { opacity: 0.55; }
+.ps-ts { font-size: 0.7rem; opacity: 0.6; }
+.ps-ids { font-family: ui-monospace, monospace; font-size: 0.75rem; }
+.ps-mono { font-family: ui-monospace, monospace; font-size: 0.75rem; }
+.ps-muted { opacity: 0.6; font-size: 0.75rem; }
+.ps-danger { color: #ef4444; font-size: 0.75rem; }
+.ps-body { font-size: 0.85rem; margin: 0.25rem 0; }
+.ps-warn-line { color: #d97706; font-size: 0.8rem; }
+.ps-intake-note { color: #d946ef; font-size: 0.75rem; }
+
+.ps-note {
+  font-size: 0.75rem; opacity: 0.8; margin: 0.25rem 0;
+}
+.ps-note-warn {
+  color: #d97706; opacity: 1;
+  background: rgba(217, 119, 6, 0.08);
+  border-radius: var(--radius, 6px); padding: 0.4rem 0.6rem;
+}
+.ps-note-danger { color: #ef4444; opacity: 1; }
+
+.ps-diagnostics {
+  margin-top: 0.5rem; font-size: 0.7rem; opacity: 0.65;
+  font-family: ui-monospace, monospace;
+}
+
+.ps-link {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: inherit; text-decoration: underline; font: inherit;
+  font-size: 0.8rem;
+}
+.ps-btn {
+  border: 1px solid var(--color-border, #333);
+  background: var(--color-card, transparent); color: inherit;
+  border-radius: var(--radius, 6px); padding: 0.2rem 0.7rem;
+  cursor: pointer; font-size: 0.75rem;
+}
+.ps-btn-warn { border-color: #d97706; color: #d97706; }
+.ps-report {
+  border: 1px solid var(--color-border, #333);
+  border-radius: var(--radius, 6px); padding: 0.6rem;
+}
