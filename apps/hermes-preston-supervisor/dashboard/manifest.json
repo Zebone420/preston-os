@@ -1,0 +1,14 @@
+{
+  "name": "preston-supervisor",
+  "label": "Preston",
+  "description": "Read-only Preston Control supervisor (observation only; no execution, approval, or cancellation authority)",
+  "icon": "Shield",
+  "version": "0.1.0",
+  "tab": {
+    "path": "/preston",
+    "position": "end"
+  },
+  "entry": "dist/index.js",
+  "css": "dist/style.css",
+  "api": "plugin_api.py"
+}
