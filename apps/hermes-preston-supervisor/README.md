@@ -36,13 +36,22 @@ or write. See test/security-boundary.test.ts for the pinned proof.
 
 dist/ is gitignored repo-wide; always build before installing.
 
-## Install into a Hermes dashboard (owner action)
+## Install into a Hermes dashboard (verified live on v0.21.0)
+
+HERMES_HOME on Windows is %LOCALAPPDATA%\hermes (not ~/.hermes).
 
 1. Build (above).
-2. Copy the `dashboard/` directory to the dashboard host as
-   `~/.hermes/plugins/preston-supervisor/dashboard/`.
-3. Restart the dashboard (or GET /api/dashboard/plugins/rescan).
-4. A "Preston" tab appears in the sidebar at /preston.
+2. Copy `plugin.yaml` plus the `dashboard/` directory (manifest,
+   dist/, plugin_api.py, preston_client.py) to
+   `<HERMES_HOME>/plugins/preston-supervisor/`.
+3. Enable the plugin - user plugins are gated off until explicitly
+   activated (Hermes security fix #46435), and the tool-override
+   capability must stay DECLINED:
+       hermes plugins enable preston-supervisor --no-allow-tool-override
+4. Restart the dashboard (`hermes dashboard --stop`, then
+   `hermes dashboard`): plugin API routes mount at boot.
+5. A "Preston" tab appears in the sidebar at /preston; with no link
+   configured it shows the fail-closed PRESTON LINK state.
 
 ## Preston link configuration (owner gate - fail closed)
 

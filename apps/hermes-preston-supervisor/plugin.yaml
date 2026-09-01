@@ -1,0 +1,4 @@
+name: preston-supervisor
+version: 0.1.0
+description: "Preston Supervisor - read-only Preston Control observation dashboard tab. Dashboard-only plugin: no gateway hooks, no agent tools, no tool overrides. All authority stays with Preston Control."
+author: "Preston OS (owner-gated build)"
