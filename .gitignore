@@ -55,3 +55,4 @@ cookies*.txt
 headers*.txt
 har-capture*
 *.har
+__pycache__/
