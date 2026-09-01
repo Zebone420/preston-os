@@ -30,6 +30,9 @@ export type NavEntry = NavLink | NavGroup;
 
 export const NAV_TREE: ReadonlyArray<NavEntry> = [
   { kind: 'link', href: '/', label: 'Home', match: 'exact' },
+  // Hermes = the read-only supervisor dashboard above Preston Control
+  // (v0: observation only; detail pages are non-nav subviews).
+  { kind: 'link', href: '/hermes', label: 'Hermes', match: 'prefix' },
   {
     kind: 'group',
     label: 'Work',
@@ -137,6 +140,9 @@ export const NON_NAV_ROUTES: ReadonlyArray<string> = [
   '/login', // owner-gate surface; nav is hidden there anyway
   '/business/quotes/[id]', // detail subview of Quotes
   '/oauth/consent', // Preston Control OAuth consent; reached only via the OAuth server redirect
+  '/hermes/goals/[goal_id]', // detail subview of Hermes
+  '/hermes/jobs/[job_id]', // detail subview of Hermes
+  '/hermes/artifacts/[artifact_id]', // detail subview of Hermes
 ];
 
 export function isItemActive(pathname: string, item: NavItem): boolean {
