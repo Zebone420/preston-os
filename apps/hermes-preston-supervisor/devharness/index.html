@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Preston Supervisor - DEV HARNESS (mock Hermes shell)</title>
+<link rel="stylesheet" href="../dashboard/dist/style.css">
+<style>
+  :root {
+    --color-border: #2a2f3a; --color-card: #141821;
+    --color-muted: rgba(148, 163, 184, 0.15);
+    --color-muted-foreground: #94a3b8; --radius: 8px;
+  }
+  body {
+    margin: 0; background: #0b0e14; color: #e2e8f0;
+    font-family: system-ui, sans-serif; display: flex; min-height: 100vh;
+  }
+  aside {
+    width: 200px; border-right: 1px solid var(--color-border);
+    padding: 1rem; font-size: 0.85rem; flex-shrink: 0;
+  }
+  aside .brand { font-weight: 700; margin-bottom: 1rem; }
+  aside .item { padding: 0.35rem 0.5rem; opacity: 0.55; }
+  aside .item.active {
+    opacity: 1; background: var(--color-card);
+    border-radius: var(--radius); border: 1px solid var(--color-border);
+  }
+  main { flex: 1; padding: 1.25rem; min-width: 0; }
+  .harness-banner {
+    background: rgba(217, 119, 6, 0.15); color: #d97706;
+    border: 1px solid #d97706; border-radius: var(--radius);
+    padding: 0.4rem 0.8rem; font-size: 0.75rem; margin-bottom: 1rem;
+  }
+  .hx-card {
+    border: 1px solid var(--color-border); background: var(--color-card);
+    border-radius: var(--radius); padding: 0.9rem; margin: 0;
+  }
+  .hx-card-title { font-weight: 600; margin-bottom: 0.4rem; }
+  .hx-badge {
+    display: inline-block; border: 1px solid var(--color-border);
+    border-radius: var(--radius); padding: 0.05rem 0.5rem;
+    font-size: 0.7rem; margin-left: 0.4rem;
+  }
+</style>
+</head>
+<body>
+<aside>
+  <div class="brand">MOCK HERMES SHELL</div>
+  <div class="item">Status</div>
+  <div class="item">Chat</div>
+  <div class="item">Sessions</div>
+  <div class="item">Logs</div>
+  <div class="item">Analytics</div>
+  <div class="item active">Preston</div>
+  <div class="item">Config</div>
+  <div class="item">System</div>
+</aside>
+<main>
+  <div class="harness-banner">
+    DEV HARNESS - mock SDK + recorded staging fixtures. This is NOT a
+    Hermes install and NOT live Preston data.
+    <span id="harness-state">loading...</span>
+  </div>
+  <div id="plugin-root"></div>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="fixtures.js"></script>
+<script src="harness.js"></script>
+<script src="../dashboard/dist/index.js"></script>
+</body>
+</html>
