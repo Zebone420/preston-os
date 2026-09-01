@@ -15,6 +15,7 @@ import {
   authenticateControlRequest,
   type AuthResult,
   type ControlClient,
+  type ControlSurface,
 } from './auth';
 import { protectedResourceMetadataUrl } from './metadata';
 import type { ToolContext } from './tools';
@@ -22,6 +23,14 @@ import type { ComposerClient } from '@/lib/ai-os/orchestration/composer-persist'
 
 export const CONTROL_API_PREFIX = '/api/control';
 const MAX_BODY_BYTES = 16 * 1024;
+
+// Surfaces accepted by the READ-ONLY operations (status, get_goal,
+// get_job, list_approvals, poll_events, get_evidence, get_artifact).
+// The 'hermes' dashboard surface appears HERE and nowhere else: the
+// write/consequential routes (submit, follow-up, decision, cancel) keep
+// the default ['gpt'], so a hermes-client token is wrong_client there by
+// construction. Pinned in preston-control-hermes-surface.test.ts.
+export const READ_SURFACES: readonly ControlSurface[] = ['gpt', 'hermes'];
 
 export function clientFor(token: string): ControlClient | null {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -53,6 +62,9 @@ interface RouteOpts<I> {
   source: 'body' | 'query' | 'none';
   // Extra values merged before validation (e.g. a path parameter).
   pathParams?: Record<string, string>;
+  // OAuth surfaces this route accepts (default: the GPT Actions surface
+  // only). Read routes pass READ_SURFACES; consequential routes never do.
+  surfaces?: readonly ControlSurface[];
 }
 
 function tooLarge(request: Request): boolean {
@@ -70,7 +82,8 @@ export async function controlRoute<I>(request: Request, opts: RouteOpts<I>): Pro
   }
 
   const auth = await authenticateControlRequest(
-    request.headers.get('authorization'), env, { clientFor }, 'gpt',
+    request.headers.get('authorization'), env, { clientFor },
+    opts.surfaces ?? ['gpt'],
   );
   if (!auth.ok) return deniedResponse(auth, request);
 

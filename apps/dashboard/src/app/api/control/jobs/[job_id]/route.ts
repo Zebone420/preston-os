@@ -1,4 +1,4 @@
-import { controlRoute } from '@/lib/preston-control/http';
+import { controlRoute, READ_SURFACES } from '@/lib/preston-control/http';
 import { GetJobSchema } from '@/lib/preston-control/schemas';
 import { prestonGetJob } from '@/lib/preston-control/tools';
 
@@ -11,6 +11,7 @@ export async function GET(
 ) {
   const { job_id } = await params;
   return controlRoute(request, {
+    surfaces: READ_SURFACES,
     source: 'none',
     schema: GetJobSchema,
     pathParams: { job_id },

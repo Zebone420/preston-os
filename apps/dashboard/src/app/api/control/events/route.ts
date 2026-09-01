@@ -1,4 +1,4 @@
-import { controlRoute } from '@/lib/preston-control/http';
+import { controlRoute, READ_SURFACES } from '@/lib/preston-control/http';
 import { PollEventsQuerySchema } from '@/lib/preston-control/schemas';
 import { prestonPollEvents } from '@/lib/preston-control/tools';
 
@@ -10,6 +10,7 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
   return controlRoute(request, {
+    surfaces: READ_SURFACES,
     source: 'query',
     schema: PollEventsQuerySchema,
     handler: (ctx, input) => prestonPollEvents(ctx, input),
