@@ -8,6 +8,7 @@ import {
   registeredClientIds,
   type ControlClient,
 } from '../src/lib/preston-control/auth';
+import { evaluateConsent } from '../src/lib/preston-control/consent';
 import { READ_SURFACES } from '../src/lib/preston-control/http';
 
 // Preston Control 'hermes' auth surface - the Hermes dashboard Preston
@@ -364,5 +365,73 @@ describe('hermes surface - route source pins', () => {
 
   it('READ_SURFACES is exactly gpt + hermes', () => {
     expect([...READ_SURFACES].sort()).toEqual(['gpt', 'hermes']);
+  });
+});
+
+// --- consent gate: the hermes client must reach the consent screen ----------
+// Regression for the staging bootstrap failure "Consent refused:
+// client_not_allowed": evaluateConsent admits exactly the env-registered
+// clients, so the hermes client is consentable IFF its env is configured on
+// the deployment that actually serves /oauth/consent (the auth server's
+// Site URL must point at that deployment - a config fact, pinned in the
+// gate report; this block pins the code side).
+
+function consentDetails(clientId: string) {
+  return {
+    authorization_id: 'auth-req-12345678',
+    client: { id: clientId, name: 'Preston Control — Hermes Staging' },
+    scope: 'email',
+    user: { id: 'u-owner', email: OWNER },
+  };
+}
+
+describe('hermes surface - consent gate', () => {
+  const CONSENT_ENV = { ...ENV_ON };
+
+  it('the configured hermes client reaches consent', () => {
+    const gate = evaluateConsent(consentDetails(HERMES_ID), OWNER, CONSENT_ENV);
+    expect(gate).toEqual({ ok: true, scopes: ['email'] });
+  });
+
+  it('an unconfigured hermes client fails closed as client_not_allowed', () => {
+    const env = { ...CONSENT_ENV, PRESTON_CONTROL_HERMES_OAUTH_CLIENT_ID: '' };
+    expect(evaluateConsent(consentDetails(HERMES_ID), OWNER, env))
+      .toEqual({ ok: false, reason: 'client_not_allowed' });
+  });
+
+  it('a wrong hermes client id fails with client_not_allowed', () => {
+    expect(
+      evaluateConsent(
+        consentDetails('deadbeef-0000-4000-8000-000000000000'), OWNER, CONSENT_ENV,
+      ),
+    ).toEqual({ ok: false, reason: 'client_not_allowed' });
+  });
+
+  it('gpt and mcp clients still reach consent unchanged', () => {
+    expect(evaluateConsent(consentDetails(GPT_ID), OWNER, CONSENT_ENV).ok).toBe(true);
+    expect(evaluateConsent(consentDetails(MCP_ID), OWNER, CONSENT_ENV).ok).toBe(true);
+  });
+
+  it('no client configured at all is unconfigured, never allowed', () => {
+    const env = {
+      ...CONSENT_ENV,
+      PRESTON_CONTROL_OAUTH_CLIENT_ID: '',
+      PRESTON_CONTROL_GPT_OAUTH_CLIENT_ID: '',
+      PRESTON_CONTROL_HERMES_OAUTH_CLIENT_ID: '',
+    };
+    expect(evaluateConsent(consentDetails(HERMES_ID), OWNER, env))
+      .toEqual({ ok: false, reason: 'unconfigured' });
+  });
+
+  it('a non-owner session can never consent for the hermes client', () => {
+    expect(
+      evaluateConsent(consentDetails(HERMES_ID), 'guest@example.com', CONSENT_ENV),
+    ).toEqual({ ok: false, reason: 'user_not_owner' });
+  });
+
+  it('consent scope stays inside the allowlist for the hermes client', () => {
+    const details = { ...consentDetails(HERMES_ID), scope: 'email admin' };
+    expect(evaluateConsent(details, OWNER, CONSENT_ENV))
+      .toEqual({ ok: false, reason: 'scope_not_allowed' });
   });
 });

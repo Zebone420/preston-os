@@ -55,18 +55,36 @@ HERMES_HOME on Windows is %LOCALAPPDATA%\hermes (not ~/.hermes).
 
 ## Preston link configuration (owner gate - fail closed)
 
-The plugin backend reads two environment values on the DASHBOARD
-SERVER (never the browser):
+The plugin backend reads its configuration on the DASHBOARD SERVER
+only (never the browser). Preston Control authenticates three
+per-surface OAuth clients (mcp, gpt, hermes); the dedicated 'hermes'
+confidential client is valid for the seven read routes ONLY and is
+revocable independently of the other surfaces.
 
-    HERMES_PRESTON_CONTROL_URL     e.g. the staging origin (https)
-    HERMES_PRESTON_CONTROL_TOKEN   bearer accepted by Preston Control
+Environment (names only; values are owner-held, staging first):
 
-Until both are set, every surface shows a FAIL CLOSED "link not
-configured" state. Note: Preston Control currently authenticates two
-OAuth surfaces (mcp, gpt). A dedicated 'hermes' surface (own Supabase
-OAuth client, revocable independently) is the designed owner gate -
-see reports/HERMES_NATIVE_PORT_MATRIX_v1.md section E. This plugin
-mints nothing and ships no credential.
+    HERMES_PRESTON_CONTROL_URL          staging origin (https)
+    HERMES_PRESTON_OAUTH_TOKEN_URL      auth-server OAuth token URL
+                                        (https, ends /oauth/token)
+    HERMES_PRESTON_OAUTH_CLIENT_ID      hermes client id (non-secret)
+    HERMES_PRESTON_OAUTH_CLIENT_SECRET  hermes client secret
+    HERMES_PRESTON_TOKEN_STORE          path of the refresh-token
+                                        store file (service-account
+                                        readable only)
+
+Durable auth = dashboard/token_client.py: cached access token reused
+until near expiry, then a refresh_token grant (client_secret_basic)
+whose ROTATED refresh token is persisted atomically before use. No
+static long-lived bearer path exists. Any missing/invalid piece
+fails closed to static error tags.
+
+One-time seeding: the owner runs `python tools/link_bootstrap.py`
+(authorization-code + PKCE, loopback redirect on 127.0.0.1), signs in
+as the owner, approves consent; the script writes the store and
+prints only the store path - never a token.
+
+Until configured AND seeded, every surface shows the FAIL CLOSED
+"link not configured" state. This plugin ships no credential.
 
 ## Dev harness (no Hermes install required)
 

@@ -10,18 +10,20 @@ test_preston_client.py):
   - GET only; no write/consequential Preston operation is reachable.
   - Fail closed: missing configuration means 'link not configured',
     never a guess, never a fallback credential.
-  - The bearer token lives ONLY in the dashboard server process env
-    (HERMES_PRESTON_CONTROL_TOKEN); it is never echoed into any
-    response, log, or error, and never reaches the browser.
+  - The bearer is resolved SERVER SIDE per request by token_client
+    (dedicated 'hermes' OAuth client, refresh-token store, rotation
+    captured); there is NO static long-lived bearer path. No token
+    is ever echoed into any response, log, or error, and none ever
+    reaches the browser.
   - No direct database access, no shell, no process spawning of any
     kind. Standard library HTTP only.
   - Signed artifact URLs pass through to the caller and are never
     cached or persisted here.
 
-Machine-to-machine auth NOTE: Preston Control accepts per-surface
-OAuth clients ('mcp', 'gpt'). A dedicated 'hermes' surface is a later
-owner gate (see reports/HERMES_NATIVE_PORT_MATRIX_v1.md section E).
-This client only CARRIES an owner-provided bearer; it mints nothing.
+Machine-to-machine auth: Preston Control accepts three per-surface
+OAuth clients ('mcp', 'gpt', 'hermes'); the 'hermes' client is valid
+for the seven read routes ONLY, so even this process's own bearer
+carries no write authority (auth.ts + http.ts READ_SURFACES).
 """
 
 import json
@@ -31,8 +33,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import token_client
+
 ENV_URL = "HERMES_PRESTON_CONTROL_URL"
-ENV_TOKEN = "HERMES_PRESTON_CONTROL_TOKEN"
 
 TIMEOUT_SECONDS = 15
 MAX_RESPONSE_BYTES = 512 * 1024
@@ -72,20 +75,19 @@ ALLOWED_QUERY = {
 def read_config(env=None):
     env = os.environ if env is None else env
     url = str(env.get(ENV_URL, "") or "").strip().rstrip("/")
-    token = str(env.get(ENV_TOKEN, "") or "").strip()
     ok_url = url.startswith("https://") or url.startswith(
         "http://127.0.0.1"
     ) or url.startswith("http://localhost")
+    oauth = token_client.read_oauth_config(env)
     return {
         "url": url if ok_url else "",
-        "token": token,
-        "configured": bool(ok_url and url and token),
+        "configured": bool(ok_url and url and oauth["configured"]),
     }
 
 
 def link_state(env=None):
-    """Secret-free link descriptor for the UI. Never includes the
-    token or any part of it."""
+    """Secret-free link descriptor for the UI. Never includes any
+    token or any part of one."""
     cfg = read_config(env)
     host = ""
     if cfg["url"]:
@@ -93,7 +95,11 @@ def link_state(env=None):
             host = urllib.parse.urlsplit(cfg["url"]).netloc
         except ValueError:
             host = ""
-    return {"configured": cfg["configured"], "host": host}
+    return {
+        "configured": cfg["configured"],
+        "host": host,
+        "store": token_client.store_state(env),
+    }
 
 
 def build_url(base, op, path_params, query):
@@ -129,9 +135,10 @@ def build_url(base, op, path_params, query):
     return base + path + ("?" + qs if qs else "")
 
 
-def fetch_op(op, path_params=None, query=None, env=None, opener=None):
+def fetch_op(op, path_params=None, query=None, env=None, opener=None,
+             token_resolver=None):
     """Perform one allowed Preston Control read. Returns a JSON-safe
-    dict; never raises to the route layer; never leaks the token."""
+    dict; never raises to the route layer; never leaks any token."""
     cfg = read_config(env)
     if not cfg["configured"]:
         return {
@@ -145,43 +152,70 @@ def fetch_op(op, path_params=None, query=None, env=None, opener=None):
         # exc carries only our own static tags (see build_url).
         return {"linked": True, "ok": False, "error": str(exc)}
 
-    request = urllib.request.Request(
-        url,
-        method="GET",
-        headers={
-            "Authorization": "Bearer " + cfg["token"],
-            "Accept": "application/json",
-        },
+    def default_resolver(force=False):
+        return token_client.resolve_access_token(
+            env=env, force_refresh=force
+        )
+
+    resolver = (
+        token_resolver if token_resolver is not None else default_resolver
     )
     open_fn = opener if opener is not None else urllib.request.urlopen
-    try:
-        with open_fn(request, timeout=TIMEOUT_SECONDS) as response:
-            raw = response.read(MAX_RESPONSE_BYTES + 1)
-            status = getattr(response, "status", 200)
-    except urllib.error.HTTPError as exc:
-        status = exc.code
+    forced = False
+    while True:
         try:
-            raw = exc.read(MAX_RESPONSE_BYTES + 1)
+            token = resolver(force=forced)
+        except token_client.TokenError as exc:
+            # Static tag from token_client; fail closed, no fallback.
+            return {"linked": True, "ok": False, "error": exc.tag}
+        request = urllib.request.Request(
+            url,
+            method="GET",
+            headers={
+                "Authorization": "Bearer " + token,
+                "Accept": "application/json",
+            },
+        )
+        try:
+            with open_fn(request, timeout=TIMEOUT_SECONDS) as response:
+                raw = response.read(MAX_RESPONSE_BYTES + 1)
+                status = getattr(response, "status", 200)
+            break
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+            if status == 401 and not forced:
+                # One forced refresh covers an access token revoked or
+                # rotated away inside its reuse window; a second 401
+                # fails closed below - never more than one retry.
+                forced = True
+                continue
+            try:
+                raw = exc.read(MAX_RESPONSE_BYTES + 1)
+            except Exception:
+                raw = b""
+            if status in (401, 403):
+                return {
+                    "linked": True,
+                    "ok": False,
+                    "error": "preston_auth_failed",
+                    "status": status,
+                }
+            if status == 503:
+                return {
+                    "linked": True,
+                    "ok": False,
+                    "error": "preston_control_disabled",
+                    "status": status,
+                }
+            break
         except Exception:
-            raw = b""
-        if status in (401, 403):
+            # Network/timeout class. Static tag only - exception text
+            # can embed the URL, which is config, not for the browser.
             return {
                 "linked": True,
                 "ok": False,
-                "error": "preston_auth_failed",
-                "status": status,
+                "error": "preston_unreachable",
             }
-        if status == 503:
-            return {
-                "linked": True,
-                "ok": False,
-                "error": "preston_control_disabled",
-                "status": status,
-            }
-    except Exception:
-        # Network/timeout class. Static tag only - exception text can
-        # embed the URL, which is configuration, not for the browser.
-        return {"linked": True, "ok": False, "error": "preston_unreachable"}
 
     if len(raw) > MAX_RESPONSE_BYTES:
         return {"linked": True, "ok": False, "error": "response_too_large"}
