@@ -88,6 +88,22 @@ describe('migration 0037 - safe Phase 5 hardening', () => {
     expect(sql).toMatch(/old\.status = 'submitted' and new\.status = 'approved'/);
     expect(sql).toMatch(/new\.approved_by is distinct from auth\.uid\(\)::text/);
     expect(sql).toMatch(/before update on public\.final_measurements/);
+    expect(sql).toMatch(/select c\.signed_at into contract_signed_at[\s\S]*c\.id = new\.contract_id[\s\S]*c\.project_id = new\.project_id[\s\S]*c\.state = 'completed'[\s\S]*c\.provider_event_verified = true/);
+    expect(sql).toContain("contract_signed_at at time zone 'UTC'");
+    expect(sql).toContain('while business_days < 3 loop');
+    expect(sql).toMatch(/extract\(isodow from earliest_measure_utc\) < 6/);
+    expect(sql).toContain("earliest_measure_utc + interval '1 day'");
+    expect(sql).toMatch(
+      /new\.measured_at < earliest_measure_utc at time zone 'UTC'/);
+  });
+
+  it('freezes approved template versions while permitting deactivation', () => {
+    for (const field of ['name', 'version', 'sha256', 'document_id',
+      'required_forms', 'approved_by', 'approved_at', 'created_at']) {
+      expect(sql).toMatch(new RegExp(`new\\.${field} is distinct from old\\.${field}`));
+    }
+    expect(sql).toContain('(not old.is_current and new.is_current)');
+    expect(sql).toContain('approved template version is immutable');
   });
 
   it('requires bound PO integrity and evidence for every new approved row', () => {
@@ -113,6 +129,11 @@ describe('migration 0037 - safe Phase 5 hardening', () => {
     expect(sql).toMatch(/e\.payload ->> 'provider_envelope_id' = new\.provider_envelope_id/);
     expect(sql).toMatch(/before update on public\.contracts/);
     expect(sql).toMatch(/old\.state = 'completed' and new\.state = 'superseded'[\s\S]*new\.signed_at is not distinct from old\.signed_at/);
+    expect(sql).toMatch(
+      /new\.state in \('sent','viewed','completed'\) and not exists \([\s\S]*contract_templates t/);
+    expect(sql).toMatch(/t\.is_current = true[\s\S]*t\.approved_by is not null[\s\S]*t\.approved_at is not null/);
+    expect(sql).toMatch(/t\.sha256 = new\.template_sha256/);
+    expect(sql).toMatch(/t\.required_forms <@ new\.included_forms/);
   });
 
   it('has a bounded rollback that restores all replaced 0032 policies', () => {

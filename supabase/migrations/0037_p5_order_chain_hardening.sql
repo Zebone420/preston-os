@@ -47,6 +47,17 @@ begin
   ) then
     raise exception 'invalid contract state transition';
   end if;
+  if new.state in ('sent','viewed','completed') and not exists (
+    select 1 from public.contract_templates t
+    where t.id = new.template_id
+      and t.is_current = true
+      and t.approved_by is not null
+      and t.approved_at is not null
+      and t.sha256 = new.template_sha256
+      and t.required_forms <@ new.included_forms
+  ) then
+    raise exception 'current approved template and required forms are required';
+  end if;
   if new.state = 'completed' and not exists (
     select 1 from public.contract_provider_events e
     where e.contract_id = old.id
@@ -87,6 +98,19 @@ begin
     ) then
       raise exception 'template approval attribution mismatch';
     end if;
+  elsif old.is_current or old.approved_by is not null or
+        old.approved_at is not null then
+    if new.name is distinct from old.name or
+       new.version is distinct from old.version or
+       new.sha256 is distinct from old.sha256 or
+       new.document_id is distinct from old.document_id or
+       new.required_forms is distinct from old.required_forms or
+       new.approved_by is distinct from old.approved_by or
+       new.approved_at is distinct from old.approved_at or
+       new.created_at is distinct from old.created_at or
+       (not old.is_current and new.is_current) then
+      raise exception 'approved template version is immutable';
+    end if;
   elsif (new.is_current is distinct from old.is_current or
          new.approved_by is distinct from old.approved_by or
          new.approved_at is distinct from old.approved_at) and
@@ -111,6 +135,10 @@ returns trigger
 language plpgsql
 set search_path = public
 as $$
+declare
+  contract_signed_at timestamptz;
+  earliest_measure_utc timestamp without time zone;
+  business_days integer := 0;
 begin
   if new.project_id is distinct from old.project_id or
      new.contract_id is distinct from old.contract_id or
@@ -136,6 +164,27 @@ begin
       new.approved_at is null
   ) then
     raise exception 'measurement approval attribution mismatch';
+  end if;
+  if old.status = 'submitted' and new.status = 'approved' then
+    select c.signed_at into contract_signed_at
+    from public.contracts c
+    where c.id = new.contract_id
+      and c.project_id = new.project_id
+      and c.state = 'completed'
+      and c.provider_event_verified = true;
+    if contract_signed_at is null then
+      raise exception 'authoritative signed contract required';
+    end if;
+    earliest_measure_utc := contract_signed_at at time zone 'UTC';
+    while business_days < 3 loop
+      earliest_measure_utc := earliest_measure_utc + interval '1 day';
+      if extract(isodow from earliest_measure_utc) < 6 then
+        business_days := business_days + 1;
+      end if;
+    end loop;
+    if new.measured_at < earliest_measure_utc at time zone 'UTC' then
+      raise exception 'final measurement is earlier than three business days';
+    end if;
   end if;
   if new.status <> 'approved' and
      (new.approved_by is not null or new.approved_at is not null) and not (
