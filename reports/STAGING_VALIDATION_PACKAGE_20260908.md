@@ -6,8 +6,8 @@ project only. Host SSH steps are owner-run or agent-run inside an
 explicit owner-approved window (memory rule). Nothing here touches
 production. No live email/SMS/calendar/Drive writes exist in this build.
 
-Source under test: feature/hermes-native at the P0 repair series
-599b869..b15f1a3 (plus whatever Phase 1+ commits follow it). The
+Source under test: feature/hermes-native at implementation revision
+0726b1d (including P0 repair series 599b869..b15f1a3). The
 deployed orchestrator executes dist/, so step S0 (rebuild) is mandatory
 before any runtime proof.
 
@@ -115,13 +115,27 @@ the timeout path is exercised (set ORCH_REAL_TIMEOUT_MS low on a drill).
 Expected: evidence file `reports/p0_evidence/restore_drill_evidence_*.txt`
 with verdict PASS and restored_public_tables >= toc_tables.
 
-## S9. Connector freshness / M9 live read
+## S9. ConnectorPassport freshness / M9 readiness
 
-No ConnectorPassport or M8/M9 artifacts exist in the repository or the
-owner's documents (searched 2026-09-08). The Hermes plugin's live-read
-link (token store rotation + fail-closed `token_store_missing`) is the
-freshness surface that exists; re-run its drill (rename store -> zero
-data, zero notifications; restore -> live) after S0.
+1. Owner verifies the staging migration ledger, applies any unapplied
+   migrations 0028-0035 in numeric order, then applies 0036 to STAGING only;
+   verify `connector_passports` and `soft_launch_assessments` have RLS.
+2. Run `connector-passport.test.ts`,
+   `connector-passport-migration-0036.test.ts`, and
+   `soft-launch-readiness.test.ts` at the deployed revision.
+3. Exercise each enabled sandbox capability through the executor and verify
+   a missing, stale, wrong-environment, wrong-mode, revoked, or scope-missing
+   passport refuses before the side-effect ledger or adapter is touched.
+4. Persist an M9 assessment only after S1-S8 evidence is linked. Until S3,
+   S7, and S8 have live evidence, the expected status is
+   `REPOSITORY_READY`, `staging_ready=false`, `production_ready=false`.
+5. Re-run the Hermes token-store drill (rename store -> zero data and zero
+   notifications; restore -> live) and read each owner view through the
+   `preston_owner_view` / `/api/control/owner-view` read surface.
+
+Expected: every connector refusal has a static reason; no ledger row or
+provider call occurs on refusal; every assessment carries evidence refs;
+the database constraint makes `production_ready=true` impossible.
 
 ## S10. Draft-only behavior (Phase 3)
 
