@@ -425,6 +425,16 @@ export function composeRequest(raw: unknown): ComposeOutcome {
       const distinctKnownRoles = new Set(
         allRoleRefs.map((m) => m[1].toLowerCase()).filter((name) => KNOWN_ROLES.has(name)),
       );
+      // Conjunction form ("using claude and codex", "codex/claude"): two known
+      // roles joined directly, which the keyword regex above sees as one.
+      // Only role-name pairs count, so prose ABOUT a provider ("the codex
+      // adapter ... using claude") is not a conflict.
+      for (const m of item.matchAll(
+        /\b(claude|codex|audit)\s*(?:,|\/|\band\b|\bor\b)\s*(?:agent\s+)?(claude|codex|audit)\b/gi,
+      )) {
+        distinctKnownRoles.add(m[1].toLowerCase());
+        distinctKnownRoles.add(m[2].toLowerCase());
+      }
       if (distinctKnownRoles.size > 1) {
         errors.push(`conflicting_agent_reference:${localId}:${[...distinctKnownRoles].sort().join(',')}`);
         return;
