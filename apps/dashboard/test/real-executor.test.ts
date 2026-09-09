@@ -130,6 +130,9 @@ const claudeOk = async () => ({
 const seams = {
   fileExists: () => true,
   realpath: (p: string) => p,
+  // Durable patch writer seam (defect C): these suites pin executor
+  // behavior, not host writes - the dedicated patch suite asserts writes.
+  writePatchFile: () => {},
 };
 
 describe('buildRealExecutor - composition gate', () => {
@@ -220,11 +223,13 @@ describe('buildRealExecutor - the real bounded run', () => {
     expect(r!.executed).toBe(true);
     expect(r!.evidence_refs.join()).toContain('executed:true');
     expect(r!.evidence_refs.join()).toContain('paths_ok');
-    // worktree lifecycle: add -> status -> diff (PF1) -> remove
+    // worktree lifecycle: add -> status -> diff (PF1) -> patch export
+    // (defect C: the unified diff is read BEFORE the worktree goes) -> remove
     const ops = git.calls.map((a) => a.includes('add') ? 'add'
       : a.includes('status') ? 'status'
+      : a.includes('--binary') ? 'patch'
       : a.includes('diff') ? 'diff' : 'remove');
-    expect(ops).toEqual(['add', 'status', 'diff', 'remove']);
+    expect(ops).toEqual(['add', 'status', 'diff', 'patch', 'remove']);
     const addArgs = git.calls[0];
     expect(addArgs.join(' ')).toContain('/srv/worktrees/wt-job-real-0001');
     expect(addArgs.join(' ')).toContain(BASE);

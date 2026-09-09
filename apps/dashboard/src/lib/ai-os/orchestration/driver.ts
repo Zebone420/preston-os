@@ -84,6 +84,16 @@ export interface RealExecutionResult {
     // successful work (never silently lost - master goal section 6).
     artifact_refs?: string[];
     artifact_unrecorded?: boolean;
+    // Durable patch preservation (P0 defect C, 2026-09-08, additive): the
+    // whole-run unified diff the executor wrote to the host patch directory
+    // before worktree cleanup (ref + sha256 + bytes + path), or the
+    // explicit unrecorded condition with its static reason.
+    patch_ref?: string;
+    patch_sha256?: string;
+    patch_bytes?: number;
+    patch_path?: string;
+    patch_unrecorded?: boolean;
+    patch_unrecorded_reason?: string;
   };
   // Fast-track Phase E telemetry (optional, additive): the model the routing
   // table requested for this run, why, and the real process duration.
@@ -706,6 +716,13 @@ export async function driverStep(
               // durably persisted, and the explicit unrecorded condition.
               artifact_refs: (real?.report?.artifact_refs ?? []).slice(0, 10),
               artifact_unrecorded: real?.report?.artifact_unrecorded === true,
+              // Durable patch preservation (P0 defect C, additive): the
+              // whole-run patch reference + hash the executor wrote to the
+              // host patch directory before worktree cleanup, and the
+              // explicit unrecorded condition when it could not.
+              patch_ref: typeof real?.report?.patch_ref === 'string' ? real.report.patch_ref : null,
+              patch_sha256: typeof real?.report?.patch_sha256 === 'string' ? real.report.patch_sha256 : null,
+              patch_unrecorded: real?.report?.patch_unrecorded === true,
             },
           });
           const rec = await insertEvent(client, ev);

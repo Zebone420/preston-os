@@ -28,10 +28,18 @@
 // exactly the prior behavior. Any other role has no real adapter and declines.
 
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { isAbsolute, resolve as resolvePath, sep } from 'node:path';
+import { createHash } from 'node:crypto';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, isAbsolute, resolve as resolvePath, sep } from 'node:path';
 import type { RuntimeClient } from '../lib/ai-os/store';
 import { readSystemControlsChecked } from '../lib/ai-os/store';
+// Token-SHAPE screen for the durable patch (private-key blocks, JWTs,
+// provider API keys, PATs, bot tokens - the rule set the outbound message
+// scrubber enforces, mirrored under the runtime root). A keyword screen
+// would refuse legitimate source that merely mentions "secret"; a worker
+// edit that carries an actual secret-shaped value is what must never be
+// copied off the worktree.
+import { hasSecretShape as secretShaped } from '../lib/ai-os/secret-shapes';
 import {
   artifactsEnabled,
   bindSupabaseArtifactStorage,
@@ -43,6 +51,7 @@ import {
 } from '../lib/ai-os/execution-capability';
 import {
   auditWorktree,
+  exportWorktreePatch,
   provisionWorktree,
   releaseWorktree,
   type ProvisionOutcome,
@@ -62,6 +71,23 @@ import { readApprovalRecord } from '../lib/ai-os/orchestration/store';
 
 export const GIT_EXECUTABLE_ENV = 'ORCH_GIT_EXECUTABLE';
 export const CANONICAL_REPO_ENV = 'ORCH_CANONICAL_REPO';
+// Durable patch preservation (P0 defect C, 2026-09-08): the ABSOLUTE host
+// directory, OUTSIDE every worktree, where a completed code-changing run's
+// unified diff is written BEFORE the worktree is removed. Unset => defaults
+// to <ORCH_WORKTREES_ROOT>/patches. Independent of ORCH_ARTIFACTS_ENABLED.
+export const PATCH_DIR_ENV = 'ORCH_PATCH_DIR';
+
+// Default durable writer: creates the job directory and writes the bytes.
+// Mode 0o640 where the platform honors it (a no-op on Windows).
+function writePatchFileDefault(absPath: string, bytes: Buffer): void {
+  mkdirSync(dirname(absPath), { recursive: true, mode: 0o750 });
+  writeFileSync(absPath, bytes, { mode: 0o640 });
+}
+
+// Same sanitization the run-report artifact path uses.
+function safeSegment(s: string): string {
+  return String(s ?? '').replace(/[^A-Za-z0-9._-]/g, '-');
+}
 
 // Minimal bounded process runner for the git provisioning commands.
 // argv-only, shell:false, scrubbed env, hard timeout, output caps.
@@ -128,6 +154,9 @@ export interface RealExecutorDeps {
   // the runtime supabase client, bytes read from the audited worktree.
   artifactStorage?: ArtifactStorage | null;
   readArtifactBytes?: (worktreePath: string, rel: string) => Uint8Array;
+  // Durable patch writer seam (P0 defect C). Omitted in production: the
+  // default creates the directory and writes the file on the host.
+  writePatchFile?: (absPath: string, bytes: Buffer) => void;
 }
 
 // Contained worktree file read for artifact persistence: resolves the
@@ -226,6 +255,16 @@ export async function buildRealExecutor(
   const gitRunner = deps.gitRunner ?? makeGitProcessRunner(deps.env);
   const requireReal =
     String(deps.env[REQUIRE_REAL_ENV] ?? '').trim() === 'true';
+  // Patch directory resolved ONCE per composition (defect C). A configured
+  // but non-absolute value never declines the executor - it surfaces per
+  // run as patch_unrecorded:patch_dir_invalid, so the job result stands.
+  const patchDirRaw = String(deps.env[PATCH_DIR_ENV] ?? '').trim();
+  const patchDir = patchDirRaw
+    ? patchDirRaw
+    : `${worktreesRoot.replace(/[/\\]+$/, '')}/patches`;
+  const patchDirError = isAbsolute(patchDir) && !patchDir.includes('..')
+    ? null : 'patch_dir_invalid';
+  const writePatch = deps.writePatchFile ?? writePatchFileDefault;
 
   const executor: RealJobExecutor = async (input) => {
     const { job, goal, runId, nowMs, lock } = input;
@@ -422,6 +461,84 @@ export async function buildRealExecutor(
       let artifactRefs: string[] = [];
       let artifactUnrecorded = false;
       const touched = audit.audit.touched ?? [];
+
+      // DURABLE PATCH PRESERVATION (P0 defect C, 2026-09-08). A completed
+      // code-changing run's edits used to live ONLY in the worktree the
+      // finally block force-removes; unless artifacts were enabled (and the
+      // run touched <= 10 files) the work product vanished. Now, BEFORE the
+      // artifact pass and before cleanup, the worker's edits are exported
+      // as one unified diff (tracked vs base + a creation diff per untracked
+      // file) and written to the host-local patch directory OUTSIDE the
+      // worktree, with a sha256 sidecar - independent of ORCH_ARTIFACTS_
+      // ENABLED. A failure NEVER fails or fabricates the job result: it
+      // surfaces as an explicit patch_unrecorded evidence ref/report field.
+      // path_violation runs never reach here (edits are discarded, never
+      // preserved); audit-kind runs touch nothing and export nothing.
+      const patchRefs: string[] = [];
+      let patchUnrecorded = false;
+      let patchReport: Record<string, unknown> = {};
+      let patchBuffer: Buffer | null = null;
+      const runIdSafe = safeSegment(runId);
+      const patchRel = `patch/${runIdSafe}.patch`;
+      if (result.outcome === 'completed' && touched.length > 0) {
+        const unrecorded = (reason: string) => {
+          patchUnrecorded = true;
+          patchRefs.push(auditRef(job.id, runId, `patch_unrecorded:${reason}`));
+          patchReport = { ...patchReport, patch_unrecorded: true,
+            patch_unrecorded_reason: reason };
+        };
+        const pe = await exportWorktreePatch({
+          gitExecutable: gitExe,
+          worktreePath: prov.target.worktreePath,
+          baseCommit,
+          untracked: audit.audit.untracked ?? [],
+          runner: gitRunner,
+        });
+        let shaHex: string | null = null;
+        if (!pe.ok) {
+          unrecorded(pe.reason);
+        } else {
+          patchBuffer = Buffer.from(pe.patch, 'utf8');
+          shaHex = createHash('sha256').update(patchBuffer).digest('hex');
+          if (patchDirError) {
+            unrecorded(patchDirError);
+          } else if (secretShaped(pe.patch)) {
+            // A worker edit that carries a secret-shaped value is never
+            // copied to the durable patch directory (or the artifact
+            // bucket); the run keeps its result and the gap is explicit.
+            patchBuffer = null;
+            unrecorded('secret_screen');
+          } else {
+            const fileName = `${runIdSafe}.patch`;
+            const absPatch =
+              `${patchDir.replace(/[/\\]+$/, '')}/${safeSegment(job.id)}/${fileName}`;
+            try {
+              writePatch(absPatch, patchBuffer);
+              writePatch(`${absPatch}.sha256`,
+                Buffer.from(`${shaHex}  ${fileName}\n`, 'utf8'));
+              const ref =
+                `patch:job:${job.id}:run:${runId}:sha256:${shaHex.slice(0, 16)}`;
+              patchRefs.push(ref);
+              patchReport = {
+                patch_ref: ref, patch_sha256: shaHex,
+                patch_bytes: patchBuffer.length, patch_path: absPatch,
+                patch_unrecorded: false,
+              };
+            } catch {
+              unrecorded('write_failed');
+            }
+          }
+        }
+        deps.log?.({
+          event: 'patch_preserve', ok: !patchUnrecorded,
+          bytes: patchBuffer ? patchBuffer.length : null,
+          sha256_prefix: shaHex ? shaHex.slice(0, 16) : null,
+          ...(patchUnrecorded
+            ? { reason: String(patchReport['patch_unrecorded_reason'] ?? '') }
+            : {}),
+          job_id: job.id, goal_id: job.goal_id, run_id: runId,
+        });
+      }
       // Gate 1 truncation follow-up: two live worker audits lost their
       // itemized findings to the result_excerpt cap with NO recoverable
       // record. When the cap actually truncated the readable report, the
@@ -449,19 +566,27 @@ export async function buildRealExecutor(
         const commitSha = (result.structured as { commit_sha?: string | null } | null
           )?.commit_sha ?? null;
         const readBytes = deps.readArtifactBytes ?? readWorktreeFile;
+        // The whole-run patch rides FIRST (defect C): one file that carries
+        // every edit, so the per-run artifact cap can never cut it; served
+        // from memory exactly like the run report. A zero-byte export has
+        // nothing to persist and is not added.
+        const patchFiles = patchBuffer && patchBuffer.length > 0 &&
+          !touched.includes(patchRel) ? [patchRel] : [];
         const pass = await persistArtifacts({
           client: deps.client,
           storage,
           env: deps.env,
           readFileBytes: (rel) =>
-            reportFiles.length > 0 && rel === reportRel
+            patchFiles.length > 0 && rel === patchRel && patchBuffer
+              ? patchBuffer
+              : reportFiles.length > 0 && rel === reportRel
               ? Buffer.from(fullText ?? '', 'utf8')
               : readBytes(prov.target.worktreePath, rel),
           now: () => nowMs,
           log: (fields) => deps.log?.({ ...fields, job_id: job.id, run_id: runId }),
         }, {
           goal_id: job.goal_id, job_id: job.id, run_id: runId,
-          files: [...touched, ...reportFiles],
+          files: [...patchFiles, ...touched, ...reportFiles],
           created_by: role, provider: role,
           commit_sha: commitSha,
         });
@@ -481,17 +606,24 @@ export async function buildRealExecutor(
           ...result.evidence_refs,
           auditRef(job.id, runId, `paths_ok:${summaryNote}`),
           providerRef(job.id, runId, role),
+          // Patch ref BEFORE artifact refs: the result event keeps only the
+          // first 10 refs, and the whole-run patch is the one durable
+          // reference that must survive that cap.
+          ...patchRefs,
           ...artifactRefs,
           ...(artifactUnrecorded
             ? [auditRef(job.id, runId, 'artifact_unrecorded')] : []),
         ],
         failure_reason: result.failure_reason,
         summary: result.summary,
+        // patch_* fields are additive (defect C); the report type lives in
+        // the driver and is widened structurally here.
         report: {
           ...report(touched),
           artifact_refs: artifactRefs,
           artifact_unrecorded: artifactUnrecorded,
-        },
+          ...patchReport,
+        } as RealExecutionResult['report'],
         ...telemetry,
       }, ids);
     } finally {

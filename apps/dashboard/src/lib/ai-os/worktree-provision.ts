@@ -8,15 +8,20 @@
 //   git -C <canonical> worktree add <root>/wt-<job> -b job/<job> <base>
 //   git -C <worktree>  status --porcelain -uall
 //   git -C <worktree>  diff --name-only --no-renames <base> HEAD
+//   git -C <worktree>  diff --binary ... --no-renames <base>
+//   git -C <worktree>  diff --binary ... --no-index -- /dev/null <rel>
 //   git -C <canonical> worktree remove --force <root>/wt-<job>
 //
 // Nothing else is reachable. The argv arrays are BUILT here from validated
 // components - never assembled from job text - and executed with shell:false
 // by the caller-supplied runner. There is no 'push', 'remote', 'fetch',
 // 'commit', 'config', or 'checkout' builder in this file, so no network or
-// history-rewriting git operation can be issued through it. The diff builder
-// is READ-ONLY (two-commit compare) and exists solely for the post-run
-// audit below - it grants nothing to workers.
+// history-rewriting git operation can be issued through it. The diff
+// builders are READ-ONLY: the name-only compare exists solely for the
+// post-run audit below, and the two patch builders (P0 defect C, 2026-09-08)
+// only EXPORT the worker's edits as a unified diff so the executor can
+// preserve them durably before the worktree is removed. They grant nothing
+// to workers and rewrite nothing.
 //
 // The provisioner also performs the POST-RUN PATH ENFORCEMENT that makes the
 // path allowlist real rather than advisory: after an agent has run inside
@@ -142,6 +147,29 @@ export function buildWorktreeRemoveArgs(
   return ['-C', canonicalRepo, 'worktree', 'remove', '--force', worktreePath];
 }
 
+// Patch export builders (P0 defect C, 2026-09-08). READ-ONLY.
+// Working tree vs the authoritative base: one unified diff covering every
+// committed, staged, and unstaged change to TRACKED paths. --binary keeps
+// binary edits applyable; --no-ext-diff / --no-color keep the output pure.
+export function buildPatchArgs(
+  worktreePath: string, baseCommit: string,
+): string[] {
+  return ['-C', worktreePath, 'diff', '--binary', '--no-color',
+    '--no-ext-diff', '--no-renames', baseCommit];
+}
+
+// Untracked (new) files never appear in `git diff <base>`; each one is
+// exported as a creation diff against git's literal null path (git
+// special-cases the string "/dev/null" in --no-index mode on every
+// platform). Exit code 1 means "differences" and is the expected success
+// code for this call.
+export function buildUntrackedPatchArgs(
+  worktreePath: string, rel: string,
+): string[] {
+  return ['-C', worktreePath, 'diff', '--binary', '--no-color',
+    '--no-ext-diff', '--no-index', '--', '/dev/null', rel];
+}
+
 // --- porcelain parsing + path enforcement ---------------------------------
 
 // Parse `git status --porcelain` into the set of touched paths. Handles
@@ -168,6 +196,22 @@ export function parsePorcelainPaths(stdout: string): string[] {
     }
   }
   return out.filter((p) => p.length > 0);
+}
+
+// The UNTRACKED subset of `git status --porcelain -uall`: lines whose XY
+// code is '??'. These are the paths `git diff <base>` cannot see, so the
+// patch export handles each one as a creation diff (P0 defect C).
+export function parsePorcelainUntracked(stdout: string): string[] {
+  const out: string[] = [];
+  for (const raw of String(stdout ?? '').split('\n')) {
+    const line = raw.replace(/\r$/, '');
+    if (!line.startsWith('?? ')) continue;
+    const t = line.slice(3).trim();
+    const p = t.startsWith('"') && t.endsWith('"') && t.length > 1
+      ? t.slice(1, -1) : t;
+    if (p.length > 0) out.push(p);
+  }
+  return out;
 }
 
 // Is a repo-relative path inside the allowlist? Allowlist entries are
@@ -208,6 +252,9 @@ export interface PathAudit {
   touched: string[];
   violations: string[];
   dirty: boolean;
+  // Untracked (new) paths from the status surface, normalized. Additive:
+  // the patch export needs them and the audit already ran status once.
+  untracked: string[];
 }
 
 // Enforce the path allowlist over the UNION of the uncommitted-change
@@ -234,6 +281,8 @@ export function auditTouchedPaths(
     touched,
     violations,
     dirty: touched.length > 0,
+    untracked: [...new Set(parsePorcelainUntracked(statusStdout)
+      .map(normalizeRelPath))].filter((p) => p.length > 0),
   };
 }
 
@@ -359,6 +408,82 @@ export async function auditWorktree(
     ok: true,
     audit: auditTouchedPaths(res.stdout, diff.stdout, i.allowedPaths),
   };
+}
+
+// --- patch export (P0 defect C, 2026-09-08) --------------------------------
+//
+// A successful code-changing run used to leave its edits ONLY in the
+// worktree, which the executor force-removes on every path; unless the
+// artifact platform was enabled (and the run touched at most 10 files) the
+// work product vanished with the worktree. exportWorktreePatch reads the
+// worker's edits as ONE unified diff (tracked changes vs the authoritative
+// base, plus a creation diff per untracked file, in stable sorted order)
+// so the executor can preserve them durably BEFORE cleanup. Read-only;
+// bounded; fails closed on any unreadable surface.
+
+export const MAX_PATCH_BYTES = 5 * 1024 * 1024;
+
+export type PatchExport =
+  | { ok: true; patch: string; bytes: number }
+  | { ok: false; reason: string };
+
+// Same shape rules pathAllowed applies: repo-relative, no traversal, never
+// absolute (POSIX or drive-letter).
+function relPathSafe(rel: string): boolean {
+  const norm = String(rel ?? '').replace(/\\/g, '/');
+  if (norm.length === 0 || norm.includes('..')) return false;
+  if (norm.startsWith('/') || /^[A-Za-z]:/.test(norm)) return false;
+  return true;
+}
+
+export async function exportWorktreePatch(
+  i: {
+    gitExecutable: string; worktreePath: string; baseCommit: string;
+    untracked: string[]; runner: ProvisionRunner;
+    timeoutMs?: number; maxBytes?: number;
+  },
+): Promise<PatchExport> {
+  const exeErr = checkGitExecutable(i.gitExecutable);
+  if (exeErr) return { ok: false, reason: exeErr };
+  if (!BASE_COMMIT_RE.test(String(i.baseCommit ?? ''))) {
+    return { ok: false, reason: 'base_commit_invalid' };
+  }
+  const max = i.maxBytes ?? MAX_PATCH_BYTES;
+  const timeout = i.timeoutMs ?? PROVISION_TIMEOUT_MS;
+  for (const rel of i.untracked) {
+    if (!relPathSafe(rel)) return { ok: false, reason: `path_invalid:${rel}` };
+  }
+  const tracked = await i.runner({
+    executable: i.gitExecutable,
+    args: buildPatchArgs(i.worktreePath, i.baseCommit),
+    timeout_ms: timeout,
+  });
+  if (tracked.status !== 'ok' || tracked.exit_code !== 0) {
+    return { ok: false, reason: 'patch_unreadable' };
+  }
+  const parts: string[] = [String(tracked.stdout ?? '')];
+  let bytes = Buffer.byteLength(parts[0], 'utf8');
+  if (bytes > max) return { ok: false, reason: 'patch_too_large' };
+  const sorted = [...new Set(i.untracked)].sort();
+  for (const rel of sorted) {
+    const res = await i.runner({
+      executable: i.gitExecutable,
+      args: buildUntrackedPatchArgs(i.worktreePath, rel),
+      timeout_ms: timeout,
+    });
+    // --no-index reports "differences" with exit 1; 0 only for an empty
+    // file. Anything else (2 = trouble, spawn/timeout) is unreadable.
+    if (res.status !== 'ok' ||
+        (res.exit_code !== 0 && res.exit_code !== 1)) {
+      return { ok: false, reason: `untracked_patch_unreadable:${rel}` };
+    }
+    const piece = String(res.stdout ?? '');
+    bytes += Buffer.byteLength(piece, 'utf8');
+    if (bytes > max) return { ok: false, reason: 'patch_too_large' };
+    parts.push(piece);
+  }
+  const patch = parts.join('');
+  return { ok: true, patch, bytes: Buffer.byteLength(patch, 'utf8') };
 }
 
 // Remove the worktree. Best-effort by design: the caller has already

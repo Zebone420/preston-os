@@ -341,6 +341,9 @@ async function runWiredExecutor(opts: {
     realpath: (p: string) => p,
     artifactStorage: storage,
     readArtifactBytes: () => new TextEncoder().encode('report body'),
+    // Defect C patch writer seam: this suite pins artifact wiring, not host
+    // writes (the git fake yields an empty diff, so no patch artifact rides).
+    writePatchFile: () => {},
   });
   if (!exec) throw new Error('executor did not compose');
   const res = await exec({
