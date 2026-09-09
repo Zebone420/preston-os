@@ -56,3 +56,6 @@ headers*.txt
 har-capture*
 *.har
 __pycache__/
+
+# --- Owner-local diagnostic scripts (never committed) ---
+scripts/**/*.local.ps1
