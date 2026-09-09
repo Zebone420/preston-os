@@ -414,7 +414,21 @@ export function composeRequest(raw: unknown): ComposeOutcome {
       }
 
       // Requested agent/role: explicit assignment only; unknown or forbidden
-      // roles reject (a role name is a request, never an authority).
+      // roles reject (a role name is a request, never an authority). A
+      // SECOND, DIFFERENT known role referenced in the same task is genuinely
+      // ambiguous owner intent (M2: conflicting routing must fail closed,
+      // never silently honor whichever reference the single-match regex
+      // below happens to see first).
+      const allRoleRefs = [...item.matchAll(
+        /\b(?:using|with|via|assign(?:ed)?\s+to|handled\s+by)\s+(?:agent\s+)?([a-z][a-z0-9_-]*)\b/gi,
+      )];
+      const distinctKnownRoles = new Set(
+        allRoleRefs.map((m) => m[1].toLowerCase()).filter((name) => KNOWN_ROLES.has(name)),
+      );
+      if (distinctKnownRoles.size > 1) {
+        errors.push(`conflicting_agent_reference:${localId}:${[...distinctKnownRoles].sort().join(',')}`);
+        return;
+      }
       let requestedRole: AgentRole | null = null;
       const roleRef = item.match(/\b(?:using|with|via|assign(?:ed)?\s+to|handled\s+by)\s+(?:agent\s+)?([a-z][a-z0-9_-]*)\b/i);
       if (roleRef) {
