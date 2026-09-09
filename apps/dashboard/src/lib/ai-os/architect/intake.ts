@@ -28,6 +28,10 @@ export type ArchitectRequestError =
   | 'source_goal_job_id_invalid'
   | 'environment_mismatch';
 
+export type ArchitectRequestValidation =
+  | { ok: true; request: ArchitectRequest }
+  | { ok: false; errors: ArchitectRequestError[] };
+
 function id(v: unknown): boolean {
   return typeof v === 'string' && RUNTIME_ID_RE.test(v);
 }
@@ -39,9 +43,11 @@ function text(v: unknown): v is string {
 // P2: environment is checked against THIS deployment's pinned environment,
 // never "any" - same invariant as validateMasterGoal.
 export function validateArchitectRequest(
-  r: ArchitectRequest,
+  raw: unknown,
   expectedEnvironment: RuntimeEnvironment = deploymentEnvironment(),
-): ArchitectRequestError[] {
+): ArchitectRequestValidation {
+  const r = raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+    ? raw as Record<string, unknown> : {};
   const errs: ArchitectRequestError[] = [];
   if (!text(r.repo)) errs.push('repo_required');
   if (!text(r.base_branch)) errs.push('base_branch_required');
@@ -50,5 +56,17 @@ export function validateArchitectRequest(
   if (!text(r.requested_by)) errs.push('requested_by_required');
   if (!id(r.source_goal_job_id)) errs.push('source_goal_job_id_invalid');
   if (r.environment !== expectedEnvironment) errs.push('environment_mismatch');
-  return errs;
+  if (errs.length > 0) return { ok: false, errors: errs };
+  return {
+    ok: true,
+    request: {
+      repo: r.repo as string,
+      base_branch: r.base_branch as string,
+      objective: r.objective as string,
+      correlation_id: r.correlation_id as string,
+      requested_by: r.requested_by as string,
+      source_goal_job_id: r.source_goal_job_id as string,
+      environment: r.environment as RuntimeEnvironment,
+    },
+  };
 }

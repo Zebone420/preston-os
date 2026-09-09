@@ -11,25 +11,17 @@ const ALLOWLIST = 'Zebone420/preston-os';
 describe('canonicalizeRepo', () => {
   it('accepts owner/repo shorthand', () => {
     const r = canonicalizeRepo('Zebone420/preston-os');
-    expect(r).toEqual({ ok: true, repo: { owner: 'Zebone420', name: 'preston-os', canonical: 'zebone420/preston-os' } });
+    expect(r).toEqual({ ok: true, repo: { owner: 'Zebone420', name: 'preston-os', canonical: 'Zebone420/preston-os' } });
   });
 
-  it('accepts an https URL with an embedded username and .git suffix, deterministically', () => {
-    const r = canonicalizeRepo('https://Zebone420@github.com/Zebone420/preston-os.git');
-    expect(r).toEqual({ ok: true, repo: { owner: 'Zebone420', name: 'preston-os', canonical: 'zebone420/preston-os' } });
-  });
-
-  it('accepts an ssh URL', () => {
-    const r = canonicalizeRepo('git@github.com:Zebone420/preston-os.git');
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.repo.canonical).toBe('zebone420/preston-os');
-  });
-
-  it('normalizes case deterministically to the same canonical key', () => {
-    const lower = canonicalizeRepo('zebone420/PRESTON-OS');
-    const upper = canonicalizeRepo('ZEBONE420/preston-os');
-    expect(lower.ok && upper.ok).toBe(true);
-    if (lower.ok && upper.ok) expect(lower.repo.canonical).toBe(upper.repo.canonical);
+  it('preserves case and refuses URL/SSH identities instead of guessing', () => {
+    const cased = canonicalizeRepo('zebone420/PRESTON-OS');
+    expect(cased).toMatchObject({ ok: true,
+      repo: { canonical: 'zebone420/PRESTON-OS' } });
+    expect(canonicalizeRepo('https://github.com/Zebone420/preston-os'))
+      .toEqual({ ok: false, reason: 'repository_identity_invalid' });
+    expect(canonicalizeRepo('git@github.com:Zebone420/preston-os.git'))
+      .toEqual({ ok: false, reason: 'repository_identity_invalid' });
   });
 
   it('rejects empty input', () => {
@@ -58,7 +50,7 @@ describe('canonicalizeRepo', () => {
 describe('evaluateRepoAllowlist', () => {
   it('allows an explicitly listed repo', () => {
     const d = evaluateRepoAllowlist('Zebone420/preston-os', ALLOWLIST);
-    expect(d).toEqual({ allowed: true, reason: 'repository_allowed', canonical: 'zebone420/preston-os' });
+    expect(d).toEqual({ allowed: true, reason: 'repository_allowed', canonical: 'Zebone420/preston-os' });
   });
 
   it('denies a different owner with the same repo name', () => {
@@ -75,10 +67,10 @@ describe('evaluateRepoAllowlist', () => {
 
   it('denies everything when the allowlist is empty or unset', () => {
     expect(evaluateRepoAllowlist('Zebone420/preston-os', '')).toEqual(
-      { allowed: false, reason: 'repository_allowlist_empty', canonical: 'zebone420/preston-os' },
+      { allowed: false, reason: 'repository_allowlist_empty', canonical: 'Zebone420/preston-os' },
     );
     expect(evaluateRepoAllowlist('Zebone420/preston-os', undefined)).toEqual(
-      { allowed: false, reason: 'repository_allowlist_empty', canonical: 'zebone420/preston-os' },
+      { allowed: false, reason: 'repository_allowlist_empty', canonical: 'Zebone420/preston-os' },
     );
   });
 
@@ -100,6 +92,11 @@ describe('evaluateRepoAllowlist', () => {
     const d = evaluateRepoAllowlist('Zebone420/preston-os', '*');
     expect(d.allowed).toBe(false);
     expect(d.reason).toBe('repository_not_allowed');
+  });
+
+  it('matches case-sensitively and rejects case-only near misses', () => {
+    expect(evaluateRepoAllowlist('zebone420/preston-os', ALLOWLIST).allowed).toBe(false);
+    expect(evaluateRepoAllowlist('Zebone420/PRESTON-OS', ALLOWLIST).allowed).toBe(false);
   });
 
   it('never falls back to a default repo when the request omits one', () => {
