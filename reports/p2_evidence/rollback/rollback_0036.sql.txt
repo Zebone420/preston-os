@@ -1,0 +1,7 @@
+-- OWNER-RUN rollback for 0036 (staging first).
+-- Preconditions: no live capability depends on connector_passports and the
+-- soft-launch assessment history has been exported if it must be retained.
+begin;
+drop table if exists public.soft_launch_assessments;
+drop table if exists public.connector_passports;
+commit;

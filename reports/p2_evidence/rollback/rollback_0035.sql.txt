@@ -1,0 +1,39 @@
+-- ============================================================================
+-- ROLLBACK 0035 (Phase 6 installation -> closeout) - OWNER-RUN ONLY.
+-- Exact, bounded. Named .sql.txt per RED-boundary scanner convention.
+-- Safe ONLY while no real project has entered the install lifecycle.
+-- Verify first:
+--   select count(*) from public.install_states;    -- expect 0
+--   select count(*) from public.closeout_packages; -- expect 0
+-- ============================================================================
+drop policy if exists closeout_packages_owner_runtime_upd on public.closeout_packages;
+drop policy if exists closeout_packages_owner_runtime_ins on public.closeout_packages;
+drop policy if exists closeout_packages_owner_runtime_sel on public.closeout_packages;
+drop table if exists public.closeout_packages;
+
+drop policy if exists punch_items_owner_runtime_upd on public.punch_items;
+drop policy if exists punch_items_owner_runtime_ins on public.punch_items;
+drop policy if exists punch_items_owner_runtime_sel on public.punch_items;
+drop index if exists public.idx_punch_items_project;
+drop table if exists public.punch_items;
+
+drop policy if exists install_states_owner_runtime_upd on public.install_states;
+drop policy if exists install_states_owner_runtime_ins on public.install_states;
+drop policy if exists install_states_owner_runtime_sel on public.install_states;
+drop table if exists public.install_states;
+
+drop policy if exists crew_assignments_owner_runtime_upd on public.crew_assignments;
+drop policy if exists crew_assignments_owner_runtime_ins on public.crew_assignments;
+drop policy if exists crew_assignments_owner_runtime_sel on public.crew_assignments;
+drop index if exists public.idx_crew_assignments_project;
+drop table if exists public.crew_assignments;
+
+drop policy if exists install_readiness_checks_owner_runtime_ins on public.install_readiness_checks;
+drop policy if exists install_readiness_checks_owner_runtime_sel on public.install_readiness_checks;
+drop index if exists public.idx_install_readiness_checks_project;
+drop table if exists public.install_readiness_checks;
+
+drop policy if exists receiving_events_owner_runtime_ins on public.receiving_events;
+drop policy if exists receiving_events_owner_runtime_sel on public.receiving_events;
+drop index if exists public.idx_receiving_events_project;
+drop table if exists public.receiving_events;

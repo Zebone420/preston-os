@@ -364,18 +364,18 @@ describe('SB-1 regression: same-millisecond lifecycle transitions stay visible',
   });
 });
 
-describe('surface registration (deliberate 11th operation)', () => {
-  it('preston_poll_events is registered on the MCP catalogue (11 tools)', () => {
+describe('surface registration (supervisor operations)', () => {
+  it('preston_poll_events remains registered on the MCP catalogue', () => {
     expect(TOOL_NAMES).toContain('preston_poll_events');
-    expect(TOOL_NAMES).toHaveLength(11);
+    expect(TOOL_NAMES).toHaveLength(12);
   });
 
-  it('pollPrestonEvents is the 11th REST operation and is read-only', () => {
+  it('pollPrestonEvents remains a read-only REST operation', () => {
     const doc = buildOpenApiDocument('https://example.test') as {
       paths: Record<string, Record<string, { operationId: string; 'x-openai-isConsequential': boolean }>>;
     };
     const ops = Object.values(doc.paths).flatMap((m) => Object.values(m));
-    expect(ops).toHaveLength(11);
+    expect(ops).toHaveLength(12);
     const poll = ops.find((o) => o.operationId === 'pollPrestonEvents');
     expect(poll).toBeTruthy();
     expect(poll?.['x-openai-isConsequential']).toBe(false);

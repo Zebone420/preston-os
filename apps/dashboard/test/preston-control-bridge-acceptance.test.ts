@@ -103,9 +103,9 @@ describe('bridge acceptance - transport parity (G12)', () => {
   }>>).flatMap((p) => Object.values(p));
 
   it('every MCP tool has exactly one GPT Actions operation (same count, no drift)', () => {
-    // 11 as of the supervisor bridge slice 1 (preston_poll_events).
-    expect(TOOL_NAMES).toHaveLength(11);
-    expect(ops).toHaveLength(11);
+    // 12 with the Phase 2 read-only owner operating view.
+    expect(TOOL_NAMES).toHaveLength(12);
+    expect(ops).toHaveLength(12);
     const expectPairs: Array<[string, string]> = [
       ['preston_status', 'getPrestonStatus'],
       ['preston_submit_goal', 'submitPrestonGoal'],
@@ -120,6 +120,7 @@ describe('bridge acceptance - transport parity (G12)', () => {
       ['preston_get_artifact', 'getPrestonArtifact'],
       // Supervisor bridge slice 1 (read-only, non-consequential).
       ['preston_poll_events', 'pollPrestonEvents'],
+      ['preston_owner_view', 'getPrestonOwnerView'],
     ];
     const opIds = new Set(ops.map((o) => o.operationId));
     for (const [tool, op] of expectPairs) {

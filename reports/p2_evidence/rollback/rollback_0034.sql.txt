@@ -1,0 +1,30 @@
+-- ============================================================================
+-- ROLLBACK 0034 (Phase 7 graduated autonomy) - OWNER-RUN ONLY.
+-- Exact, bounded. Named .sql.txt per RED-boundary scanner convention.
+-- Safe at any time BEFORE the executor/runner consults effectiveMode():
+-- every class then reverts to the implicit CODED posture (nothing runs).
+-- Verify first:
+--   select class_id, rung from public.autonomy_classes where rung <> 'CODED';
+--   -- expect no rows (no grant chain in force)
+-- ============================================================================
+drop policy if exists autonomy_anomalies_owner_upd on public.autonomy_anomalies;
+drop policy if exists autonomy_anomalies_owner_runtime_ins on public.autonomy_anomalies;
+drop policy if exists autonomy_anomalies_owner_runtime_sel on public.autonomy_anomalies;
+drop index if exists public.idx_autonomy_anomalies_class;
+drop table if exists public.autonomy_anomalies;
+
+drop policy if exists autonomy_outcomes_owner_runtime_ins on public.autonomy_outcomes;
+drop policy if exists autonomy_outcomes_owner_runtime_sel on public.autonomy_outcomes;
+drop index if exists public.idx_autonomy_outcomes_class;
+drop table if exists public.autonomy_outcomes;
+
+drop policy if exists autonomy_grants_owner_upd on public.autonomy_grants;
+drop policy if exists autonomy_grants_owner_runtime_ins on public.autonomy_grants;
+drop policy if exists autonomy_grants_owner_runtime_sel on public.autonomy_grants;
+drop index if exists public.idx_autonomy_grants_class;
+drop table if exists public.autonomy_grants;
+
+drop policy if exists autonomy_classes_owner_runtime_upd on public.autonomy_classes;
+drop policy if exists autonomy_classes_owner_runtime_ins on public.autonomy_classes;
+drop policy if exists autonomy_classes_owner_runtime_sel on public.autonomy_classes;
+drop table if exists public.autonomy_classes;

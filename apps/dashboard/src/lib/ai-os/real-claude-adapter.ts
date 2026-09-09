@@ -658,16 +658,30 @@ function killProcessTree(child: ChildProcess): void {
     return;
   }
   if (process.platform === 'win32') {
+    const killDirect = () => {
+      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+    };
     try {
       const k = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], {
         shell: false, windowsHide: true, stdio: 'ignore',
       });
-      k.on('error', () => {
-        try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      // taskkill reports several operational failures as a non-zero exit,
+      // not as a spawn error. Always terminate the direct child after the
+      // tree-kill attempt, and bound taskkill itself so a worker promise can
+      // never wait forever for the target's close event.
+      const fallback = setTimeout(killDirect, 1_000);
+      fallback.unref();
+      k.once('error', () => {
+        clearTimeout(fallback);
+        killDirect();
+      });
+      k.once('close', () => {
+        clearTimeout(fallback);
+        killDirect();
       });
       k.unref();
     } catch {
-      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+      killDirect();
     }
   } else {
     try {

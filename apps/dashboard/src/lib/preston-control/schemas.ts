@@ -72,6 +72,14 @@ export const POLL_EVENTS_SHAPE = {
     .describe('Max events per page (default 50).'),
 };
 
+export const OWNER_VIEW_SHAPE = {
+  view: z.enum(['today', 'project', 'approvals', 'workforce', 'incidents', 'brief']),
+  project_ref: z.string().regex(
+    /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|P[0-9]{2}-[0-9]{4})$/i,
+    'must be a project UUID or Project ID',
+  ).optional(),
+};
+
 export const SubmitGoalSchema = z.object(SUBMIT_GOAL_SHAPE).strict();
 export const GetGoalSchema = z.object(GET_GOAL_SHAPE).strict();
 export const DecideApprovalSchema = z.object(DECIDE_APPROVAL_SHAPE).strict();
@@ -81,6 +89,7 @@ export const CancelGoalSchema = z.object(CANCEL_GOAL_SHAPE).strict();
 export const FollowUpGoalSchema = z.object(FOLLOW_UP_GOAL_SHAPE).strict();
 export const GetArtifactSchema = z.object(GET_ARTIFACT_SHAPE).strict();
 export const PollEventsSchema = z.object(POLL_EVENTS_SHAPE).strict();
+export const OwnerViewSchema = z.object(OWNER_VIEW_SHAPE).strict();
 // GET-query variant: search params arrive as strings, so limit is coerced
 // (same bounds; the tool clamps again defensively).
 export const PollEventsQuerySchema = z.object({

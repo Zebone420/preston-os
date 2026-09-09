@@ -50,6 +50,10 @@ import {
   normalizeSupervisorEvents,
   pageAfterCursor,
 } from './supervisor-events';
+import {
+  loadOwnerOverview,
+  loadOwnerProject,
+} from '@/lib/business/owner-views/service';
 
 export interface ToolContext {
   client: ComposerClient;
@@ -271,6 +275,51 @@ export async function prestonStatus(ctx: ToolContext) {
     },
     needs_attention: attention,
   };
+}
+
+// ---------------------------------------------------------------------------
+// 1b. preston_owner_view (READ ONLY) - Phase 2 owner operating interface.
+// One bounded, RLS-bound gateway for Today / Project / Approvals / AI
+// Workforce / Incidents / Brief.  No action or provider credential is
+// reachable through this function.
+export async function prestonOwnerView(
+  ctx: ToolContext,
+  input: {
+    view: 'today' | 'project' | 'approvals' | 'workforce' | 'incidents' | 'brief';
+    project_ref?: string;
+  },
+) {
+  const client = ctx.client as unknown as RuntimeClient;
+  if (input.view === 'project') {
+    const ref = String(input.project_ref ?? '').trim();
+    if (!ref) return { ok: false as const, error: 'project_ref_required' };
+    return {
+      ok: true as const,
+      view: 'project' as const,
+      data: await loadOwnerProject(client, ctx.now, ref, 'owner'),
+    };
+  }
+  if (input.project_ref) {
+    return { ok: false as const, error: 'project_ref_only_valid_for_project' };
+  }
+  const overview = await loadOwnerOverview(client, ctx.now);
+  const data = input.view === 'today' ? overview.today
+    : input.view === 'approvals' ? overview.approvals
+      : input.view === 'workforce' ? overview.workforce
+        : input.view === 'incidents' ? overview.incidents
+          : overview.brief;
+  // Defense in depth: the builders do not expose bodies or credentials, but
+  // stored subjects/titles may still contain secret-shaped spans.
+  const screen = (value: unknown): unknown => {
+    if (typeof value === 'string') return safeText(value, 2000);
+    if (Array.isArray(value)) return value.slice(0, 500).map(screen);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value as Row)
+        .slice(0, 500).map(([k, v]) => [k, screen(v)]));
+    }
+    return value;
+  };
+  return { ok: true as const, view: input.view, data: screen(data) };
 }
 
 // ---------------------------------------------------------------------------

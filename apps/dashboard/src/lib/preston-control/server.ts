@@ -16,6 +16,7 @@ import {
   GET_GOAL_SHAPE,
   GET_JOB_SHAPE,
   POLL_EVENTS_SHAPE,
+  OWNER_VIEW_SHAPE,
   SUBMIT_GOAL_SHAPE,
 } from './schemas';
 import {
@@ -28,6 +29,7 @@ import {
   prestonGetJob,
   prestonListApprovals,
   prestonPollEvents,
+  prestonOwnerView,
   prestonStatus,
   prestonSubmitGoal,
   type ToolContext,
@@ -48,6 +50,7 @@ export const TOOL_NAMES = [
   'preston_get_evidence',
   'preston_get_artifact',
   'preston_poll_events',
+  'preston_owner_view',
 ] as const;
 
 function result(payload: unknown) {
@@ -182,6 +185,16 @@ export function buildPrestonControlServer(ctx: ToolContext): McpServer {
     inputSchema: POLL_EVENTS_SHAPE,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async (args) => result(await prestonPollEvents(ctx, args)));
+
+  server.registerTool('preston_owner_view', {
+    title: 'Read Preston owner view',
+    description:
+      'Read-only business command view: Today, one Project, Approvals, AI Workforce, ' +
+      'Incidents/Evidence, or the event-aware owner Brief. Project accepts a UUID or P26-0001 ID. ' +
+      'Every result is bounded, RLS-scoped, evidence-linked, and exposes no action authority.',
+    inputSchema: OWNER_VIEW_SHAPE,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, async (args) => result(await prestonOwnerView(ctx, args)));
 
   return server;
 }

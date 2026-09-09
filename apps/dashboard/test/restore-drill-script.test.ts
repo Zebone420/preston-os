@@ -41,7 +41,6 @@ describe('p0_restore_drill.ps1 - owner-run restore drill (static pins)', () => {
   });
 
   it('is pure ASCII (owner-terminal safe)', () => {
-    // eslint-disable-next-line no-control-regex
     expect(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(src)).toBe(true);
   });
 

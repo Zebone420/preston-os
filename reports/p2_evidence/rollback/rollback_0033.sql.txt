@@ -1,0 +1,10 @@
+-- OWNER-RUN rollback for 0033 (staging first).
+-- Preconditions: stop deterministic runners and export any run/clock/catalog
+-- evidence that must be retained; verify no later release depends on it.
+begin;
+drop table if exists public.andersen_catalog;
+drop table if exists public.openings;
+drop table if exists public.follow_up_clocks;
+drop table if exists public.playbook_runs;
+drop table if exists public.playbook_registry;
+commit;
