@@ -25,7 +25,7 @@ import {
   approveMeasurement as approveMeasurementPure,
   type FinalMeasurement,
 } from './final-measure';
-import { isSha256 } from './hash';
+import { canonicalJson, isSha256 } from './hash';
 import {
   ORDER_PREDICATES,
   type OrderReadinessCheck,
@@ -162,6 +162,55 @@ export interface ContractEventOutcome extends WriteOutcome {
   refused?: string;
 }
 
+async function providerEventMatches(
+  client: RuntimeClient,
+  contractId: string,
+  event: Extract<ContractEvent, { type: 'provider_event' }>,
+): Promise<boolean> {
+  try {
+    const res = await client.from(ORDER_CHAIN_TABLES.providerEvents)
+      .select('*').eq('provider_event_id', event.provider_event_id).limit(1);
+    if (res.error || res.data?.length !== 1) return false;
+    const stored = res.data[0];
+    const storedAt = Date.parse(String(stored['occurred_at']));
+    const eventAt = Date.parse(event.occurred_at);
+    return Number.isFinite(storedAt) && storedAt === eventAt &&
+      stored['contract_id'] === contractId &&
+      stored['provider_event_id'] === event.provider_event_id &&
+      stored['event_type'] === event.event_type &&
+      stored['verified'] === event.provider_event_verified &&
+      canonicalJson(stored['payload']) === canonicalJson({
+        provider_envelope_id: event.provider_envelope_id,
+      });
+  } catch {
+    return false;
+  }
+}
+
+async function contractAlreadyMatches(
+  client: RuntimeClient,
+  expected: ContractRecord,
+): Promise<boolean> {
+  try {
+    const res = await client.from(ORDER_CHAIN_TABLES.contracts)
+      .select('*').eq('id', expected.id).limit(1);
+    if (res.error || res.data?.length !== 1) return false;
+    const row = res.data[0];
+    const storedSignedAt = row['signed_at'];
+    const signedAtMatches = storedSignedAt === null && expected.signed_at === null
+      ? true
+      : typeof storedSignedAt === 'string' && typeof expected.signed_at === 'string' &&
+        Number.isFinite(Date.parse(storedSignedAt)) &&
+        Date.parse(storedSignedAt) === Date.parse(expected.signed_at);
+    return row['state'] === expected.state &&
+      row['provider_envelope_id'] === expected.provider_envelope_id &&
+      signedAtMatches &&
+      row['provider_event_verified'] === expected.provider_event_verified;
+  } catch {
+    return false;
+  }
+}
+
 // Records the provider event (unique on provider_event_id: a replayed
 // webhook is a duplicate no-op and NEVER re-drives a transition), then
 // applies the pure state machine and CAS-updates the contract row on
@@ -175,6 +224,7 @@ export async function applyContractEvent(
   if (!UUID_RE.test(contract.id)) {
     return { ok: false, error: 'invalid contract id', contract };
   }
+  let evidenceDuplicate = false;
   if (event.type === 'provider_event') {
     const evidence = await insertRow(client, ORDER_CHAIN_TABLES.providerEvents, {
       contract_id: contract.id,
@@ -187,17 +237,20 @@ export async function applyContractEvent(
     });
     if (!evidence.ok) return { ...evidence, contract };
     if (evidence.duplicate) {
-      return {
-        ok: true,
-        duplicate: true,
-        id: contract.id,
-        contract,
-        refused: 'duplicate_provider_event',
-      };
+      if (!(await providerEventMatches(client, contract.id, event))) {
+        return { ok: false, error: 'duplicate_provider_event_binding_mismatch',
+          contract };
+      }
+      evidenceDuplicate = true;
     }
   }
   const t = transitionContract(contract, event);
-  if (!t.ok) return { ok: false, error: t.reason, refused: t.reason, contract };
+  if (!t.ok) {
+    if (evidenceDuplicate && await contractAlreadyMatches(client, contract)) {
+      return { ok: true, duplicate: true, id: contract.id, contract };
+    }
+    return { ok: false, error: t.reason, refused: t.reason, contract };
+  }
   const next = t.contract;
   const cas = await casUpdate(
     client,
@@ -214,8 +267,14 @@ export async function applyContractEvent(
       ['state', contract.state],
     ],
   );
-  if (!cas.ok) return { ...cas, contract };
-  return { ok: true, id: contract.id, contract: next };
+  if (!cas.ok) {
+    if (evidenceDuplicate && await contractAlreadyMatches(client, next)) {
+      return { ok: true, duplicate: true, id: contract.id, contract: next };
+    }
+    return { ...cas, contract };
+  }
+  return { ok: true, duplicate: evidenceDuplicate || undefined,
+    id: contract.id, contract: next };
 }
 
 // --- payment expectations --------------------------------------------------
@@ -236,10 +295,39 @@ function validExpectation(e: PaymentExpectation): string | null {
   return null;
 }
 
-// Insert-or-update keyed on (contract_id, milestone). The update path
-// is guarded on the same key, so a row for another contract can never
-// be touched. Expected amounts and bindings are immutable after insert:
-// only state, received_cents, and reconciliation_state change.
+const EXPECTATION_BINDING_FIELDS = [
+  'project_id', 'contract_id', 'quote_version_id', 'plan_type', 'milestone',
+  'sequence', 'expected_amount_cents', 'contract_amount_cents', 'quote_hash',
+  'state', 'received_cents', 'reconciliation_state',
+] as const;
+
+async function readMatchingExpectation(
+  client: RuntimeClient,
+  e: PaymentExpectation,
+): Promise<WriteOutcome> {
+  try {
+    const res = await client.from(ORDER_CHAIN_TABLES.expectations)
+      .select('*').eq('contract_id', e.contract_id).eq('milestone', e.milestone)
+      .limit(1);
+    if (res.error || res.data?.length !== 1) {
+      return { ok: false, error: 'expectation_replay_unavailable' };
+    }
+    const row = res.data[0];
+    const matches = EXPECTATION_BINDING_FIELDS.every((field) =>
+      typeof e[field] === 'number'
+        ? String(row[field]) === String(e[field])
+        : row[field] === e[field]);
+    return matches
+      ? { ok: true, duplicate: true, id: String(row['id']) }
+      : { ok: false, error: 'expectation_binding_mismatch' };
+  } catch {
+    return { ok: false, error: 'expectation_replay_unavailable' };
+  }
+}
+
+// Expectations are immutable initial facts. Receipt state is rebuilt from
+// append-only payment_receipt_events; generic authenticated DML never mutates
+// the expectation snapshot.
 export async function upsertExpectation(
   client: RuntimeClient,
   e: PaymentExpectation,
@@ -247,6 +335,10 @@ export async function upsertExpectation(
 ): Promise<WriteOutcome> {
   const invalid = validExpectation(e);
   if (invalid) return { ok: false, error: invalid };
+  if (e.state !== 'expected' || e.received_cents !== 0 ||
+      e.reconciliation_state !== 'unreconciled') {
+    return { ok: false, error: 'expectation_snapshot_mutation_disabled' };
+  }
   const inserted = await insertRow(client, ORDER_CHAIN_TABLES.expectations, {
     project_id: e.project_id,
     contract_id: e.contract_id,
@@ -264,22 +356,7 @@ export async function upsertExpectation(
     updated_at: nowIso,
   });
   if (!inserted.ok || !inserted.duplicate) return inserted;
-  return casUpdate(
-    client,
-    ORDER_CHAIN_TABLES.expectations,
-    {
-      state: e.state,
-      received_cents: e.received_cents,
-      reconciliation_state: e.reconciliation_state,
-      updated_at: nowIso,
-    },
-    [
-      ['contract_id', e.contract_id],
-      ['milestone', e.milestone],
-      ['quote_hash', e.quote_hash],
-      ['expected_amount_cents', String(e.expected_amount_cents)],
-    ],
-  );
+  return readMatchingExpectation(client, e);
 }
 
 export interface RecordPaymentReceiptOutcome extends WriteOutcome {
@@ -304,6 +381,11 @@ async function readMatchingReceipt(
     return RECEIPT_BINDING_FIELDS.every((field) => {
       const expected = event[field];
       const actual = stored[field];
+      if (field === 'occurred_at') {
+        const actualMs = Date.parse(String(actual));
+        return Number.isFinite(actualMs) &&
+          actualMs === Date.parse(String(expected));
+      }
       return typeof expected === 'number'
         ? String(actual) === String(expected)
         : actual === expected;
@@ -320,7 +402,18 @@ export async function recordPaymentReceipt(
   client: RuntimeClient,
   ledger: PaymentLedger,
   event: PaymentReceiptEvent,
+  actor: Actor,
 ): Promise<RecordPaymentReceiptOutcome> {
+  if (!actor?.id?.trim() || actor.id !== event.recorded_by) {
+    return { ok: false, error: 'receipt_actor_attribution_mismatch', ledger };
+  }
+  if (typeof event.idempotency_key !== 'string' ||
+      !event.idempotency_key.trim() || event.idempotency_key.length > 256 ||
+      typeof event.recorded_by !== 'string' || event.recorded_by.length > 256 ||
+      typeof event.source_ref !== 'string' || !event.source_ref.trim() ||
+      event.source_ref.length > 512) {
+    return { ok: false, error: 'invalid_receipt_evidence', ledger };
+  }
   const applied = applyPaymentPure(ledger, event);
   if (!applied.ok && applied.reason !== 'duplicate_event') {
     return { ok: false, error: applied.reason, ledger };
@@ -402,10 +495,27 @@ export async function approveMeasurement(
   m: FinalMeasurement,
   actor: Actor,
   approvedAt: string,
-  signedAt: string,
 ): Promise<MeasurementApprovalOutcome> {
   if (!m.id || !UUID_RE.test(m.id)) {
     return { ok: false, error: 'invalid measurement id', measurement: m };
+  }
+  let signedAt: string | null = null;
+  try {
+    const res = await client.from(ORDER_CHAIN_TABLES.contracts)
+      .select('*').eq('id', m.contract_id).limit(1);
+    const contract = res.error || res.data?.length !== 1 ? null : res.data[0];
+    if (contract && contract['project_id'] === m.project_id &&
+        contract['state'] === 'completed' &&
+        contract['provider_event_verified'] === true &&
+        isIsoTimestamp(contract['signed_at'])) {
+      signedAt = contract['signed_at'];
+    }
+  } catch {
+    signedAt = null;
+  }
+  if (!signedAt) {
+    return { ok: false, error: 'authoritative_contract_timing_unavailable',
+      measurement: m };
   }
   const approved = approveMeasurementPure(m, actor, approvedAt, signedAt);
   if (!approved.ok) return { ok: false, error: approved.reason, measurement: m };
@@ -423,6 +533,8 @@ export async function approveMeasurement(
       ['status', 'submitted'],
       ['sha256', m.sha256],
       ['source', 'final_measure'],
+      ['measured_at', m.measured_at],
+      ['measured_by', m.measured_by],
     ],
   );
   if (!cas.ok) return { ...cas, measurement: m };

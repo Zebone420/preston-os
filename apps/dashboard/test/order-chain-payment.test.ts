@@ -243,6 +243,11 @@ describe('payment receipt replay - durable append-only facts', () => {
     const b = rebuildPaymentLedger(installLedger(), [one, two]);
     expect(a).toEqual(b);
     expect(a.ok && paymentConditionMet(a.ledger, 'deposit')).toEqual({ ok: true });
+    const offset = { ...one, occurred_at: '2026-09-15T06:00:00.000-04:00' };
+    expect(rebuildPaymentLedger(installLedger(), [one, offset]).ok).toBe(true);
+    expect(rebuildPaymentLedger(installLedger(), [
+      { ...one, occurred_at: 'not-a-timestamp' },
+    ])).toMatchObject({ ok: false, reason: 'invalid_receipt_evidence' });
   });
 
   it('fails closed when a replay key carries different payment facts', () => {

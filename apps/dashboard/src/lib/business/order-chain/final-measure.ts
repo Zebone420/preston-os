@@ -110,8 +110,9 @@ export function validateOpenings(input: unknown): OpeningsValidation {
   return { ok: true, openings: out };
 }
 
-// The measurement digest binds identity, version, and the measured
-// values. Notes are excluded: they are human context, not geometry.
+// The measurement digest binds identity, version, source, and measured values.
+// measured_at/measured_by remain outside this legacy digest for persisted-row
+// compatibility; persistence CAS must bind both fields before approval.
 export function measurementSha256(
   m: Pick<
     FinalMeasurement,

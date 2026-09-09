@@ -169,6 +169,10 @@ describe('final measure - versioning and approval', () => {
         '2026-09-11T09:00:00.000Z', SIGNED_AT).ok,
     ).toBe(false);
     expect(measurementSha256(tampered)).not.toBe(d.sha256);
+    const retimed = { ...d, measured_at: '2026-09-20T15:00:00.000Z' };
+    // Keep the legacy digest stable for existing persisted measurements.
+    // Persistence approval separately CAS-binds measured_at/measured_by.
+    expect(measurementSha256(retimed)).toBe(d.sha256);
   });
 
   it('an estimate can be stored and submitted but never approved', () => {

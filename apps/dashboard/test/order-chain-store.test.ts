@@ -186,7 +186,7 @@ describe('order-chain store - contracts', () => {
       .toEqual(['update:contracts:id+state', 'update:contracts:id+state']);
   });
 
-  it('a replayed webhook is an idempotent no-op that never re-transitions', async () => {
+  it('a replayed webhook reconciles to the already-applied state', async () => {
     const db = makeFakeDb();
     await insertContract(db.client, draftedContract(), NOW);
     const sent = await applyContractEvent(db.client, draftedContract(),
@@ -198,10 +198,60 @@ describe('order-chain store - contracts', () => {
     const replay = await applyContractEvent(db.client, sent.contract,
       completedEvent(), NOW);
     expect(replay).toMatchObject({ ok: true, duplicate: true,
-      refused: 'duplicate_provider_event' });
-    expect(replay.contract).toEqual(sent.contract);
-    expect(db.ops.slice(updates)).toEqual(['insert:contract_provider_events']);
+      contract: { state: 'completed' } });
+    expect(db.ops.slice(updates)).toContain('insert:contract_provider_events');
     expect(db.rows('contract_provider_events')).toHaveLength(1);
+    const offsetReplay = await applyContractEvent(db.client, sent.contract,
+      { ...completedEvent(), occurred_at: '2026-09-04T06:00:00.000-04:00' }, NOW);
+    expect(offsetReplay).toMatchObject({ ok: true, duplicate: true });
+  });
+
+  it('reconciles a delivered replay whose signed_at remains null', async () => {
+    const db = makeFakeDb();
+    await insertContract(db.client, draftedContract(), NOW);
+    const sent = await applyContractEvent(db.client, draftedContract(),
+      { type: 'mark_sent', provider_envelope_id: 'env-001', at: NOW }, NOW);
+    const delivered: ProviderEvent = {
+      type: 'provider_event', provider_event_id: 'evt-delivered',
+      event_type: 'envelope-delivered', provider_envelope_id: 'env-001',
+      provider_event_verified: true, occurred_at: NOW,
+    };
+    expect((await applyContractEvent(db.client, sent.contract, delivered, NOW)).ok)
+      .toBe(true);
+    expect(await applyContractEvent(db.client, sent.contract, delivered, NOW))
+      .toMatchObject({ ok: true, duplicate: true,
+        contract: { state: 'viewed', signed_at: null } });
+  });
+
+  it('recovers when evidence committed but the first contract CAS lost', async () => {
+    const db = makeFakeDb();
+    await insertContract(db.client, draftedContract(), NOW);
+    const sent = await applyContractEvent(db.client, draftedContract(),
+      { type: 'mark_sent', provider_envelope_id: 'env-001', at: NOW }, NOW);
+    const viewed = await applyContractEvent(db.client, sent.contract,
+      { type: 'mark_viewed', at: NOW }, NOW);
+    const lost = await applyContractEvent(db.client, sent.contract,
+      completedEvent('evt-recover'), NOW);
+    expect(lost).toMatchObject({ ok: false, error: 'state_changed_elsewhere' });
+    expect(db.rows('contract_provider_events')).toHaveLength(1);
+    const retry = await applyContractEvent(db.client, viewed.contract,
+      completedEvent('evt-recover'), NOW);
+    expect(retry).toMatchObject({ ok: true, duplicate: true,
+      contract: { state: 'completed' } });
+    expect(db.rows('contract_provider_events')).toHaveLength(1);
+  });
+
+  it('fails closed when a duplicate provider id carries different facts', async () => {
+    const db = makeFakeDb();
+    await insertContract(db.client, draftedContract(), NOW);
+    const sent = await applyContractEvent(db.client, draftedContract(),
+      { type: 'mark_sent', provider_envelope_id: 'env-001', at: NOW }, NOW);
+    await applyContractEvent(db.client, sent.contract, completedEvent('evt-conflict'), NOW);
+    const conflict = await applyContractEvent(db.client, sent.contract,
+      { ...completedEvent('evt-conflict'), occurred_at: NOW }, NOW);
+    expect(conflict).toMatchObject({
+      ok: false, error: 'duplicate_provider_event_binding_mismatch',
+    });
   });
 
   it('an unverified event is kept as evidence but refused for state', async () => {
@@ -229,28 +279,36 @@ describe('order-chain store - contracts', () => {
 });
 
 describe('order-chain store - expectations, measurements, checks, packages', () => {
-  it('upsertExpectation inserts then updates on the (contract, milestone) key', async () => {
+  it('upsertExpectation inserts immutable initial facts and reconciles replay', async () => {
     const db = makeFakeDb();
     const ledger = paidDepositLedger();
     for (const e of ledger.expectations) {
-      expect((await upsertExpectation(db.client, e, NOW)).ok).toBe(true);
+      const initial = { ...e, state: 'expected' as const, received_cents: 0,
+        reconciliation_state: 'unreconciled' as const };
+      expect((await upsertExpectation(db.client, initial, NOW)).ok).toBe(true);
     }
     expect(db.rows('payment_expectations')).toHaveLength(3);
-    const deposit = { ...ledger.expectations[0], received_cents: 462719 };
-    const r = await upsertExpectation(db.client, deposit, NOW);
-    expect(r.ok).toBe(true);
+    const deposit = { ...ledger.expectations[0], state: 'expected' as const,
+      received_cents: 0, reconciliation_state: 'unreconciled' as const };
+    expect(await upsertExpectation(db.client, deposit, NOW))
+      .toMatchObject({ ok: true, duplicate: true });
     expect(db.rows('payment_expectations')).toHaveLength(3);
     expect(db.rows('payment_expectations')[0]).toMatchObject({
-      milestone: 'deposit', state: 'received', received_cents: 462719,
+      milestone: 'deposit', state: 'expected', received_cents: 0,
     });
-    expect(db.ops.at(-1)).toBe(
-      'update:payment_expectations:contract_id+milestone+quote_hash+expected_amount_cents',
-    );
-    // A drifted expected amount cannot update the stored row.
+    expect(db.ops.filter((op) => op.startsWith('update:payment_expectations')))
+      .toEqual([]);
+    // A drifted binding cannot replace the stored row.
     const drift = { ...deposit, expected_amount_cents: 1 };
-    expect((await upsertExpectation(db.client, drift, NOW)).ok).toBe(false);
+    expect(await upsertExpectation(db.client, drift, NOW))
+      .toMatchObject({ ok: false, error: 'expectation_binding_mismatch' });
     expect((await upsertExpectation(db.client,
       { ...deposit, received_cents: -1 }, NOW)).ok).toBe(false);
+    expect(await upsertExpectation(db.client,
+      { ...deposit, state: 'received', received_cents: 1,
+        reconciliation_state: 'reconciled' }, NOW)).toMatchObject({
+      ok: false, error: 'expectation_snapshot_mutation_disabled',
+    });
   });
 
   it('records fully bound receipt evidence once and replay is a no-op', async () => {
@@ -270,18 +328,29 @@ describe('order-chain store - expectations, measurements, checks, packages', () 
       idempotency_key: 'durable-receipt-1', occurred_at: NOW,
       recorded_by: OWNER.id, source_ref: 'staging-receipt-1',
     };
-    const first = await recordPaymentReceipt(db.client, base, event);
+    const first = await recordPaymentReceipt(db.client, base, event, OWNER);
     expect(first.ok).toBe(true);
     expect(first.ledger.applied_event_keys).toEqual(['durable-receipt-1']);
     expect(db.rows('payment_receipt_events')[0]).toMatchObject(event);
-    const replay = await recordPaymentReceipt(db.client, base, event);
+    const replay = await recordPaymentReceipt(db.client, base, event, OWNER);
     expect(replay).toMatchObject({ ok: true, duplicate: true, ledger: base });
     expect(db.rows('payment_receipt_events')).toHaveLength(1);
+    const equivalentOffset = await recordPaymentReceipt(db.client, base,
+      { ...event, occurred_at: '2026-09-15T08:00:00.000-04:00' }, OWNER);
+    expect(equivalentOffset).toMatchObject({ ok: true, duplicate: true });
     const conflict = await recordPaymentReceipt(db.client, base,
-      { ...event, amount_cents: event.amount_cents - 1 });
+      { ...event, amount_cents: event.amount_cents - 1 }, OWNER);
     expect(conflict).toMatchObject({
       ok: false, error: 'duplicate_receipt_binding_mismatch', ledger: base,
     });
+    expect(await recordPaymentReceipt(db.client, base, event, RUNTIME))
+      .toMatchObject({ ok: false, error: 'receipt_actor_attribution_mismatch' });
+    expect(await recordPaymentReceipt(db.client, base,
+      { ...event, source_ref: '' }, OWNER))
+      .toMatchObject({ ok: false, error: 'invalid_receipt_evidence' });
+    expect(await recordPaymentReceipt(db.client, base,
+      { ...event, idempotency_key: 'x'.repeat(257) }, OWNER))
+      .toMatchObject({ ok: false, error: 'invalid_receipt_evidence' });
   });
 
   it('measurements are never inserted approved; approval is CAS on submitted', async () => {
@@ -294,23 +363,50 @@ describe('order-chain store - expectations, measurements, checks, packages', () 
     expect(db.rows('final_measurements')[0]).toMatchObject({
       id: MEASUREMENT_ID, status: 'submitted', approved_by: null,
     });
-    const byRuntime = await approveMeasurement(
-      db.client, submitted, RUNTIME, NOW, SIGNED_AT);
+    const persistedDraft = draftedContract();
+    expect((await insertContract(db.client, persistedDraft, NOW)).ok).toBe(true);
+    const sent = await applyContractEvent(db.client, persistedDraft, {
+      type: 'mark_sent', provider_envelope_id: 'env-001', at: NOW,
+    }, NOW);
+    expect(sent.ok).toBe(true);
+    const complete = await applyContractEvent(
+      db.client, sent.contract, completedEvent('measure-contract-complete'), NOW);
+    expect(complete.ok).toBe(true);
+    const byRuntime = await approveMeasurement(db.client, submitted, RUNTIME, NOW);
     expect(byRuntime.ok).toBe(false);
     expect(byRuntime.error).toBe('human_actor_required');
-    const byOwner = await approveMeasurement(
-      db.client, submitted, OWNER, NOW, SIGNED_AT);
+    const byOwner = await approveMeasurement(db.client, submitted, OWNER, NOW);
     expect(byOwner.ok).toBe(true);
     expect(byOwner.measurement.status).toBe('approved');
     expect(db.rows('final_measurements')[0]).toMatchObject({
       status: 'approved', approved_by: 'owner-1', approved_at: NOW,
     });
-    expect(db.ops.at(-1)).toBe('update:final_measurements:id+status+sha256+source');
+    expect(db.ops.at(-1))
+      .toBe('update:final_measurements:id+status+sha256+source+measured_at+measured_by');
     // Second approval finds no submitted row: CAS refuses.
-    const twice = await approveMeasurement(
-      db.client, submitted, OWNER, NOW, SIGNED_AT);
+    const twice = await approveMeasurement(db.client, submitted, OWNER, NOW);
     expect(twice.ok).toBe(false);
     expect(twice.error).toBe('state_changed_elsewhere');
+  });
+
+  it('measurement approval CAS refuses caller-retimed persisted evidence', async () => {
+    const db = makeFakeDb();
+    const submitted = { ...approvedMeasurement(), status: 'submitted' as const,
+      approved_by: null, approved_at: null };
+    expect((await insertMeasurement(db.client, submitted, NOW)).ok).toBe(true);
+    const contract = draftedContract();
+    await insertContract(db.client, contract, NOW);
+    const sent = await applyContractEvent(db.client, contract,
+      { type: 'mark_sent', provider_envelope_id: 'env-001', at: NOW }, NOW);
+    await applyContractEvent(db.client, sent.contract,
+      completedEvent('measure-retime-contract'), NOW);
+    const retimed = { ...submitted, measured_at: '2026-09-20T15:00:00.000Z' };
+    expect(retimed.sha256).toBe(submitted.sha256);
+    expect(await approveMeasurement(db.client, retimed, OWNER,
+      '2026-09-21T09:00:00.000Z')).toMatchObject({
+      ok: false, error: 'state_changed_elsewhere',
+    });
+    expect(db.rows('final_measurements')[0].status).toBe('submitted');
   });
 
   it('readiness checks are appended with all_ok recomputed, never trusted', async () => {

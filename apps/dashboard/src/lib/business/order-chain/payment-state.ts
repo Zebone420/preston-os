@@ -270,6 +270,14 @@ export type PaymentReplay =
   | { ok: true; ledger: PaymentLedger }
   | { ok: false; reason: string; ledger: PaymentLedger };
 
+function receiptEventsEqual(a: PaymentReceiptEvent, b: PaymentReceiptEvent): boolean {
+  const aMs = Date.parse(a.occurred_at);
+  const bMs = Date.parse(b.occurred_at);
+  if (!Number.isFinite(aMs) || aMs !== bMs) return false;
+  return canonicalJson({ ...a, occurred_at: '' }) ===
+    canonicalJson({ ...b, occurred_at: '' });
+}
+
 // Rebuild the derived ledger from append-only durable receipt facts. Ordering
 // is deterministic. Exact duplicate keys are one event; the same key with a
 // different payload is a conflict and the replay fails closed.
@@ -280,13 +288,17 @@ export function rebuildPaymentLedger(
   const unique = new Map<string, PaymentReceiptEvent>();
   for (const event of events) {
     if (!isIsoTimestamp(event.occurred_at) ||
+        typeof event.idempotency_key !== 'string' ||
+        !event.idempotency_key.trim() || event.idempotency_key.length > 256 ||
         typeof event.recorded_by !== 'string' || !event.recorded_by.trim() ||
-        typeof event.source_ref !== 'string' || !event.source_ref.trim()) {
+        event.recorded_by.length > 256 ||
+        typeof event.source_ref !== 'string' || !event.source_ref.trim() ||
+        event.source_ref.length > 512) {
       return { ok: false, reason: 'invalid_receipt_evidence', ledger: base };
     }
     const prior = unique.get(event.idempotency_key);
     if (prior) {
-      if (canonicalJson(prior) !== canonicalJson(event)) {
+      if (!receiptEventsEqual(prior, event)) {
         return { ok: false, reason: 'event_replay_conflict', ledger: base };
       }
       continue;
@@ -294,7 +306,7 @@ export function rebuildPaymentLedger(
     unique.set(event.idempotency_key, event);
   }
   const ordered = [...unique.values()].sort((a, b) =>
-    a.occurred_at.localeCompare(b.occurred_at) ||
+    Date.parse(a.occurred_at) - Date.parse(b.occurred_at) ||
     a.idempotency_key.localeCompare(b.idempotency_key));
   let ledger: PaymentLedger = {
     ...base, expectations: base.expectations.map((e) => ({ ...e })),
