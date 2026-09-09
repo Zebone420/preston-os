@@ -193,19 +193,27 @@ export function extractResultParts(stdout: string): {
   full_text: string | null;
   structured: StructuredResult | null;
   structured_error: string | null;
+  // M7: the CLI's own reported USD cost, parsed from the SAME top-level
+  // JSON object as `result` (claude CLI --output-format json total_cost_usd).
+  // Null whenever stdout is not one JSON object with a finite numeric field
+  // there - never estimated, never derived from token counts.
+  cost_usd: number | null;
 } {
   const t = String(stdout ?? '').trim();
   if (!t) {
     return {
       excerpt: null, full_text: null,
-      structured: null, structured_error: 'no_output',
+      structured: null, structured_error: 'no_output', cost_usd: null,
     };
   }
   let resultText = t;
+  let cost_usd: number | null = null;
   try {
     const j = JSON.parse(t) as Record<string, unknown>;
     const r = j['result'];
     if (typeof r === 'string' && r.trim()) resultText = r.trim();
+    const c = j['total_cost_usd'];
+    if (typeof c === 'number' && Number.isFinite(c)) cost_usd = c;
   } catch { /* not JSON - treat the raw text as the result */ }
   const parsed = parseStructuredResult(resultText);
   // Strip the machine block from the human excerpt.
@@ -222,6 +230,7 @@ export function extractResultParts(stdout: string): {
     full_text: human ? redactProcessText(human) : null,
     structured: parsed.ok ? parsed.value : null,
     structured_error: parsed.ok ? null : parsed.error,
+    cost_usd,
   };
 }
 
@@ -845,6 +854,10 @@ export interface RealAdapterResult {
   // Fast-track Phase E: routing-table decision recorded per run.
   provider_model: string | null;
   routing_reason: string | null;
+  // M7: the claude CLI's own reported USD cost for this run
+  // (--output-format json total_cost_usd), never estimated. Null when the
+  // CLI output was not JSON-shaped or carried no such field.
+  cost_usd: number | null;
 }
 
 export function mapProcessOutcome(o: ProcessOutcome): {
@@ -936,6 +949,7 @@ function refuse(
     structured_error: null,
     provider_model: null,
     routing_reason: null,
+    cost_usd: null,
   };
 }
 
@@ -1011,6 +1025,7 @@ export async function runRealClaudeJob(
     structured_error: parts.structured_error,
     provider_model: routed.model,
     routing_reason: routed.reason,
+    cost_usd: parts.cost_usd,
   };
 }
 

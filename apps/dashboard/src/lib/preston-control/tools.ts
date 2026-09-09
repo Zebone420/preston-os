@@ -717,6 +717,8 @@ export async function readJobResultReports(ctx: ToolContext, jobId: string) {
         structured_error: p['structured_error'] == null ? null : safeText(p['structured_error'], 120),
         provider_model: p['provider_model'] == null ? null : safeText(p['provider_model'], 80),
         duration_ms: Number.isFinite(Number(p['duration_ms'])) ? Number(p['duration_ms']) : null,
+        // M7: provider-reported USD cost for this run, when the CLI exposed one.
+        cost_usd: typeof p['cost_usd'] === 'number' && Number.isFinite(p['cost_usd']) ? p['cost_usd'] : null,
         recorded_at: String(row['created_at'] ?? ''),
       };
     });

@@ -100,6 +100,12 @@ export interface RealExecutionResult {
   provider_model?: string | null;
   routing_reason?: string | null;
   duration_ms?: number | null;
+  // M7 operational hardening (additive): the provider CLI's own reported
+  // USD cost for this run, when the CLI's output format exposes one (the
+  // claude CLI's --output-format json total_cost_usd field). Never
+  // estimated or derived - null when the CLI's output does not carry it
+  // (e.g. the Codex CLI's NDJSON event stream is not parsed for cost).
+  cost_usd?: number | null;
 }
 
 export type RealJobExecutor = (input: {
@@ -712,6 +718,8 @@ export async function driverStep(
               provider_model: real?.provider_model ?? null,
               routing_reason: real?.routing_reason ?? null,
               duration_ms: real?.duration_ms ?? null,
+              // M7: provider-reported USD cost for this run, when available.
+              cost_usd: typeof real?.cost_usd === 'number' ? real.cost_usd : null,
               // Power-station artifact durability (additive): what this run
               // durably persisted, and the explicit unrecorded condition.
               artifact_refs: (real?.report?.artifact_refs ?? []).slice(0, 10),

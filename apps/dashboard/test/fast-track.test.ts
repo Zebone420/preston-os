@@ -325,6 +325,26 @@ describe('B. structured result contract', () => {
     expect(parts.excerpt).toBe('plain answer');
   });
 
+  it('M7 extractResultParts: captures the CLI-reported total_cost_usd, never estimated', () => {
+    const parts = extractResultParts(JSON.stringify({ result: 'done', total_cost_usd: 0.0431 }));
+    expect(parts.cost_usd).toBe(0.0431);
+  });
+
+  it('M7 extractResultParts: cost_usd is null when the field is absent (never fabricated)', () => {
+    const parts = extractResultParts(JSON.stringify({ result: 'done' }));
+    expect(parts.cost_usd).toBeNull();
+  });
+
+  it('M7 extractResultParts: cost_usd is null when stdout is not JSON-shaped (e.g. Codex NDJSON)', () => {
+    const parts = extractResultParts('{"type":"turn"}\n{"type":"agent_message","text":"done"}');
+    expect(parts.cost_usd).toBeNull();
+  });
+
+  it('M7 extractResultParts: a non-numeric total_cost_usd is ignored, never coerced', () => {
+    const parts = extractResultParts(JSON.stringify({ result: 'done', total_cost_usd: 'free' }));
+    expect(parts.cost_usd).toBeNull();
+  });
+
   it('the prompt clause names the contract', () => {
     const c = structuredResultPromptClause();
     expect(c).toContain(BEGIN_MARKER);
