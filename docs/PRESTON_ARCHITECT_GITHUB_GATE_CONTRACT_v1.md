@@ -1,6 +1,6 @@
 # PRESTON ARCHITECT / GITHUB GATE — IMPLEMENTATION CONTRACT v1
 
-Status: FIRST-TIME DESIGN. No prior AG-1..AG-10 plan or ADR set exists
+Status: OWNER_APPROVED. No prior AG-1..AG-10 plan or ADR set exists
 anywhere in this repository, its branch history, or owner files (confirmed
 by exhaustive search 2026-09-08). This document is that plan, drafted from
 the requirements established in the owning conversation and grounded in the
@@ -550,7 +550,7 @@ before the AG-10 commit, not after.
 
 ---
 
-**ARCHITECT PLAN STATUS: READY_FOR_IMPLEMENTATION**
+**ARCHITECT PLAN STATUS: OWNER_APPROVED**
 
 First implementation package: **AG-1 — Architect Request Intake
 Contract** (`apps/dashboard/src/lib/ai-os/architect/intake.ts`).
