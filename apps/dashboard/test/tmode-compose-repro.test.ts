@@ -1,9 +1,10 @@
 // T-mode live defect regression (2026-08-18, prod goal c049c964).
 // Two facts this file pins:
 //  1. The canonical T-mode team-goal TEXT composes into exactly the
-//     plan -> implement -> review chain with every role EXPLICIT (the
-//     free-prose "Then write... using codex" form parses to zero tasks
-//     and must keep being rejected, not silently mis-shaped).
+//     plan -> implement -> review chain with every role EXPLICIT, and
+//     since the 2026-09-08 P0 defect E repair the free-prose "Then
+//     write... using codex" form composes the SAME chain (prose
+//     derivation: one task per sentence, nothing mis-shaped or dropped).
 //  2. buildJobs honors the explicit role on an audit-kind task: the
 //     audit ROLE has no real adapter, so an owner-routed review job
 //     must persist as claude (or codex), never 'audit'. Live failure
@@ -36,11 +37,27 @@ function goal(): MasterGoal {
 }
 
 describe('t-mode team goal composition + role mapping (live regression)', () => {
-  it('rejects the free-prose form instead of mis-shaping it', () => {
-    const r = composeRequest(PROSE_TEXT);
-    expect(r.ok).toBe(false);
-    if (r.ok) return;
-    expect(r.errors.join(',')).toContain('has_no_tasks');
+  it('the free-prose form composes the SAME chain as the Task-labelled form (P0 defect E repair, 2026-09-08)', () => {
+    // Formerly rejected has_no_tasks (the prose sentences became warnings).
+    // Prose derivation now attaches the owner's own sentences as tasks in
+    // order: the implicit goal's opening sentence is step one, each leading
+    // "Then" chains onto the previous step, explicit roles are honored.
+    // Nothing is invented and nothing is dropped; an unresolvable sentence
+    // would still reject the whole request (composer-bare-goal pins it).
+    const prose = composeRequest(PROSE_TEXT);
+    const labelled = composeRequest(TMODE_TEXT);
+    expect(prose.ok).toBe(true);
+    expect(labelled.ok).toBe(true);
+    if (!prose.ok || !labelled.ok) return;
+    const shape = (p: typeof prose) => p.goals.flatMap((g) => g.tasks).map((t) => ({
+      kind: t.kind, role: t.requested_role, deps: t.depends_on_local,
+      tier: t.tier, requires_approval: t.requires_approval,
+    }));
+    expect(shape(prose)).toHaveLength(3);
+    expect(shape(prose)).toEqual(shape(labelled));
+    expect(shape(prose).map((t) => t.role)).toEqual(['claude', 'codex', 'claude']);
+    expect(shape(prose).map((t) => t.deps)).toEqual([[], ['t1'], ['t2']]);
+    expect(prose.warnings).toContain('tasks_derived_from_prose:2');
   });
 
   it('composes Task-labelled text into the explicit 3-role chain', () => {

@@ -4,8 +4,9 @@
 // ever reached a worker. The composer now derives exactly one task from a
 // bare single-sentence request - in the owner's own words, through the same
 // kind resolution, prohibited scans, and policy classification as every
-// other task. Everything genuinely ambiguous, multi-step prose, or explicit
-// task-less goals must KEEP rejecting fail-closed.
+// other task. Since the 2026-09-08 P0 defect E repair, multi-step prose
+// composes one task per sentence (nothing invented, nothing dropped);
+// genuinely ambiguous requests and explicit task-less goals KEEP rejecting.
 import { describe, expect, it } from 'vitest';
 import { composeRequest } from '../src/lib/ai-os/orchestration/composer';
 import { prestonSubmitGoal, type ToolContext } from '../src/lib/preston-control/tools';
@@ -79,11 +80,65 @@ describe('ambiguous and multi-step prose keeps rejecting fail-closed', () => {
       .toContain('ambiguous_request:goal_1_has_no_tasks');
   });
 
-  it('multi-step free prose still rejects instead of silently dropping steps', () => {
-    // tmode-compose-repro pins the same fact for the 3-step form.
-    const errs = errsOf(composeRequest(
+  it('multi-step free prose composes one task per sentence (P0 defect E repair, 2026-09-08)', () => {
+    // Formerly rejected goal_1_has_no_tasks: the second sentence only became
+    // an unparsed_sentence warning. Derivation now attaches the owner's own
+    // sentences as tasks, in order - it invents nothing and drops nothing.
+    // The opening sentence of an implicit goal is its first step, so the
+    // leading "Then" chains onto it. tmode-compose-repro pins the 3-step
+    // form with explicit roles.
+    const p = okOf(composeRequest(
       'Audit the repository. Then summarize what you found in a report.'));
-    expect(errs.join(',')).toContain('goal_1_has_no_tasks');
+    expect(p.goals).toHaveLength(1);
+    const tasks = p.goals[0].tasks;
+    expect(tasks.map((t) => t.kind)).toEqual(['audit', 'documentation']);
+    expect(tasks[0].objective).toBe('Audit the repository.');
+    expect(tasks[1].objective).toBe('summarize what you found in a report.');
+    expect(tasks[1].depends_on_local).toEqual(['t1']);
+    expect(p.warnings).toContain('tasks_derived_from_prose:1');
+    expect(p.warnings).toContain('task_derived_from_goal_objective');
+    expect(p.warnings.some((w) => w.startsWith('unparsed_sentence:'))).toBe(false);
+  });
+
+  it('an unresolvable sentence rejects the WHOLE request, naming the task (no partial shape)', () => {
+    const errs = errsOf(composeRequest(
+      'Audit the repository. Then zorble the frobnicator.'));
+    expect(errs.join(',')).toContain('ambiguous_request:task_kind_unresolved:t2');
+  });
+
+  it('a prohibited capability in a later sentence rejects the request', () => {
+    const errs = errsOf(composeRequest(
+      'Audit the repository. Then update the production credentials.'));
+    expect(errs.join(',')).toContain('prohibited:production_access');
+    expect(errs.join(',')).toContain('prohibited:credential_access');
+  });
+
+  it('an explicit goal followed by prose sentences composes those sentences as its tasks', () => {
+    const p = okOf(composeRequest(
+      'Create a goal to harden the scheduler. Audit the dispatcher. ' +
+      'Then add a regression test for the selection window.'));
+    expect(p.goals).toHaveLength(1);
+    expect(p.goals[0].objective).toBe('harden the scheduler.');
+    expect(p.goals[0].tasks.map((t) => t.kind)).toEqual(['audit', 'test']);
+    expect(p.goals[0].tasks[1].depends_on_local).toEqual(['t1']);
+    expect(p.warnings).toContain('tasks_derived_from_prose:2');
+    // The explicit goal statement is NOT itself a task.
+    expect(p.warnings).not.toContain('task_derived_from_goal_objective');
+  });
+
+  it('with two explicit goals, prose sentences attach to the CURRENT (latest) goal', () => {
+    const p = okOf(composeRequest(
+      'Create a goal to harden the scheduler. Audit the dispatcher. ' +
+      'Create a goal to tidy the docs. Summarize the runbooks.'));
+    expect(p.goals).toHaveLength(2);
+    expect(p.goals[0].tasks.map((t) => t.objective)).toEqual(['Audit the dispatcher.']);
+    expect(p.goals[1].tasks.map((t) => t.objective)).toEqual(['Summarize the runbooks.']);
+  });
+
+  it('a malformed task marker still rejects rather than being guessed', () => {
+    const errs = errsOf(composeRequest(
+      'Create a goal to tidy notes. Create an extra-numbered task to summarize the notes.'));
+    expect(errs.join(',')).toContain('ambiguous_request:task_sentence_unparsed');
   });
 
   it('prohibited capabilities in a bare sentence still reject', () => {

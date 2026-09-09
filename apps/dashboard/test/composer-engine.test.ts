@@ -243,9 +243,14 @@ describe('composer engine - interpretation', () => {
       const q = composeRequest(
         `Create a goal to tidy notes. Create ${form} to summarize the notes.`);
       if (form === 'an extra-numbered task') {
-        // Unknown filler words still fall through - only count words are
-        // accepted; anything else stays fail-closed unparsed.
+        // Unknown filler words still fail closed - only count words are
+        // accepted. Since the 2026-09-08 prose derivation a malformed task
+        // marker is rejected explicitly (task_sentence_unparsed) rather
+        // than guessed as a plain step.
         expect(q.ok).toBe(false);
+        if (!q.ok) {
+          expect(q.errors.join(',')).toContain('ambiguous_request:task_sentence_unparsed');
+        }
       } else {
         expect(okOf(q).goals[0].tasks.length).toBeGreaterThanOrEqual(1);
       }

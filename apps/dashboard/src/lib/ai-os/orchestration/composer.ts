@@ -127,6 +127,22 @@ const KIND_LEXICON: Array<[JobKind, RegExp]> = [
   // "prepare"/"outline" deterministically becomes recommendation.
   ['recommendation', /\b(recommend|propos|suggest|plan|prepar|outline)/i],
   ['code', /\b(implement|build|code|refactor|add\b|create\s+(a\s+)?(component|endpoint|helper|feature))/i],
+  // Reviewed lexicon widening (P0 defect E repair, 2026-09-08). Live intake
+  // rejected ordinary owner wording (update/configure/set up/create a file/
+  // analyze/describe ...) as task_kind_unresolved, which dead-ended clear
+  // requests at the boundary. These entries are APPENDED so every text that
+  // resolved before keeps its kind (first match wins); they only resolve
+  // text that used to be 'unknown'. Risk/approval is unaffected: the policy
+  // engine classifies the objective text, never the kind label, and every
+  // prohibited-capability / injection scan still runs first.
+  ['code', /\b(update|chang(e|ing)|modif|adjust|renam|replac|extend|wir(e|ing)|introduc|expos|register|harden|improv|optimi[sz]|simplif|consolidat|convert|upgrad|bump|pin|scaffold|set\s?up|configur|install|clean\s?up|remov)/i],
+  // (?<![-\w]) keeps a compound like "<system>-write" unresolved: that is an
+  // external write request (policy RED taxonomy), never a repository edit or
+  // documentation - it stays rejected at the boundary.
+  ['code', /(?<![-\w])(create|generate|write)\b[^.\n]{0,40}\b(files?|scripts?|modules?|tests?|pages?|routes?|tables?|functions?|class(es)?|types?|utils?|configs?|components?|docs?|notes?|readme)\b/i],
+  ['audit', /\b(analy[sz]|investigat|diagnos|identif|find\b|locat|search|trac(e|ing)|measur|compar|assess|evaluat|determin|confirm|scan|enumerat|inventor|catalog)/i],
+  ['audit', /^(list|map)\b/i],
+  ['documentation', /(?<![-\w])(write|draft|describ|explain|spec\b|design)/i],
 ];
 
 const KNOWN_ROLES: ReadonlySet<string> = new Set(['claude', 'codex', 'audit']);
@@ -229,8 +245,11 @@ export function composeRequest(raw: unknown): ComposeOutcome {
   // implicit marks a goal minted from a bare opening sentence (no explicit
   // "goal"/"task" marker) - the only shape eligible for the single-sentence
   // task derivation below.
+  // prose counts the tasks attached from plain sentences (P0 defect E
+  // repair) so the review surface can show that derivation happened.
   const goals: Array<{
     title: string; objective: string; tasks: RawTask[]; implicit?: boolean;
+    prose: number;
   }> = [];
   const current = () => goals[goals.length - 1];
 
@@ -250,18 +269,18 @@ export function composeRequest(raw: unknown): ComposeOutcome {
     let m: RegExpMatchArray | null;
     if ((m = sentence.match(goalLabel)) || (m = sentence.match(goalStart))) {
       errors.push(...scanProhibited(m[1]));
-      goals.push({ title: titleOf(m[1]), objective: m[1].trim(), tasks: [] });
+      goals.push({ title: titleOf(m[1]), objective: m[1].trim(), tasks: [], prose: 0 });
       continue;
     }
     if ((m = sentence.match(taskListStart))) {
-      if (!current()) goals.push({ title: '', objective: '', tasks: [] });
+      if (!current()) goals.push({ title: '', objective: '', tasks: [], prose: 0 });
       for (const item of splitEnumeration(m[1])) {
         current().tasks.push({ text: item, explicit_number: null });
       }
       continue;
     }
     if ((m = sentence.match(taskLabel))) {
-      if (!current()) goals.push({ title: '', objective: '', tasks: [] });
+      if (!current()) goals.push({ title: '', objective: '', tasks: [], prose: 0 });
       current().tasks.push({
         text: m[2].trim(),
         explicit_number: m[1] ? Number(m[1]) : null,
@@ -269,7 +288,7 @@ export function composeRequest(raw: unknown): ComposeOutcome {
       continue;
     }
     if ((m = sentence.match(bullet))) {
-      if (!current()) goals.push({ title: '', objective: '', tasks: [] });
+      if (!current()) goals.push({ title: '', objective: '', tasks: [], prose: 0 });
       current().tasks.push({ text: m[1].trim(), explicit_number: null });
       continue;
     }
@@ -281,11 +300,29 @@ export function composeRequest(raw: unknown): ComposeOutcome {
       // The opening sentence, when not an explicit goal marker, is read as
       // the goal statement itself.
       errors.push(...scanProhibited(sentence));
-      goals.push({ title: titleOf(sentence), objective: sentence, tasks: [], implicit: true });
+      goals.push({ title: titleOf(sentence), objective: sentence, tasks: [], implicit: true, prose: 0 });
       continue;
     }
+    // Plain sentence after a goal (P0 defect E repair, 2026-09-08): it is
+    // the owner's own next step, attached to the CURRENT goal as a task in
+    // order. Formerly it became only an unparsed_sentence warning, so any
+    // multi-sentence request ("Audit X. Then summarize Y.") composed zero
+    // tasks and was rejected goal_N_has_no_tasks. Derivation invents
+    // nothing and drops nothing: the sentence goes through the same kind
+    // resolution, prohibited scans, role/dependency parsing, and policy
+    // classification as an explicit task, and an unresolvable one still
+    // rejects the WHOLE request (task_kind_unresolved) - never a partial
+    // shape.
     errors.push(...scanProhibited(sentence));
-    warnings.push(`unparsed_sentence:${titleOf(sentence).slice(0, 40)}`);
+    // A sentence shaped like a task marker that the marker grammar could
+    // not parse ("Create an extra-numbered task to ...") is a malformed
+    // instruction, not a plain step: reject it rather than guess.
+    if (/^(?:also\s+)?create\b[^.\n]*\btasks?\b/i.test(sentence)) {
+      errors.push('ambiguous_request:task_sentence_unparsed');
+      continue;
+    }
+    current().tasks.push({ text: sentence, explicit_number: null });
+    current().prose += 1;
   }
   if (errors.length) return { ok: false, errors: [...new Set(errors)] };
 
@@ -301,19 +338,30 @@ export function composeRequest(raw: unknown): ComposeOutcome {
       errors.push(`ambiguous_request:goal_${gi + 1}_empty`);
       return;
     }
+    // Prose-derived tasks (P0 defect E repair, 2026-09-08). When an IMPLICIT
+    // goal's tasks all came from plain sentences, the opening sentence is
+    // the owner's first step too ("Audit the repository. Then summarize
+    // ...": the audit IS step one) - prepend it so a leading "Then" chains
+    // onto it and no step is lost. A goal that received explicit task
+    // markers keeps its opening sentence as the goal statement only.
+    if (g.prose > 0) {
+      if (g.implicit && g.tasks.length === g.prose) {
+        g.tasks.unshift({ text: g.objective, explicit_number: null });
+        warnings.push('task_derived_from_goal_objective');
+      }
+      warnings.push(`tasks_derived_from_prose:${g.prose}`);
+    }
     if (g.tasks.length === 0) {
       // Live ChatGPT-path finding (2026-08-27): a request that is EXACTLY one
       // clear imperative sentence ("Audit the repository.") is not ambiguous -
       // the sentence IS the task, in the owner's own words. Derive it only
-      // when nothing else was dropped: the goal was implicit (no explicit
-      // goal marker asking for decomposition the owner never supplied), it is
-      // the only goal, and no sentence fell through unparsed (a multi-step
-      // prose request must keep rejecting, never silently mis-shape - see
-      // tmode-compose-repro). The derived task passes through the SAME kind
-      // resolution, prohibited scans, and policy classification as any other;
-      // an unresolvable kind still rejects fail-closed.
-      const dropped = warnings.some((w) => w.startsWith('unparsed_sentence:'));
-      if (g.implicit && goals.length === 1 && !dropped) {
+      // when the goal was implicit (no explicit goal marker asking for a
+      // decomposition the owner never supplied) and it is the only goal. The
+      // derived task passes through the SAME kind resolution, prohibited
+      // scans, and policy classification as any other; an unresolvable kind
+      // still rejects fail-closed. An explicit goal marker with no sentences
+      // after it keeps rejecting: the composer never invents work.
+      if (g.implicit && goals.length === 1) {
         g.tasks.push({ text: g.objective, explicit_number: null });
         warnings.push('task_derived_from_goal_objective');
       } else {
