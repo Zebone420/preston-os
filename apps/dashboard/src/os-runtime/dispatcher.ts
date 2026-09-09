@@ -299,23 +299,6 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
     log({ level: 'error', command, correlationId, event: 'remote_intake', error: e instanceof Error ? e.message.slice(0, 200) : 'intake failed' });
   }
 
-  // Terminal-parent/nonterminal-child recovery: a goal that already reached
-  // a terminal status is never selected below, so driveGoal's own in_progress
-  // lease-expiry recovery never runs again for its jobs - any job left
-  // non-terminal under it would otherwise be stranded forever. Best-effort:
-  // an error here is logged but never blocks this tick's actual driving (a
-  // cleanup failure must not starve younger goals).
-  try {
-    const swept = await recoverStrandedChildJobs(client, new Date(seams.clock()).toISOString());
-    if (swept.error) {
-      log({ level: 'error', command, correlationId, event: 'stranded_child_recovery', error: swept.error });
-    } else if (swept.recovered > 0) {
-      log({ level: 'info', command, correlationId, event: 'stranded_child_recovery', recovered: swept.recovered, scanned: swept.scanned });
-    }
-  } catch (e) {
-    log({ level: 'error', command, correlationId, event: 'stranded_child_recovery', error: e instanceof Error ? e.message.slice(0, 200) : 'sweep failed' });
-  }
-
   // Fast-track C1 idle fast path: the cheapest reliable "is there driveable
   // work?" test - one indexed limit-1 read per driveable status, short-
   // circuiting on the first hit. No pin probe, no goal-window hydration, no
@@ -337,6 +320,27 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
     }
     if (probe.rows.length > 0) { anyDriveable = true; break; }
   }
+
+  // Terminal-parent/nonterminal-child recovery, AFTER the idle probe and
+  // jobs-first: one indexed limit-N read per non-terminal job status, each
+  // row's parent read once - nothing here scales with terminal-goal history
+  // (the former oldest-first terminal-goal window could never reach a
+  // stranded child beyond its first page). It still runs on an idle tick:
+  // a stranded child lives under a goal that is never driveable, so an idle
+  // queue is exactly when nothing else would ever revisit it. Best-effort:
+  // an error or an incomplete (full) status page is logged and never blocks
+  // this tick's driving (a cleanup failure must not starve younger goals).
+  try {
+    const swept = await recoverStrandedChildJobs(client, new Date(seams.clock()).toISOString());
+    if (swept.error) {
+      log({ level: 'error', command, correlationId, event: 'stranded_child_recovery', error: swept.error });
+    } else if (swept.recovered > 0 || !swept.complete) {
+      log({ level: 'info', command, correlationId, event: 'stranded_child_recovery', recovered: swept.recovered, scanned: swept.scanned, complete: swept.complete });
+    }
+  } catch (e) {
+    log({ level: 'error', command, correlationId, event: 'stranded_child_recovery', error: e instanceof Error ? e.message.slice(0, 200) : 'sweep failed' });
+  }
+
   if (!anyDriveable) {
     const idleMs = seams.clock() - tickStartMs;
     log({ level: 'info', command, correlationId, event: 'orchestrate_once', stoppedReason: 'no_eligible_goal', idle: true, duration_ms: idleMs });

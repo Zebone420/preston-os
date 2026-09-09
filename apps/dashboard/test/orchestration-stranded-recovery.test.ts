@@ -95,7 +95,7 @@ describe('M1 recoverStrandedChildJobs', () => {
   it('cancels a ready child stranded under a dead_lettered (max_iterations) goal', async () => {
     const db = await seedTerminalGoalWithJob('dead_lettered', 'ready');
     const r = await recoverStrandedChildJobs(db.client, NOW);
-    expect(r).toEqual({ recovered: 1, scanned: 1 });
+    expect(r).toEqual({ recovered: 1, scanned: 1, complete: true });
     expect(db.rowsOf('goal_jobs')[0].status).toBe('cancelled');
     expect(db.rowsOf('goal_jobs')[0].failure_reason).toBe('stranded_under_terminal_goal');
   });
@@ -131,7 +131,7 @@ describe('M1 recoverStrandedChildJobs', () => {
       run_id: 'run-1', run_lease_expires_at: '2026-09-09T13:00:00.000Z', // 1h after NOW
     });
     const r = await recoverStrandedChildJobs(db.client, NOW);
-    expect(r).toEqual({ recovered: 0, scanned: 1 });
+    expect(r).toEqual({ recovered: 0, scanned: 1, complete: true });
     expect(db.rowsOf('goal_jobs')[0].status).toBe('in_progress');
   });
 
@@ -140,7 +140,7 @@ describe('M1 recoverStrandedChildJobs', () => {
       run_id: null, run_lease_expires_at: '2026-09-09T11:00:00.000Z', // expired
     });
     const r = await recoverStrandedChildJobs(db.client, NOW);
-    expect(r).toEqual({ recovered: 0, scanned: 1 });
+    expect(r).toEqual({ recovered: 0, scanned: 1, complete: true });
     expect(db.rowsOf('goal_jobs')[0].status).toBe('in_progress');
   });
 
@@ -148,7 +148,7 @@ describe('M1 recoverStrandedChildJobs', () => {
     const db = await seedTerminalGoalWithJob('dead_lettered', 'ready');
     await recoverStrandedChildJobs(db.client, NOW);
     const second = await recoverStrandedChildJobs(db.client, NOW);
-    expect(second).toEqual({ recovered: 0, scanned: 0 });
+    expect(second).toEqual({ recovered: 0, scanned: 0, complete: true });
   });
 
   it('is restart-safe: a fresh call against the same durable rows converges identically (no process state)', async () => {
@@ -157,13 +157,13 @@ describe('M1 recoverStrandedChildJobs', () => {
     // Simulate a process restart: a brand-new call, same client/rows, no carried state.
     const afterRestart = await recoverStrandedChildJobs(db.client, NOW);
     expect(first.recovered).toBe(1);
-    expect(afterRestart).toEqual({ recovered: 0, scanned: 0 });
+    expect(afterRestart).toEqual({ recovered: 0, scanned: 0, complete: true });
   });
 
   it('never touches jobs under a still-driveable (non-terminal) goal', async () => {
     const db = await seedTerminalGoalWithJob('running', 'ready');
     const r = await recoverStrandedChildJobs(db.client, NOW);
-    expect(r).toEqual({ recovered: 0, scanned: 0 });
+    expect(r).toEqual({ recovered: 0, scanned: 0, complete: true });
     expect(db.rowsOf('goal_jobs')[0].status).toBe('ready');
   });
 
@@ -174,7 +174,7 @@ describe('M1 recoverStrandedChildJobs', () => {
     // here isn't the point of this test - only that a terminal child is left alone).
     await insertGoalJob(db.client, job('job-aaaaaaaa', 'goal-aaaaaaaa', 'completed'));
     const r = await recoverStrandedChildJobs(db.client, NOW);
-    expect(r).toEqual({ recovered: 0, scanned: 0 });
+    expect(r).toEqual({ recovered: 0, scanned: 0, complete: true });
   });
 
   it('proves the full terminal-parent/nonterminal-child convergence: mixed statuses across multiple terminal goals converge to all-terminal', async () => {
@@ -191,5 +191,54 @@ describe('M1 recoverStrandedChildJobs', () => {
     expect(r.recovered).toBe(3);
     const jobs = db.rowsOf('goal_jobs');
     expect(jobs.every((j) => j.status === 'cancelled')).toBe(true);
+  });
+
+  it('no window blindness: a stranded child under the 26th (newest) of 26 terminal goals is still recovered', async () => {
+    // The former oldest-first LIMIT 25 terminal-goal sweep provably missed
+    // exactly this row; jobs-first discovery does not depend on how many
+    // terminal goals exist.
+    const db = makeFakeDb();
+    const gid = (i: number) => `goal-${'abcdefghij'[Math.floor(i / 10)]}${'abcdefghij'[i % 10]}aaaaaa`;
+    for (let i = 0; i < 26; i++) {
+      const g = goal(gid(i), 'completed');
+      const at = `2026-09-01T00:00:${String(i).padStart(2, '0')}.000Z`;
+      await insertMasterGoal(db.client, { ...g, created_at: at, updated_at: at });
+    }
+    await insertGoalJob(db.client, job('job-aaaaaaaa', gid(25), 'pending'));
+    await transitionJob(db.client, 'job-aaaaaaaa', 'pending', 'ready', {}, NOW);
+    const r = await recoverStrandedChildJobs(db.client, NOW);
+    expect(r).toEqual({ recovered: 1, scanned: 1, complete: true });
+    expect(db.rowsOf('goal_jobs')[0].status).toBe('cancelled');
+  });
+
+  it('a full status page is reported complete:false, never treated as exhaustive; the next pass drains the rest', async () => {
+    const db = makeFakeDb();
+    await insertMasterGoal(db.client, goal('goal-aaaaaaaa', 'dead_lettered'));
+    for (const id of ['job-aaaaaaa1', 'job-aaaaaaa2', 'job-aaaaaaa3']) {
+      await insertGoalJob(db.client, job(id, 'goal-aaaaaaaa', 'pending'));
+    }
+    const first = await recoverStrandedChildJobs(db.client, NOW, 2);
+    expect(first).toEqual({ recovered: 2, scanned: 2, complete: false });
+    const second = await recoverStrandedChildJobs(db.client, NOW, 2);
+    expect(second).toEqual({ recovered: 1, scanned: 1, complete: true });
+    expect(db.rowsOf('goal_jobs').every((j) => j.status === 'cancelled')).toBe(true);
+  });
+
+  it('a job whose parent goal row is missing is never touched (parent unprovable, fail-closed)', async () => {
+    const db = makeFakeDb();
+    await insertGoalJob(db.client, job('job-aaaaaaaa', 'goal-aaaaaaaa', 'pending'));
+    const r = await recoverStrandedChildJobs(db.client, NOW);
+    expect(r).toEqual({ recovered: 0, scanned: 0, complete: true });
+    expect(db.rowsOf('goal_jobs')[0].status).toBe('pending');
+  });
+
+  it('a failed (retryable, non-terminal) child under a failed goal converges to cancelled, never re-runs', async () => {
+    const db = await seedTerminalGoalWithJob('failed', 'in_progress', {
+      run_id: 'run-1', run_lease_expires_at: '2026-09-09T11:00:00.000Z',
+    });
+    await transitionJob(db.client, 'job-aaaaaaaa', 'in_progress', 'failed', { run_id: null, run_lease_expires_at: null }, NOW);
+    const r = await recoverStrandedChildJobs(db.client, NOW);
+    expect(r).toEqual({ recovered: 1, scanned: 1, complete: true });
+    expect(db.rowsOf('goal_jobs')[0].status).toBe('cancelled');
   });
 });
