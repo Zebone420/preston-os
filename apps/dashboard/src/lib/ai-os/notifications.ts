@@ -53,6 +53,22 @@ export interface NotifyTickResult {
 
 type Env = Record<string, string | undefined>;
 
+// Supabase/PostgREST supports range filters on a SELECT builder, while the
+// deliberately-small RuntimeClient interface only requires equality filters.
+// Keep the range optional for lightweight test clients; the real client uses
+// it BEFORE order/limit so expired pending rows cannot fill the bounded window
+// and hide a genuinely open approval.
+interface OptionalRangeQuery {
+  gt?: (col: string, val: string) => OptionalRangeQuery;
+  order: (
+    col: string,
+    opts: { ascending: boolean },
+  ) => { limit: (n: number) => PromiseLike<{
+    data: Record<string, unknown>[] | null;
+    error: { message: string } | null;
+  }> };
+}
+
 function bounded(s: unknown, max = 80): string {
   return String(s ?? '').replace(/\s+/g, ' ').slice(0, max);
 }
@@ -63,6 +79,7 @@ function bounded(s: unknown, max = 80): string {
 async function collectAttention(
   client: RuntimeClient,
   errors: string[],
+  nowMs: number,
 ): Promise<AttentionEvent[]> {
   const out: AttentionEvent[] = [];
   try {
@@ -70,14 +87,27 @@ async function collectAttention(
     // (0010; store.ts insertRow note) - selecting 'id' made PostgREST
     // reject the whole read, so approval notifications could NEVER fire
     // (latent defect found in the power-station baseline audit, 2026-08-27).
-    const ap = await client
+    const pending = client
       .from(ORCH_TABLES.approvals)
       .select('approval_id, action, risk_class, expires_at')
-      .eq('status', 'pending')
+      .eq('status', 'pending') as unknown as OptionalRangeQuery;
+    const nowIso = Number.isFinite(nowMs) ? new Date(nowMs).toISOString() : '';
+    const live = nowIso && typeof pending.gt === 'function'
+      ? pending.gt('expires_at', nowIso)
+      : pending;
+    const ap = await live
       .order('created_at', { ascending: false })
       .limit(10);
     if (ap.error) errors.push('approvals_unreadable');
     for (const r of (ap.data ?? []) as Array<Record<string, unknown>>) {
+      // Status-truth boundary: expiry is enforced when an owner decides, but
+      // expired undecided rows remain status='pending'. Match the canonical
+      // read model exactly: only a finite expiry strictly after this tick's
+      // finite clock is live owner attention. Malformed timestamps and the
+      // expiry boundary fail closed and never generate a stale notification.
+      const expiresMs = Date.parse(String(r.expires_at ?? ''));
+      if (!Number.isFinite(nowMs) || !Number.isFinite(expiresMs) ||
+          expiresMs <= nowMs) continue;
       out.push({
         kind: 'approval_required',
         entity_id: String(r.approval_id ?? ''),
@@ -165,7 +195,7 @@ export async function notifyAttentionOnce(
   if (!token || !chat) return res; // owner has not activated - fully inert
   res.configured = true;
 
-  const events = await collectAttention(client, res.errors);
+  const events = await collectAttention(client, res.errors, Date.parse(nowIso));
   res.candidates = events.length;
 
   for (const e of events) {

@@ -126,7 +126,7 @@ const NEW_FILE_PATCH = 'diff --git a/docs/new.md b/docs/new.md\nnew file mode 10
 // Recording git runner with an event log shared with the patch writer so
 // ORDER (patch written before worktree remove) is provable.
 function makeGit(statusStdout: string, opts: {
-  patchFails?: boolean; events?: string[]; patchStdout?: string;
+  patchFails?: boolean; removeFails?: boolean; events?: string[]; patchStdout?: string;
 } = {}) {
   const calls: string[][] = [];
   const events = opts.events ?? [];
@@ -142,6 +142,9 @@ function makeGit(statusStdout: string, opts: {
     if (op === 'patch') {
       if (opts.patchFails) return { status: 'ok', exit_code: 128, stdout: '', stderr: 'fatal: bad object' };
       return { status: 'ok', exit_code: 0, stdout: opts.patchStdout ?? TRACKED_PATCH, stderr: '' };
+    }
+    if (op === 'remove' && opts.removeFails) {
+      return { status: 'ok', exit_code: 1, stdout: '', stderr: 'worktree busy' };
     }
     if (op === 'untracked') return { status: 'ok', exit_code: 1, stdout: NEW_FILE_PATCH, stderr: '' };
     return { status: 'ok', exit_code: 0, stdout: op === 'status' ? statusStdout : '', stderr: '' };
@@ -174,13 +177,14 @@ function fakeStorage(): { storage: ArtifactStorage; uploads: string[] } {
 const STATUS_TWO = ' M apps/dashboard/x.ts\n?? docs/new.md\n';
 
 async function run(opts: {
-  status: string; env?: Record<string, string>; patchFails?: boolean;
+  status: string; env?: Record<string, string>; patchFails?: boolean; removeFails?: boolean;
   storage?: ArtifactStorage; claude?: typeof claudeOk; patchStdout?: string;
 }) {
   const db = makeFakeDb();
   const events: string[] = [];
   const git = makeGit(opts.status, {
-    patchFails: opts.patchFails, events, patchStdout: opts.patchStdout,
+    patchFails: opts.patchFails, removeFails: opts.removeFails,
+    events, patchStdout: opts.patchStdout,
   });
   const writer = makeWriter(events);
   const exec = await buildRealExecutor({
@@ -267,6 +271,14 @@ describe('executor - patch preserved BEFORE worktree removal', () => {
     const res = await exec!(execInput());
     expect(res?.outcome).toBe('completed');
     expect(res?.evidence_refs.some((r) => r.includes('patch_unrecorded:write_failed'))).toBe(true);
+  });
+
+  it('a failed worktree removal is explicit in the runtime log', async () => {
+    const { res, events } = await run({
+      status: STATUS_TWO, removeFails: true,
+    });
+    expect(res?.outcome).toBe('completed');
+    expect(events).toContain('log:worktree_release');
   });
 
   it('a secret-shaped string in the worker edits is never written: patch_unrecorded:secret_screen', async () => {

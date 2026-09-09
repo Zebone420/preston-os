@@ -118,14 +118,26 @@ export async function loadOrchestrationReadModel(
 
   const failedRows = allJobs.filter((j) => str(j, 'status') === 'failed');
   const deadRows = allJobs.filter((j) => str(j, 'status') === 'dead_lettered');
+  // Derived failure buckets inherit a partial job-read failure. Reporting
+  // them as `empty` while the source bucket is `error` contradicts the
+  // authoritative read state and can hide incidents from consumers that
+  // inspect the individual bucket rather than BridgeReadiness.
+  const failures: Bucket = jobsErr
+    ? { state: 'error', rows: failedRows, note: jobsErr }
+    : failedRows.length ? { state: 'ok', rows: failedRows }
+    : { state: 'empty', rows: [] };
+  const dead_letters: Bucket = jobsErr
+    ? { state: 'error', rows: deadRows, note: jobsErr }
+    : deadRows.length ? { state: 'ok', rows: deadRows }
+    : { state: 'empty', rows: [] };
 
   return {
     applied: true,
     goals,
     approvals,
     jobs,
-    failures: failedRows.length ? { state: 'ok', rows: failedRows } : { state: 'empty', rows: [] },
-    dead_letters: deadRows.length ? { state: 'ok', rows: deadRows } : { state: 'empty', rows: [] },
+    failures,
+    dead_letters,
     summary: {
       total_goals: goals.rows.length,
       running_goals: goals.rows.filter((g) => str(g, 'status') === 'running').length,

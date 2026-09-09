@@ -338,7 +338,7 @@ async function recordPassEvent(
 ): Promise<void> {
   try {
     const id = `ev-artifacts-${input.job_id}-${input.run_id}`;
-    await insertEvent(deps.client, makeEnvelope({
+    const recorded = await insertEvent(deps.client, makeEnvelope({
       id,
       type: 'ArtifactRecorded',
       actor: input.created_by,
@@ -354,6 +354,12 @@ async function recordPassEvent(
         failed: res.failed.slice(0, MAX_ARTIFACTS_PER_RUN),
       },
     }));
+    // insertEvent reports ordinary database/RLS failures as { ok:false };
+    // it does not throw. Treat that returned failure exactly like an
+    // exception so an ArtifactRecorded evidence gap is never silent.
+    if (!recorded.ok) {
+      deps.log?.({ event: 'artifact_persist', error: 'event_append_failed' });
+    }
   } catch {
     deps.log?.({ event: 'artifact_persist', error: 'event_append_failed' });
   }

@@ -629,12 +629,22 @@ export async function buildRealExecutor(
     } finally {
       // Always remove the worktree: results live in evidence + job rows;
       // on violation this also discards the out-of-policy edits.
-      await releaseWorktree({
+      const released = await releaseWorktree({
         gitExecutable: gitExe,
         canonicalRepo,
         worktreePath: prov.target.worktreePath,
         runner: gitRunner,
       });
+      // releaseWorktree is best-effort and returns a structured failure;
+      // ignoring it made an orphaned worktree indistinguishable from clean
+      // teardown until the next same-job provision attempted recovery.
+      if (!released.ok) {
+        deps.log?.({
+          event: 'worktree_release', ok: false,
+          reason: released.reason ?? 'worktree_remove_failed',
+          job_id: job.id, goal_id: job.goal_id, run_id: runId,
+        });
+      }
     }
   };
   return executor;

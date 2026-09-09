@@ -371,6 +371,8 @@ describe('BRIDGE end-to-end (simulation control-plane trace)', () => {
     const rm = await loadOrchestrationReadModel(mixedClient);
     expect(rm.jobs.state).toBe('error');
     expect(rm.jobs.rows.length).toBeGreaterThan(0); // partial rows retained for display
+    expect(rm.failures.state).toBe('error');
+    expect(rm.dead_letters.state).toBe('error');
   });
 
   it('evidence accumulates across attempts (does not replace prior refs) (#15)', async () => {

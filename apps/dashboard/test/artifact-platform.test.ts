@@ -220,6 +220,20 @@ describe('persistArtifacts', () => {
     expect(res.failed[0].reason).toBe('metadata_unrecorded');
   });
 
+  it('a returned ArtifactRecorded insert failure is logged, never silent', async () => {
+    const db = makeFakeDb({ failInsertOn: new Set(['os_events']) });
+    const { storage } = fakeStorage();
+    const logs: Array<Record<string, unknown>> = [];
+    const res = await persistArtifacts({
+      ...persistDeps(db, storage, { 'docs/a.md': 'x' }),
+      log: (line) => logs.push(line),
+    }, { ...INPUT, files: ['docs/a.md'] });
+    expect(res.condition).toBe('ok');
+    expect(logs).toContainEqual({
+      event: 'artifact_persist', error: 'event_append_failed',
+    });
+  });
+
   it('storage unavailable while enabled -> every candidate is unrecorded', async () => {
     const db = makeFakeDb();
     const res = await persistArtifacts(

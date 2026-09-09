@@ -222,12 +222,21 @@ export async function prestonStatus(ctx: ToolContext) {
   const hermes = await loadLatestHermesStatus(client);
   const c = ctl.controls;
   const halted = c.owner_stop || c.paused;
+  const readable = (state: string) => state === 'ok' || state === 'empty';
+  const readModelReadable = model.applied &&
+    readable(model.goals.state) && readable(model.approvals.state) &&
+    readable(model.jobs.state) && readable(model.failures.state) &&
+    readable(model.dead_letters.state);
   const posture = !ctl.readOk ? 'controls_unreadable'
     : !model.applied ? 'migration_absent'
+    : !readModelReadable ? 'read_model_unreadable'
     : halted ? 'halted'
     : 'operating';
   const attention: string[] = [];
   if (!ctl.readOk) attention.push('control plane unreadable (fail-closed)');
+  if (ctl.readOk && model.applied && !readModelReadable) {
+    attention.push('orchestration read model unreadable (fail-closed)');
+  }
   if (c.owner_stop) attention.push('owner_stop is set');
   if (c.paused) attention.push('runtime is paused');
   if (model.summary.open_approvals > 0) attention.push(`${model.summary.open_approvals} approval(s) waiting for the owner`);
