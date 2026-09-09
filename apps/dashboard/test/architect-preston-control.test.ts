@@ -63,7 +63,7 @@ function setup(ownerEmail = OWNER) {
       request: approval.request }],
   });
   const ctx = { client: {} as ToolContext['client'], ownerEmail, now: NOW,
-    architectSession };
+    architectSession, architectRepoAllowlist: p.change.repo };
   return { p, approval: approval.request, ctx };
 }
 
@@ -153,5 +153,12 @@ describe('AG-10 Preston Control handoff', () => {
       proposal_id: broken.request.correlation_id,
     })).toMatchObject({ ok: false,
       error: expect.stringContaining('architect_change_invalid:head_sha_invalid') });
+
+    const denied = setup();
+    denied.ctx.architectRepoAllowlist = 'AnotherOwner/another-repo';
+    expect(await prestonGetArchitectProposal(denied.ctx, {
+      proposal_id: denied.p.request.correlation_id,
+    })).toMatchObject({ ok: false,
+      error: 'architect_repo_invalid:repository_not_allowed' });
   });
 });

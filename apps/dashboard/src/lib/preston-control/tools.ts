@@ -56,8 +56,11 @@ import {
 } from '@/lib/business/owner-views/service';
 import {
   githubChangeDigest,
+  hasRequiredEvidence,
+  isBranchAllowed,
   proposalTransition,
   requireAttribution,
+  evaluateRepoAllowlist,
   validateArchitectRequest,
   validateGithubChangeEnvelope,
   type ArchitectProposal,
@@ -73,6 +76,7 @@ export interface ToolContext {
   ownerEmail: string;
   now: string; // ISO
   architectSession?: ArchitectToolSession;
+  architectRepoAllowlist?: string;
 }
 
 export interface ArchitectSessionDecision {
@@ -1279,13 +1283,21 @@ function architectEvidenceBindings(proposal: ArchitectProposal): string[] {
     .update(reference, 'utf8').digest('hex'));
 }
 
-function validateSessionProposal(proposal: ArchitectProposal): string | null {
+function validateSessionProposal(
+  proposal: ArchitectProposal,
+  allowlist: string | undefined,
+): string | null {
   const intake = validateArchitectRequest(proposal.request);
   if (!intake.ok) return `architect_request_invalid:${intake.errors.join(',')}`;
   const change = validateGithubChangeEnvelope(proposal.change);
   if (!change.ok) return `architect_change_invalid:${change.errors.join(',')}`;
   const actor = requireAttribution(proposal.actor);
   if (!actor.ok) return `architect_attribution_invalid:${actor.errors.join(',')}`;
+  const repo = evaluateRepoAllowlist(proposal.change.repo, allowlist);
+  if (!repo.allowed) return `architect_repo_invalid:${repo.reason}`;
+  if (!isBranchAllowed(proposal.change.head_branch, proposal.request.correlation_id)) {
+    return 'architect_head_branch_invalid';
+  }
   return null;
 }
 
@@ -1329,7 +1341,9 @@ export async function prestonListArchitectProposals(
   const proposals = ctx.architectSession.listProposals(limit);
   const projected = [];
   for (const proposal of proposals) {
-    const error = validateSessionProposal(proposal);
+    const error = validateSessionProposal(
+      proposal, ctx.architectRepoAllowlist ?? process.env.ARCHITECT_REPO_ALLOWLIST,
+    );
     if (error) return { ok: false as const, error, proposals: [] };
     projected.push(projectArchitectProposal(proposal, false));
   }
@@ -1345,7 +1359,9 @@ export async function prestonGetArchitectProposal(
   }
   const proposal = ctx.architectSession.getProposal(input.proposal_id);
   if (!proposal) return { ok: false as const, error: 'architect_proposal_not_found' };
-  const error = validateSessionProposal(proposal);
+  const error = validateSessionProposal(
+    proposal, ctx.architectRepoAllowlist ?? process.env.ARCHITECT_REPO_ALLOWLIST,
+  );
   if (error) return { ok: false as const, error };
   return { ok: true as const, proposal: projectArchitectProposal(proposal, true) };
 }
@@ -1364,8 +1380,18 @@ export async function prestonDecideArchitectProposal(
   if (!session) return { ok: false as const, error: 'architect_session_unavailable' };
   const proposal = session.getProposal(input.proposal_id);
   if (!proposal) return { ok: false as const, error: 'architect_proposal_not_found' };
-  const proposalError = validateSessionProposal(proposal);
+  const proposalError = validateSessionProposal(
+    proposal, ctx.architectRepoAllowlist ?? process.env.ARCHITECT_REPO_ALLOWLIST,
+  );
   if (proposalError) return { ok: false as const, error: proposalError };
+  if (proposal.policy_decision?.requires_approval !== true) {
+    return { ok: false as const, error: 'approval_policy_missing' };
+  }
+  const evidence = hasRequiredEvidence(proposal);
+  if (!evidence.complete) {
+    return { ok: false as const,
+      error: `evidence_incomplete:${evidence.missing.join(',')}` };
+  }
   const request = session.getApproval(input.proposal_id, input.approval_id);
   if (!request) return { ok: false as const, error: 'approval_not_found' };
 
