@@ -91,6 +91,7 @@ const ENABLED = {
   ARCHITECT_GITHUB_TOKEN: 'not-configured-test-placeholder',
   ARCHITECT_REPO_ALLOWLIST: CHANGE.repo,
 };
+const EXECUTION_NOW = '2026-09-09T12:02:00.000Z';
 
 describe('AG-8 governed GitHub execution', () => {
   it('builds the only exact-digest approval path through existing primitives', () => {
@@ -128,7 +129,7 @@ describe('AG-8 governed GitHub execution', () => {
       const a = approval();
       const result = await executeGithubProposal({
         proposal: proposal(), approval_request: a.request, approval_decision: a.decision,
-      }, { ...h, env });
+      }, { ...h, env, now: EXECUTION_NOW });
       expect(result).toEqual({ executed: false,
         reason: env.ARCHITECT_GITHUB_EXECUTE_ENABLED ? 'github_token_missing' : 'execution_disabled' });
       expect(h.io.readCurrentState).not.toHaveBeenCalled();
@@ -142,7 +143,7 @@ describe('AG-8 governed GitHub execution', () => {
     const a = approval(p);
     const result = await executeGithubProposal({
       proposal: p, approval_request: a.request, approval_decision: a.decision,
-    }, { ...h, env: ENABLED });
+    }, { ...h, env: ENABLED, now: EXECUTION_NOW });
     expect(result, JSON.stringify(result)).toMatchObject({ executed: true, idempotent: false,
       reused_existing_pr: false, pr: { head_sha: CHANGE.head_sha, pr_number: 81 } });
     expect(h.io.readCurrentState).toHaveBeenCalledOnce();
@@ -155,8 +156,10 @@ describe('AG-8 governed GitHub execution', () => {
     const p = proposal();
     const a = approval(p);
     const input = { proposal: p, approval_request: a.request, approval_decision: a.decision };
-    expect((await executeGithubProposal(input, { ...h, env: ENABLED })).executed).toBe(true);
-    const replay = await executeGithubProposal(input, { ...h, env: ENABLED });
+    expect((await executeGithubProposal(input, { ...h, env: ENABLED,
+      now: EXECUTION_NOW })).executed).toBe(true);
+    const replay = await executeGithubProposal(input, { ...h, env: ENABLED,
+      now: EXECUTION_NOW });
     expect(replay).toMatchObject({ executed: true, idempotent: true });
     expect(h.io.readCurrentState).toHaveBeenCalledTimes(2);
     expect(h.io.pushExact).toHaveBeenCalledOnce();
@@ -172,7 +175,7 @@ describe('AG-8 governed GitHub execution', () => {
     const a = approval(p);
     const result = await executeGithubProposal({
       proposal: p, approval_request: a.request, approval_decision: a.decision,
-    }, { ...h, env: ENABLED });
+    }, { ...h, env: ENABLED, now: EXECUTION_NOW });
     expect(result).toMatchObject({ executed: true, idempotent: true,
       reused_existing_pr: true, pr: existing });
     expect(h.io.pushExact).not.toHaveBeenCalled();
@@ -190,7 +193,7 @@ describe('AG-8 governed GitHub execution', () => {
       const a = approval(p);
       const result = await executeGithubProposal({
         proposal: p, approval_request: a.request, approval_decision: a.decision,
-      }, { ...h, env: ENABLED });
+      }, { ...h, env: ENABLED, now: EXECUTION_NOW });
       expect(result).toMatchObject({ executed: false });
       expect(h.io.pushExact).not.toHaveBeenCalled();
     }
@@ -202,12 +205,12 @@ describe('AG-8 governed GitHub execution', () => {
     const a = approval(original);
     expect((await executeGithubProposal({
       proposal: original, approval_request: a.request, approval_decision: a.decision,
-    }, { ...h, env: ENABLED })).executed).toBe(true);
+    }, { ...h, env: ENABLED, now: EXECUTION_NOW })).executed).toBe(true);
     const changed = proposal({ change: { ...CHANGE, head_sha: '8'.repeat(40) },
       evidence_refs: evidence('8'.repeat(40)) });
     const denied = await executeGithubProposal({
       proposal: changed, approval_request: a.request, approval_decision: a.decision,
-    }, { ...h, env: ENABLED });
+    }, { ...h, env: ENABLED, now: EXECUTION_NOW });
     expect(denied).toEqual({ executed: false, reason: 'approval_request_hash_mismatch' });
     expect(h.io.pushExact).toHaveBeenCalledOnce();
   });
@@ -231,7 +234,7 @@ describe('AG-8 governed GitHub execution', () => {
       mutate(a);
       const result = await executeGithubProposal({
         proposal: p, approval_request: a.request, approval_decision: a.decision,
-      }, { ...h, env: ENABLED });
+      }, { ...h, env: ENABLED, now: EXECUTION_NOW });
       expect(result.executed, label).toBe(false);
       expect(h.io.readCurrentState, label).not.toHaveBeenCalled();
       expect(h.io.pushExact, label).not.toHaveBeenCalled();
@@ -251,7 +254,20 @@ describe('AG-8 governed GitHub execution', () => {
       const a = approval(p);
       expect(await executeGithubProposal({
         proposal: p, approval_request: a.request, approval_decision: a.decision,
-      }, { ...h, env: ENABLED })).toEqual({ executed: false, reason });
+      }, { ...h, env: ENABLED, now: EXECUTION_NOW }))
+        .toEqual({ executed: false, reason });
     }
+  });
+
+  it('refuses an approval that expired before execution without I/O', async () => {
+    const h = harness();
+    const p = proposal();
+    const a = approval(p);
+    expect(await executeGithubProposal({ proposal: p,
+      approval_request: a.request, approval_decision: a.decision }, {
+      ...h, env: ENABLED, now: a.request.expires_at,
+    })).toEqual({ executed: false, reason: 'approval_expired' });
+    expect(h.io.readCurrentState).not.toHaveBeenCalled();
+    expect(h.io.pushExact).not.toHaveBeenCalled();
   });
 });

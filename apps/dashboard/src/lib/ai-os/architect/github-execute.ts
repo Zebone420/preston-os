@@ -63,6 +63,7 @@ export interface ExecuteGithubProposalContext {
   cache: GithubExecutionCache;
   env?: Record<string, string | undefined>;
   io: GithubExecutionIo;
+  now: string;
   seen_nonces?: ReadonlySet<string>;
 }
 
@@ -164,6 +165,15 @@ export async function executeGithubProposal(
   );
   if (!approval.ok || approval.status !== 'approved') {
     return refuse(`approval_invalid:${approval.reason}`);
+  }
+  const executionMs = Date.parse(context.now);
+  const expiresMs = Date.parse(input.approval_request.expires_at);
+  if (!Number.isFinite(executionMs) || !Number.isFinite(expiresMs)) {
+    return refuse('execution_time_invalid');
+  }
+  if (executionMs >= expiresMs) return refuse('approval_expired');
+  if (executionMs < Date.parse(input.approval_decision.decided_at)) {
+    return refuse('execution_before_decision');
   }
 
   let current: CurrentGithubChangeState;
