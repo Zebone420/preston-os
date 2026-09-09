@@ -96,7 +96,19 @@ function makeFakeDb(): FakeDb {
           };
         },
         select() {
-          throw new Error('select not used by the order-chain store');
+          let selected = [...rowsOf(table)];
+          const result = (n: number) => Promise.resolve({
+            data: selected.slice(0, n), error: null,
+          });
+          const chain = {
+            eq(col: string, val: string) {
+              selected = selected.filter((r) => String(r[col]) === val);
+              return chain;
+            },
+            order() { return { limit: result }; },
+            limit: result,
+          };
+          return chain;
         },
         update(patch: Row) {
           const guards: Array<[string, string]> = [];
@@ -265,6 +277,11 @@ describe('order-chain store - expectations, measurements, checks, packages', () 
     const replay = await recordPaymentReceipt(db.client, base, event);
     expect(replay).toMatchObject({ ok: true, duplicate: true, ledger: base });
     expect(db.rows('payment_receipt_events')).toHaveLength(1);
+    const conflict = await recordPaymentReceipt(db.client, base,
+      { ...event, amount_cents: event.amount_cents - 1 });
+    expect(conflict).toMatchObject({
+      ok: false, error: 'duplicate_receipt_binding_mismatch', ledger: base,
+    });
   });
 
   it('measurements are never inserted approved; approval is CAS on submitted', async () => {

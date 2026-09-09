@@ -286,6 +286,33 @@ export interface RecordPaymentReceiptOutcome extends WriteOutcome {
   ledger: PaymentLedger;
 }
 
+const RECEIPT_BINDING_FIELDS = [
+  'project_id', 'contract_id', 'quote_version_id', 'milestone', 'quote_hash',
+  'expected_amount_cents', 'amount_cents', 'idempotency_key', 'occurred_at',
+  'recorded_by', 'source_ref',
+] as const;
+
+async function readMatchingReceipt(
+  client: RuntimeClient,
+  event: PaymentReceiptEvent,
+): Promise<boolean> {
+  try {
+    const res = await client.from(ORDER_CHAIN_TABLES.receiptEvents)
+      .select('*').eq('idempotency_key', event.idempotency_key).limit(1);
+    if (res.error || !res.data || res.data.length !== 1) return false;
+    const stored = res.data[0];
+    return RECEIPT_BINDING_FIELDS.every((field) => {
+      const expected = event[field];
+      const actual = stored[field];
+      return typeof expected === 'number'
+        ? String(actual) === String(expected)
+        : actual === expected;
+    });
+  } catch {
+    return false;
+  }
+}
+
 // Append the fully bound receipt fact. No money moves and no existing event is
 // updated. A duplicate key is a durable replay no-op; callers reconstruct the
 // materialized ledger with rebuildPaymentLedger after restart.
@@ -317,7 +344,13 @@ export async function recordPaymentReceipt(
     source_ref: event.source_ref,
   });
   if (!stored.ok) return { ...stored, ledger };
-  if (stored.duplicate || !applied.ok) {
+  if (stored.duplicate) {
+    if (!(await readMatchingReceipt(client, event))) {
+      return { ok: false, error: 'duplicate_receipt_binding_mismatch', ledger };
+    }
+    return { ...stored, ok: true, duplicate: true, ledger };
+  }
+  if (!applied.ok) {
     return { ...stored, ok: true, duplicate: true, ledger };
   }
   return { ...stored, ledger: applied.ledger };

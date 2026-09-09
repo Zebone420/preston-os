@@ -27,7 +27,7 @@
 import { buildPaymentSchedule } from '../quote-engine';
 import { isMoneyCents, type PaymentScheduleType } from '../types';
 import { isHumanActor, isIsoTimestamp, type Actor } from './actor';
-import { isSha256 } from './hash';
+import { canonicalJson, isSha256 } from './hash';
 
 export type PlanType = PaymentScheduleType;
 
@@ -286,7 +286,7 @@ export function rebuildPaymentLedger(
     }
     const prior = unique.get(event.idempotency_key);
     if (prior) {
-      if (JSON.stringify(prior) !== JSON.stringify(event)) {
+      if (canonicalJson(prior) !== canonicalJson(event)) {
         return { ok: false, reason: 'event_replay_conflict', ledger: base };
       }
       continue;
