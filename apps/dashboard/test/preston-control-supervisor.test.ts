@@ -313,6 +313,54 @@ describe('preston_poll_events end-to-end (fake DB)', () => {
     expect(p.ok).toBe(false);
     if (!p.ok) expect(p.error).toBe('cursor_invalid');
   });
+
+  // M4: a failed read of an AUTHORITATIVE bucket is refused, never served as
+  // an empty page (which an advancing supervisor would take as "nothing
+  // happened"). Any query chain against the failing table resolves to an
+  // error, whatever the read model chains.
+  function failingTableClient(inner: ToolContext['client'], table: string, message: string) {
+    const chain: unknown = new Proxy({}, {
+      get(_t, prop) {
+        if (prop === 'then') {
+          return (resolve: (v: unknown) => void) => resolve({ data: null, error: { message } });
+        }
+        return () => chain;
+      },
+    });
+    return {
+      from(t: string) {
+        return t === table ? chain : (inner as { from: (x: string) => unknown }).from(t);
+      },
+    } as unknown as ToolContext['client'];
+  }
+
+  it('an unreadable goal bucket fails CLOSED: ok:false read_model_unreadable, no events page', async () => {
+    const db = makeComposerFakeDb();
+    await prestonSubmitGoal(ctxFor(db.client), { request: 'Audit the repository.', request_id: 'pc-sup-fc-0001' });
+    const p = await prestonPollEvents(ctxFor(failingTableClient(db.client, 'master_goals', 'simulated read failure')), {});
+    expect(p.ok).toBe(false);
+    if (!p.ok) {
+      expect(p.error).toBe('read_model_unreadable');
+      expect('events' in p).toBe(false);
+      expect('next_cursor' in p).toBe(false);
+    }
+  });
+
+  it('an unreadable job bucket fails CLOSED the same way', async () => {
+    const db = makeComposerFakeDb();
+    await prestonSubmitGoal(ctxFor(db.client), { request: 'Audit the repository.', request_id: 'pc-sup-fc-0002' });
+    const p = await prestonPollEvents(ctxFor(failingTableClient(db.client, 'goal_jobs', 'simulated read failure')), {});
+    expect(p.ok).toBe(false);
+    if (!p.ok) expect(p.error).toBe('read_model_unreadable');
+  });
+
+  it('an absent 0010 migration is the distinct migration_absent refusal', async () => {
+    const db = makeComposerFakeDb();
+    const p = await prestonPollEvents(ctxFor(failingTableClient(
+      db.client, 'master_goals', 'relation "public.master_goals" does not exist')), {});
+    expect(p.ok).toBe(false);
+    if (!p.ok) expect(p.error).toBe('migration_absent');
+  });
 });
 
 describe('SB-1 regression: same-millisecond lifecycle transitions stay visible', () => {

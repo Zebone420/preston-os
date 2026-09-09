@@ -1240,6 +1240,25 @@ export async function prestonPollEvents(
   const ctl = await readSystemControlsChecked(client);
   const model = await loadOrchestrationReadModel(client, 20, nowMs);
 
+  // Fail closed on the AUTHORITATIVE buckets (same rule as preston_status's
+  // posture): an unreadable goal/job read model is never served as an empty
+  // page, because a supervisor that advanced its cursor past one would
+  // silently lose every transition in it. Controls and rejection records
+  // stay best-effort and are reported in the window as before.
+  const readable = (state: string) => state === 'ok' || state === 'empty';
+  if (!model.applied || !readable(model.goals.state) || !readable(model.jobs.state)) {
+    return {
+      ok: false as const,
+      error: (!model.applied ? 'migration_absent' : 'read_model_unreadable') as
+        'migration_absent' | 'read_model_unreadable',
+      window: {
+        goals_state: model.goals.state,
+        jobs_state: model.jobs.state,
+        migration_applied: model.applied,
+      },
+    };
+  }
+
   // Best-effort rejection records: absence of read authorization is
   // REPORTED (rejections_readable:false), never silently treated as
   // "no rejections happened".
