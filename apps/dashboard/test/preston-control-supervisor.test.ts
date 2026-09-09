@@ -367,7 +367,7 @@ describe('SB-1 regression: same-millisecond lifecycle transitions stay visible',
 describe('surface registration (supervisor operations)', () => {
   it('preston_poll_events remains registered on the MCP catalogue', () => {
     expect(TOOL_NAMES).toContain('preston_poll_events');
-    expect(TOOL_NAMES).toHaveLength(12);
+    expect(TOOL_NAMES).toHaveLength(15);
   });
 
   it('pollPrestonEvents remains a read-only REST operation', () => {

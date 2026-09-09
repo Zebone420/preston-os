@@ -80,6 +80,25 @@ export const OWNER_VIEW_SHAPE = {
   ).optional(),
 };
 
+export const LIST_ARCHITECT_PROPOSALS_SHAPE = {
+  limit: z.number().int().min(1).max(50).optional()
+    .describe('Maximum session-scoped Architect proposals to return (default 20).'),
+};
+export const GET_ARCHITECT_PROPOSAL_SHAPE = {
+  proposal_id: RUNTIME_ID.describe('The exact Architect proposal correlation id.'),
+};
+export const DECIDE_ARCHITECT_PROPOSAL_SHAPE = {
+  proposal_id: RUNTIME_ID.describe('The exact Architect proposal correlation id.'),
+  approval_id: RUNTIME_ID.describe('The matching Preston approval id.'),
+  outcome: z.enum(['approved', 'rejected']),
+  presented_hash: z.string().regex(/^[0-9a-f]{64}$/,
+    'must be the exact AG-4 SHA-256 digest shown to the owner'),
+  owner_confirmation: z.string().min(1).max(200).describe(
+    "The owner's OWN confirmation naming the exact approval id, for example " +
+    "'Approve approval-1234'. Never infer or autofill it.",
+  ),
+};
+
 export const SubmitGoalSchema = z.object(SUBMIT_GOAL_SHAPE).strict();
 export const GetGoalSchema = z.object(GET_GOAL_SHAPE).strict();
 export const DecideApprovalSchema = z.object(DECIDE_APPROVAL_SHAPE).strict();
@@ -90,6 +109,9 @@ export const FollowUpGoalSchema = z.object(FOLLOW_UP_GOAL_SHAPE).strict();
 export const GetArtifactSchema = z.object(GET_ARTIFACT_SHAPE).strict();
 export const PollEventsSchema = z.object(POLL_EVENTS_SHAPE).strict();
 export const OwnerViewSchema = z.object(OWNER_VIEW_SHAPE).strict();
+export const ListArchitectProposalsSchema = z.object(LIST_ARCHITECT_PROPOSALS_SHAPE).strict();
+export const GetArchitectProposalSchema = z.object(GET_ARCHITECT_PROPOSAL_SHAPE).strict();
+export const DecideArchitectProposalSchema = z.object(DECIDE_ARCHITECT_PROPOSAL_SHAPE).strict();
 // GET-query variant: search params arrive as strings, so limit is coerced
 // (same bounds; the tool clamps again defensively).
 export const PollEventsQuerySchema = z.object({

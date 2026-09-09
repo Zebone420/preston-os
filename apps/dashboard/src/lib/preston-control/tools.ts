@@ -21,7 +21,7 @@
 // (never spread), and free-text fields are screened with hasSecretText so a
 // secret can never leave through a tool result even if one were stored.
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { RUNTIME_ID_RE, hasSecretText } from '@/lib/ai-os/commands';
 import { readSystemControlsChecked, type RuntimeClient } from '@/lib/ai-os/store';
 import { composeRequest, MAX_REQUEST_CHARS } from '@/lib/ai-os/orchestration/composer';
@@ -54,11 +54,75 @@ import {
   loadOwnerOverview,
   loadOwnerProject,
 } from '@/lib/business/owner-views/service';
+import {
+  githubChangeDigest,
+  proposalTransition,
+  requireAttribution,
+  validateArchitectRequest,
+  validateGithubChangeEnvelope,
+  type ArchitectProposal,
+} from '@/lib/ai-os/architect';
+import {
+  validateApprovalDecision,
+  type ApprovalDecisionInput,
+  type ApprovalRequest,
+} from '@/lib/ai-os/orchestration/approvals';
 
 export interface ToolContext {
   client: ComposerClient;
   ownerEmail: string;
   now: string; // ISO
+  architectSession?: ArchitectToolSession;
+}
+
+export interface ArchitectSessionDecision {
+  approval: ApprovalDecisionInput;
+  proposal: ArchitectProposal;
+}
+
+export interface ArchitectToolSession {
+  getApproval(proposalId: string, approvalId: string): ApprovalRequest | null;
+  getProposal(proposalId: string): ArchitectProposal | null;
+  listProposals(limit: number): ArchitectProposal[];
+  recordDecision(proposalId: string, decision: ArchitectSessionDecision): boolean;
+  seenNonces: Set<string>;
+}
+
+// V1 deliberately has no second durable store. The caller may create this
+// bounded object for the authenticated tool-call session; Preston's existing
+// approval primitive remains the authority for every recorded decision.
+export function createArchitectToolSession(args: {
+  approvals: Array<{ proposal_id: string; request: ApprovalRequest }>;
+  proposals: ArchitectProposal[];
+}): ArchitectToolSession {
+  const proposals = new Map(args.proposals.map((p) =>
+    [p.request.correlation_id, structuredClone(p)]));
+  const approvals = new Map(args.approvals.map((item) =>
+    [`${item.proposal_id}:${item.request.approval_id}`, structuredClone(item.request)]));
+  const seenNonces = new Set<string>();
+  return {
+    seenNonces,
+    getApproval(proposalId, approvalId) {
+      const value = approvals.get(`${proposalId}:${approvalId}`);
+      return value ? structuredClone(value) : null;
+    },
+    getProposal(proposalId) {
+      const value = proposals.get(proposalId);
+      return value ? structuredClone(value) : null;
+    },
+    listProposals(limit) {
+      return [...proposals.values()].slice(0, limit).map((p) => structuredClone(p));
+    },
+    recordDecision(proposalId, decision) {
+      const key = `${proposalId}:${decision.approval.approval_id}`;
+      const request = approvals.get(key);
+      if (!request || request.status !== 'pending') return false;
+      request.status = decision.approval.outcome === 'approve' ? 'approved' : 'rejected';
+      proposals.set(proposalId, structuredClone(decision.proposal));
+      seenNonces.add(decision.approval.nonce);
+      return true;
+    },
+  };
 }
 
 type Row = Record<string, unknown>;
@@ -1203,5 +1267,143 @@ export async function prestonPollEvents(
       migration_applied: model.applied,
     },
     unmapped_states: normalized.unmapped_states,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 12-14. Architect Gate AG-10. Session-scoped visibility and decision
+// recording only: no function below calls GitHub or creates a new authority.
+
+function architectEvidenceBindings(proposal: ArchitectProposal): string[] {
+  return proposal.evidence_refs.map((reference) => createHash('sha256')
+    .update(reference, 'utf8').digest('hex'));
+}
+
+function validateSessionProposal(proposal: ArchitectProposal): string | null {
+  const intake = validateArchitectRequest(proposal.request);
+  if (!intake.ok) return `architect_request_invalid:${intake.errors.join(',')}`;
+  const change = validateGithubChangeEnvelope(proposal.change);
+  if (!change.ok) return `architect_change_invalid:${change.errors.join(',')}`;
+  const actor = requireAttribution(proposal.actor);
+  if (!actor.ok) return `architect_attribution_invalid:${actor.errors.join(',')}`;
+  return null;
+}
+
+function projectArchitectProposal(proposal: ArchitectProposal, detail: boolean) {
+  const base = {
+    proposal_id: proposal.request.correlation_id,
+    objective: safeText(proposal.request.objective, 1000),
+    repo: proposal.change.repo,
+    base_branch: proposal.change.base_branch,
+    head_branch: proposal.change.head_branch,
+    base_sha: proposal.change.base_sha,
+    head_sha: proposal.change.head_sha,
+    diff_hash: proposal.change.diff_hash,
+    approval_digest: githubChangeDigest(proposal.change),
+    risk_class: proposal.risk_class,
+    status: proposal.status,
+  };
+  if (!detail) return base;
+  return {
+    ...base,
+    requested_by: proposal.actor.requested_by,
+    proposer: proposal.actor.proposer,
+    approver: proposal.actor.approver,
+    executor: proposal.actor.executor,
+    correlation_id: proposal.actor.correlation_id,
+    run_id: proposal.actor.run_id,
+    evidence_bindings: architectEvidenceBindings(proposal),
+    policy_requires_approval: proposal.policy_decision?.requires_approval ?? null,
+    pr: proposal.pr ? { ...proposal.pr } : null,
+  };
+}
+
+export async function prestonListArchitectProposals(
+  ctx: ToolContext,
+  input: { limit?: number },
+) {
+  if (!ctx.architectSession) {
+    return { ok: false as const, error: 'architect_session_unavailable', proposals: [] };
+  }
+  const limit = Number.isInteger(input.limit) ? Math.max(1, Math.min(50, input.limit!)) : 20;
+  const proposals = ctx.architectSession.listProposals(limit);
+  const projected = [];
+  for (const proposal of proposals) {
+    const error = validateSessionProposal(proposal);
+    if (error) return { ok: false as const, error, proposals: [] };
+    projected.push(projectArchitectProposal(proposal, false));
+  }
+  return { ok: true as const, proposals: projected };
+}
+
+export async function prestonGetArchitectProposal(
+  ctx: ToolContext,
+  input: { proposal_id: string },
+) {
+  if (!ctx.architectSession) {
+    return { ok: false as const, error: 'architect_session_unavailable' };
+  }
+  const proposal = ctx.architectSession.getProposal(input.proposal_id);
+  if (!proposal) return { ok: false as const, error: 'architect_proposal_not_found' };
+  const error = validateSessionProposal(proposal);
+  if (error) return { ok: false as const, error };
+  return { ok: true as const, proposal: projectArchitectProposal(proposal, true) };
+}
+
+export async function prestonDecideArchitectProposal(
+  ctx: ToolContext,
+  input: {
+    proposal_id: string;
+    approval_id: string;
+    outcome: 'approved' | 'rejected';
+    presented_hash: string;
+    owner_confirmation: string;
+  },
+) {
+  const session = ctx.architectSession;
+  if (!session) return { ok: false as const, error: 'architect_session_unavailable' };
+  const proposal = session.getProposal(input.proposal_id);
+  if (!proposal) return { ok: false as const, error: 'architect_proposal_not_found' };
+  const proposalError = validateSessionProposal(proposal);
+  if (proposalError) return { ok: false as const, error: proposalError };
+  const request = session.getApproval(input.proposal_id, input.approval_id);
+  if (!request) return { ok: false as const, error: 'approval_not_found' };
+
+  const confirmation = evaluateOwnerConfirmation(
+    input.owner_confirmation, input.approval_id, input.outcome,
+  );
+  if (!confirmation.ok) return { ok: false as const, error: confirmation.error };
+
+  const decision: ApprovalDecisionInput = {
+    approval_id: input.approval_id,
+    outcome: input.outcome === 'approved' ? 'approve' : 'reject',
+    decided_by: ctx.ownerEmail,
+    decided_at: ctx.now,
+    nonce: `pc-${randomUUID()}`,
+    presented_hash: input.presented_hash,
+  };
+  const checked = validateApprovalDecision(
+    request, decision, session.seenNonces, proposal.actor.proposer,
+  );
+  if (!checked.ok) return { ok: false as const, error: checked.reason };
+
+  const transition = proposalTransition(proposal, input.outcome === 'approved'
+    ? { type: 'approve', approver: ctx.ownerEmail,
+      evidence_ref: `architect_decision:${proposal.change.head_sha}:${input.approval_id}` }
+    : { type: 'reject',
+      evidence_ref: `architect_decision:${proposal.change.head_sha}:${input.approval_id}` });
+  if (!transition.ok) return { ok: false as const, error: transition.reason };
+  if (!session.recordDecision(input.proposal_id, {
+    approval: decision, proposal: transition.proposal,
+  })) return { ok: false as const, error: 'architect_session_write_failed' };
+  return {
+    ok: true as const,
+    proposal_id: input.proposal_id,
+    approval_id: input.approval_id,
+    outcome: input.outcome,
+    status: transition.proposal.status,
+    decided_by: ctx.ownerEmail,
+    decided_at: ctx.now,
+    note: 'Decision recorded in the authenticated Architect session. GitHub was not called.',
   };
 }
