@@ -47,8 +47,10 @@ export function canTransitionJob(from: string, to: string): boolean {
   return Array.isArray(edges) && edges.includes(to as GoalJobStatus);
 }
 
+export const TERMINAL_GOAL_STATUSES = ['completed', 'failed', 'cancelled', 'dead_lettered'] as const;
+
 export function isTerminalGoal(s: string): boolean {
-  return ['completed', 'failed', 'cancelled', 'dead_lettered'].includes(s);
+  return (TERMINAL_GOAL_STATUSES as readonly string[]).includes(s);
 }
 export function isTerminalJob(s: string): boolean {
   return ['completed', 'cancelled', 'dead_lettered'].includes(s);

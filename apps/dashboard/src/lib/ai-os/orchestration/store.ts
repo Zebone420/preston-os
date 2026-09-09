@@ -14,6 +14,8 @@ import type { GoalJob, GoalState, MasterGoal } from './model';
 import {
   canTransitionGoal,
   canTransitionJob,
+  isTerminalJob,
+  TERMINAL_GOAL_STATUSES,
 } from './transitions';
 import type { ApprovalRequest } from './approvals';
 import { canonicalActionHash, jobApprovalEnvelope } from './crypto-binding';
@@ -193,6 +195,65 @@ export function transitionJobOwned(
     client, ORCH_TABLES.jobs, id, from, { ...patch, status: to }, canTransitionJob, nowIso,
     [{ col: 'run_id', val: runId }],
   );
+}
+
+// Recover job rows left non-terminal under an ALREADY-terminal goal (the
+// terminal-parent/nonterminal-child gap): the dispatcher only ever selects
+// goals in a driveable status, so once a goal reaches completed/failed/
+// cancelled/dead_lettered, driveGoal/driverStep never runs for it again -
+// including its OWN in_progress lease-expiry recovery (lines above). Any job
+// left pending/ready/assigned/awaiting_review/awaiting_approval/failed/
+// in_progress under that goal would otherwise sit forever, unrevisited by
+// anything. This NEVER re-runs a job - the goal is terminal, so every
+// recovered row moves to 'cancelled' (never back to 'ready'/'queued'). An
+// in_progress job with a live or unprovable lease is left untouched
+// (fail-closed): a real worker may still complete it normally via
+// transitionJobOwned, unaffected by the goal's terminal status. Idempotent
+// (CAS-guarded) and restart-safe: no process state, only durable rows.
+export async function recoverStrandedChildJobs(
+  client: RuntimeClient,
+  nowIso: string,
+  goalLimit = 25,
+  jobLimit = 200,
+): Promise<{ recovered: number; scanned: number; error?: string }> {
+  const nowMs = Date.parse(nowIso);
+  let recovered = 0;
+  let scanned = 0;
+  for (const goalStatus of TERMINAL_GOAL_STATUSES) {
+    const goals = await listGoalsByStatus(client, goalStatus, goalLimit);
+    if (!goals.ok) return { recovered, scanned, error: goals.error };
+    for (const goal of goals.rows) {
+      const goalId = String(goal.id ?? '');
+      if (!goalId) continue;
+      const jobs = await listJobsForGoal(client, goalId, jobLimit);
+      if (!jobs.ok) return { recovered, scanned, error: jobs.error };
+      for (const job of jobs.rows) {
+        const status = String(job.status ?? '');
+        if (isTerminalJob(status)) continue;
+        scanned++;
+        const jobId = String(job.id ?? '');
+        if (status === 'in_progress') {
+          const leaseMs = Date.parse(String(job.run_lease_expires_at ?? ''));
+          const expired = Number.isFinite(leaseMs) && leaseMs <= nowMs;
+          if (!expired) continue; // live lease or unprovable expiry: never touch
+          const runId = String(job.run_id ?? '');
+          const t = await transitionJobOwned(
+            client, jobId, 'in_progress', 'cancelled', runId,
+            { run_id: null, run_lease_expires_at: null, failure_reason: 'stranded_under_terminal_goal' },
+            nowIso,
+          );
+          if (t.ok) recovered++;
+          continue;
+        }
+        const t = await transitionJob(
+          client, jobId, status, 'cancelled',
+          { failure_reason: 'stranded_under_terminal_goal' }, nowIso,
+        );
+        if (t.ok) recovered++;
+      }
+    }
+  }
+  return { recovered, scanned };
 }
 
 // Park a gated job at awaiting_approval, but ONLY while it is STILL gated

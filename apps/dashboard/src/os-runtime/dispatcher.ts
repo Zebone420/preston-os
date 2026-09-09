@@ -31,6 +31,7 @@ import {
   listGoalsByStatus,
   listJobsForGoal,
   probeSimulationPinViolations,
+  recoverStrandedChildJobs,
 } from '../lib/ai-os/orchestration/store';
 import { isMigrationAbsentError } from '../lib/ai-os/orchestration/read-model';
 import { consumeRemoteIntakeOnce } from '../lib/ai-os/orchestration/remote-intake';
@@ -296,6 +297,23 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
     }
   } catch (e) {
     log({ level: 'error', command, correlationId, event: 'remote_intake', error: e instanceof Error ? e.message.slice(0, 200) : 'intake failed' });
+  }
+
+  // Terminal-parent/nonterminal-child recovery: a goal that already reached
+  // a terminal status is never selected below, so driveGoal's own in_progress
+  // lease-expiry recovery never runs again for its jobs - any job left
+  // non-terminal under it would otherwise be stranded forever. Best-effort:
+  // an error here is logged but never blocks this tick's actual driving (a
+  // cleanup failure must not starve younger goals).
+  try {
+    const swept = await recoverStrandedChildJobs(client, new Date(seams.clock()).toISOString());
+    if (swept.error) {
+      log({ level: 'error', command, correlationId, event: 'stranded_child_recovery', error: swept.error });
+    } else if (swept.recovered > 0) {
+      log({ level: 'info', command, correlationId, event: 'stranded_child_recovery', recovered: swept.recovered, scanned: swept.scanned });
+    }
+  } catch (e) {
+    log({ level: 'error', command, correlationId, event: 'stranded_child_recovery', error: e instanceof Error ? e.message.slice(0, 200) : 'sweep failed' });
   }
 
   // Fast-track C1 idle fast path: the cheapest reliable "is there driveable
