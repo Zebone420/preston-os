@@ -26,7 +26,7 @@
 
 import { buildPaymentSchedule } from '../quote-engine';
 import { isMoneyCents, type PaymentScheduleType } from '../types';
-import { isHumanActor, type Actor } from './actor';
+import { isHumanActor, isIsoTimestamp, type Actor } from './actor';
 import { isSha256 } from './hash';
 
 export type PlanType = PaymentScheduleType;
@@ -173,6 +173,12 @@ export interface PaymentEventInput {
   idempotency_key: string;
 }
 
+export interface PaymentReceiptEvent extends PaymentEventInput {
+  occurred_at: string;
+  recorded_by: string;
+  source_ref: string;
+}
+
 export type PaymentRefusal =
   | 'binding_mismatch'
   | 'duplicate_event'
@@ -258,6 +264,47 @@ export function applyPaymentEvent(
       ],
     },
   };
+}
+
+export type PaymentReplay =
+  | { ok: true; ledger: PaymentLedger }
+  | { ok: false; reason: string; ledger: PaymentLedger };
+
+// Rebuild the derived ledger from append-only durable receipt facts. Ordering
+// is deterministic. Exact duplicate keys are one event; the same key with a
+// different payload is a conflict and the replay fails closed.
+export function rebuildPaymentLedger(
+  base: PaymentLedger,
+  events: PaymentReceiptEvent[],
+): PaymentReplay {
+  const unique = new Map<string, PaymentReceiptEvent>();
+  for (const event of events) {
+    if (!isIsoTimestamp(event.occurred_at) ||
+        typeof event.recorded_by !== 'string' || !event.recorded_by.trim() ||
+        typeof event.source_ref !== 'string' || !event.source_ref.trim()) {
+      return { ok: false, reason: 'invalid_receipt_evidence', ledger: base };
+    }
+    const prior = unique.get(event.idempotency_key);
+    if (prior) {
+      if (JSON.stringify(prior) !== JSON.stringify(event)) {
+        return { ok: false, reason: 'event_replay_conflict', ledger: base };
+      }
+      continue;
+    }
+    unique.set(event.idempotency_key, event);
+  }
+  const ordered = [...unique.values()].sort((a, b) =>
+    a.occurred_at.localeCompare(b.occurred_at) ||
+    a.idempotency_key.localeCompare(b.idempotency_key));
+  let ledger: PaymentLedger = {
+    ...base, expectations: base.expectations.map((e) => ({ ...e })),
+    applied_event_keys: [] };
+  for (const event of ordered) {
+    const applied = applyPaymentEvent(ledger, event);
+    if (!applied.ok) return { ok: false, reason: applied.reason, ledger };
+    ledger = applied.ledger;
+  }
+  return { ok: true, ledger };
 }
 
 // Owner waiver: an explicit human decision that a milestone is not

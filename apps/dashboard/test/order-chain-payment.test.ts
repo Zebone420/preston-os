@@ -7,9 +7,11 @@ import {
   buildExpectations,
   orderPaymentMilestone,
   paymentConditionMet,
+  rebuildPaymentLedger,
   waiveExpectationByOwner,
   type PaymentEventInput,
   type PaymentLedger,
+  type PaymentReceiptEvent,
 } from '../src/lib/business/order-chain/payment-state';
 import {
   AGENT,
@@ -221,6 +223,38 @@ describe('payment events - binding, idempotency, over-payment', () => {
     const after = applyPaymentEvent(byOwner.ledger, depositEvent());
     expect(after.ok).toBe(false);
     if (!after.ok) expect(after.reason).toBe('milestone_closed');
+  });
+});
+
+describe('payment receipt replay - durable append-only facts', () => {
+  const receipt = (over: Partial<PaymentReceiptEvent> = {}): PaymentReceiptEvent => ({
+    ...depositEvent(),
+    occurred_at: '2026-09-15T10:00:00.000Z',
+    recorded_by: 'owner-1',
+    source_ref: 'staging-receipt-1',
+    ...over,
+  });
+
+  it('rebuilds deterministically and collapses exact duplicate keys', () => {
+    const one = receipt({ amount_cents: 200000, idempotency_key: 'a' });
+    const two = receipt({ amount_cents: 262719, idempotency_key: 'b',
+      occurred_at: '2026-09-15T11:00:00.000Z' });
+    const a = rebuildPaymentLedger(installLedger(), [two, one, one]);
+    const b = rebuildPaymentLedger(installLedger(), [one, two]);
+    expect(a).toEqual(b);
+    expect(a.ok && paymentConditionMet(a.ledger, 'deposit')).toEqual({ ok: true });
+  });
+
+  it('fails closed when a replay key carries different payment facts', () => {
+    const one = receipt({ idempotency_key: 'same' });
+    const conflict = { ...one, amount_cents: one.amount_cents - 1 };
+    expect(rebuildPaymentLedger(installLedger(), [one, conflict]))
+      .toMatchObject({ ok: false, reason: 'event_replay_conflict' });
+  });
+
+  it('refuses receipt evidence without timestamp, actor, or source', () => {
+    expect(rebuildPaymentLedger(installLedger(), [receipt({ source_ref: '' })]))
+      .toMatchObject({ ok: false, reason: 'invalid_receipt_evidence' });
   });
 });
 

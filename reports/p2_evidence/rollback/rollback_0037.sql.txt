@@ -1,0 +1,66 @@
+-- Roll back migration 0037 only. OWNER-APPLIED, staging first.
+drop table if exists public.payment_receipt_events;
+drop index if exists public.uq_contract_templates_one_current;
+
+alter table public.contracts drop column if exists included_forms;
+alter table public.payment_expectations
+  drop constraint if exists payment_expectations_quote_hash_sha256;
+alter table public.payment_expectations drop column if exists quote_version_id;
+alter table public.purchase_order_packages
+  drop column if exists measurement_sha256,
+  drop column if exists measurement_version,
+  drop column if exists template_sha256,
+  drop column if exists product_line,
+  drop column if exists document_sha256,
+  drop column if exists approved_at,
+  drop column if exists approval_evidence_hash;
+
+-- Restore the 0032 policies exactly.
+drop policy if exists contract_templates_owner_runtime_ins
+  on public.contract_templates;
+drop policy if exists payment_expectations_owner_runtime_ins
+  on public.payment_expectations;
+drop policy if exists final_measurements_owner_runtime_ins
+  on public.final_measurements;
+drop policy if exists change_orders_owner_runtime_ins on public.change_orders;
+drop policy if exists purchase_order_packages_owner_runtime_ins
+  on public.purchase_order_packages;
+drop policy if exists payment_expectations_owner_upd
+  on public.payment_expectations;
+drop policy if exists payment_expectations_runtime_upd
+  on public.payment_expectations;
+drop policy if exists final_measurements_owner_upd
+  on public.final_measurements;
+drop policy if exists final_measurements_runtime_upd
+  on public.final_measurements;
+drop policy if exists change_orders_owner_upd on public.change_orders;
+drop policy if exists change_orders_runtime_upd on public.change_orders;
+
+create policy contract_templates_owner_runtime_ins
+  on public.contract_templates for insert to authenticated
+  with check (public.is_owner() or public.is_runtime_service());
+create policy payment_expectations_owner_runtime_ins
+  on public.payment_expectations for insert to authenticated
+  with check (public.is_owner() or public.is_runtime_service());
+create policy final_measurements_owner_runtime_ins
+  on public.final_measurements for insert to authenticated
+  with check (public.is_owner() or public.is_runtime_service());
+create policy change_orders_owner_runtime_ins
+  on public.change_orders for insert to authenticated
+  with check (public.is_owner() or public.is_runtime_service());
+create policy purchase_order_packages_owner_runtime_ins
+  on public.purchase_order_packages for insert to authenticated
+  with check (public.is_owner() or public.is_runtime_service());
+
+create policy payment_expectations_owner_runtime_upd
+  on public.payment_expectations for update to authenticated
+  using (public.is_owner() or public.is_runtime_service())
+  with check (public.is_owner() or public.is_runtime_service());
+create policy final_measurements_owner_runtime_upd
+  on public.final_measurements for update to authenticated
+  using (public.is_owner() or public.is_runtime_service())
+  with check (public.is_owner() or public.is_runtime_service());
+create policy change_orders_owner_runtime_upd
+  on public.change_orders for update to authenticated
+  using (public.is_owner() or public.is_runtime_service())
+  with check (public.is_owner() or public.is_runtime_service());

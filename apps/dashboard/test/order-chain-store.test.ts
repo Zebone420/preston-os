@@ -8,6 +8,7 @@ import {
   insertPoPackage,
   insertReadinessCheck,
   ORDER_CHAIN_TABLES,
+  recordPaymentReceipt,
   transitionPoPackage,
   upsertExpectation,
 } from '../src/lib/business/order-chain/store';
@@ -17,6 +18,8 @@ import { preparePurchaseOrderPackage }
   from '../src/lib/business/order-chain/po-preparation';
 import type { ProviderEvent }
   from '../src/lib/business/order-chain/contract-state';
+import type { PaymentReceiptEvent }
+  from '../src/lib/business/order-chain/payment-state';
 import {
   AGENT,
   allPassFacts,
@@ -50,6 +53,7 @@ const UNIQUE_KEYS: Record<string, string[][]> = {
   contracts: [['id'], ['provider_envelope_id']],
   contract_provider_events: [['provider_event_id']],
   payment_expectations: [['contract_id', 'milestone']],
+  payment_receipt_events: [['idempotency_key']],
   final_measurements: [['project_id', 'version']],
   purchase_order_packages: [['po_hash']],
 };
@@ -237,6 +241,32 @@ describe('order-chain store - expectations, measurements, checks, packages', () 
       { ...deposit, received_cents: -1 }, NOW)).ok).toBe(false);
   });
 
+  it('records fully bound receipt evidence once and replay is a no-op', async () => {
+    const db = makeFakeDb();
+    const ledger = paidDepositLedger();
+    const base = { ...ledger, expectations: ledger.expectations.map((e) => ({
+      ...e, state: 'expected' as const, received_cents: 0,
+      reconciliation_state: 'unreconciled' as const,
+    })), applied_event_keys: [] };
+    const expected = base.expectations[0];
+    const event: PaymentReceiptEvent = {
+      project_id: base.project_id, contract_id: base.contract_id,
+      quote_version_id: base.quote_version_id, milestone: 'deposit',
+      quote_hash: base.quote_hash,
+      expected_amount_cents: expected.expected_amount_cents,
+      amount_cents: expected.expected_amount_cents,
+      idempotency_key: 'durable-receipt-1', occurred_at: NOW,
+      recorded_by: OWNER.id, source_ref: 'staging-receipt-1',
+    };
+    const first = await recordPaymentReceipt(db.client, base, event);
+    expect(first.ok).toBe(true);
+    expect(first.ledger.applied_event_keys).toEqual(['durable-receipt-1']);
+    expect(db.rows('payment_receipt_events')[0]).toMatchObject(event);
+    const replay = await recordPaymentReceipt(db.client, base, event);
+    expect(replay).toMatchObject({ ok: true, duplicate: true, ledger: base });
+    expect(db.rows('payment_receipt_events')).toHaveLength(1);
+  });
+
   it('measurements are never inserted approved; approval is CAS on submitted', async () => {
     const db = makeFakeDb();
     const approved = approvedMeasurement();
@@ -337,6 +367,6 @@ describe('order-chain store - expectations, measurements, checks, packages', () 
     const client = db.client.from(ORDER_CHAIN_TABLES.contracts) as unknown as Row;
     expect(Object.keys(client).sort()).toEqual(['insert', 'select', 'update']);
     expect('delete' in client).toBe(false);
-    expect(Object.values(ORDER_CHAIN_TABLES)).toHaveLength(8);
+    expect(Object.values(ORDER_CHAIN_TABLES)).toHaveLength(9);
   });
 });

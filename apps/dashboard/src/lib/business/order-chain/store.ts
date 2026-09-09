@@ -30,7 +30,12 @@ import {
   ORDER_PREDICATES,
   type OrderReadinessCheck,
 } from './order-eligibility';
-import type { PaymentExpectation } from './payment-state';
+import {
+  applyPaymentEvent as applyPaymentPure,
+  type PaymentExpectation,
+  type PaymentLedger,
+  type PaymentReceiptEvent,
+} from './payment-state';
 import type {
   PoPackageState,
   PurchaseOrderPackage,
@@ -42,6 +47,7 @@ export const ORDER_CHAIN_TABLES = {
   contracts: 'contracts',
   providerEvents: 'contract_provider_events',
   expectations: 'payment_expectations',
+  receiptEvents: 'payment_receipt_events',
   measurements: 'final_measurements',
   changeOrders: 'change_orders',
   readinessChecks: 'order_readiness_checks',
@@ -274,6 +280,47 @@ export async function upsertExpectation(
       ['expected_amount_cents', String(e.expected_amount_cents)],
     ],
   );
+}
+
+export interface RecordPaymentReceiptOutcome extends WriteOutcome {
+  ledger: PaymentLedger;
+}
+
+// Append the fully bound receipt fact. No money moves and no existing event is
+// updated. A duplicate key is a durable replay no-op; callers reconstruct the
+// materialized ledger with rebuildPaymentLedger after restart.
+export async function recordPaymentReceipt(
+  client: RuntimeClient,
+  ledger: PaymentLedger,
+  event: PaymentReceiptEvent,
+): Promise<RecordPaymentReceiptOutcome> {
+  const applied = applyPaymentPure(ledger, event);
+  if (!applied.ok && applied.reason !== 'duplicate_event') {
+    return { ok: false, error: applied.reason, ledger };
+  }
+  if (!isIsoTimestamp(event.occurred_at) ||
+      typeof event.recorded_by !== 'string' || !event.recorded_by.trim() ||
+      typeof event.source_ref !== 'string' || !event.source_ref.trim()) {
+    return { ok: false, error: 'invalid receipt evidence', ledger };
+  }
+  const stored = await insertRow(client, ORDER_CHAIN_TABLES.receiptEvents, {
+    project_id: event.project_id,
+    contract_id: event.contract_id,
+    quote_version_id: event.quote_version_id,
+    milestone: event.milestone,
+    quote_hash: event.quote_hash,
+    expected_amount_cents: event.expected_amount_cents,
+    amount_cents: event.amount_cents,
+    idempotency_key: event.idempotency_key,
+    occurred_at: event.occurred_at,
+    recorded_by: event.recorded_by,
+    source_ref: event.source_ref,
+  });
+  if (!stored.ok) return { ...stored, ledger };
+  if (stored.duplicate || !applied.ok) {
+    return { ...stored, ok: true, duplicate: true, ledger };
+  }
+  return { ...stored, ledger: applied.ledger };
 }
 
 // --- final measurements ----------------------------------------------------
