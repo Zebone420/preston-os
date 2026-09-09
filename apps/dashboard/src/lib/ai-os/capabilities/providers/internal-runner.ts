@@ -8,7 +8,9 @@ import type { CapabilityAdapter } from '../executor';
 import type { CredentialBroker } from '../credentials';
 import {
   BUSINESS_PROVIDER,
+  CONTRACT_PACKAGE_RENDER,
   IQPLUS_REPORT_INGEST,
+  PO_DOCUMENT_RENDER,
   PROPOSAL_DOCUMENT_RENDER,
   VENDOR_QUOTE_PARSE,
   VENDOR_QUOTE_RECONCILE,
@@ -18,12 +20,16 @@ import {
   VendorQuoteParseParamsSchema,
   VendorQuoteReconcileParamsSchema,
   IqplusIngestParamsSchema,
+  ContractPackageRenderParamsSchema,
+  PoDocumentRenderParamsSchema,
   parseWith,
 } from '../business/schemas';
 import { renderProposal } from '../business/proposal-render';
 import { parseVendorQuoteText } from '../business/vendor-quote-parse';
 import { reconcileVendorQuote } from '../business/vendor-quote-reconcile';
 import { ingestIqplusReport } from '../business/iqplus-ingest';
+import { renderContractPackage } from '../business/contract-package-render';
+import { renderPoDocument } from '../business/po-document-render';
 import { makeNoCredentialBroker } from './sandbox-credentials';
 import { sandboxCredentialGate, sandboxOk } from './sandbox-common';
 import type { AdapterOutcome } from '../executor';
@@ -72,6 +78,20 @@ export function makeInternalRunnerAdapter(
         if (!ingest.ok) return { status: 'terminal', reason: ingest.reason };
         return sandboxOk({ capability: def.name, canonical: pv.canonical, attempt,
           extra: { report: ingest.report } });
+      }
+      if (def.name === CONTRACT_PACKAGE_RENDER) {
+        const p = parseWith(ContractPackageRenderParamsSchema, params);
+        if (!p.ok) return { status: 'terminal', reason: p.reason };
+        const rendered = renderContractPackage(p.data);
+        return sandboxOk({ capability: def.name, canonical: pv.canonical, attempt,
+          extra: { descriptor: rendered.descriptor, rendered_text: rendered.rendered_text } });
+      }
+      if (def.name === PO_DOCUMENT_RENDER) {
+        const p = parseWith(PoDocumentRenderParamsSchema, params);
+        if (!p.ok) return { status: 'terminal', reason: p.reason };
+        const rendered = renderPoDocument(p.data);
+        return sandboxOk({ capability: def.name, canonical: pv.canonical, attempt,
+          extra: { descriptor: rendered.descriptor, rendered_text: rendered.rendered_text } });
       }
       return { status: 'terminal', reason: 'runner_capability_not_handled' };
     },

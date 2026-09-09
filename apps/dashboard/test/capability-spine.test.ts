@@ -190,6 +190,7 @@ describe('capability registry (in-code, versioned, fail-closed)', () => {
       'calendar.event.create', 'drive.file.write',
       'proposal.document.render', 'vendor.quote.parse',
       'vendor.quote.reconcile', 'iqplus.report.ingest',
+      'contract.package.render', 'po.document.render',
     ].sort());
     for (const d of all) {
       expect(Object.isFrozen(d)).toBe(true);

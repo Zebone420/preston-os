@@ -17,6 +17,8 @@ import { validateProposalRender } from './proposal-render';
 import { validateVendorQuoteParse } from './vendor-quote-parse';
 import { validateVendorQuoteReconcile } from './vendor-quote-reconcile';
 import { validateIqplusIngest } from './iqplus-ingest';
+import { validateContractPackageRender } from './contract-package-render';
+import { validatePoDocumentRender } from './po-document-render';
 
 export const GMAIL_MESSAGE_DRAFT = 'gmail.message.draft';
 export const GMAIL_MESSAGE_SEND = 'gmail.message.send';
@@ -26,6 +28,8 @@ export const PROPOSAL_DOCUMENT_RENDER = 'proposal.document.render';
 export const VENDOR_QUOTE_PARSE = 'vendor.quote.parse';
 export const VENDOR_QUOTE_RECONCILE = 'vendor.quote.reconcile';
 export const IQPLUS_REPORT_INGEST = 'iqplus.report.ingest';
+export const CONTRACT_PACKAGE_RENDER = 'contract.package.render';
+export const PO_DOCUMENT_RENDER = 'po.document.render';
 
 export const GMAIL_PROVIDER = 'gmail';
 export const CALENDAR_PROVIDER = 'calendar';
@@ -35,6 +39,7 @@ export const BUSINESS_PROVIDER = 'preston.business';
 export const BUSINESS_CAPABILITY_NAMES: readonly string[] = [
   GMAIL_MESSAGE_DRAFT, GMAIL_MESSAGE_SEND, CALENDAR_EVENT_CREATE, DRIVE_FILE_WRITE,
   PROPOSAL_DOCUMENT_RENDER, VENDOR_QUOTE_PARSE, VENDOR_QUOTE_RECONCILE, IQPLUS_REPORT_INGEST,
+  CONTRACT_PACKAGE_RENDER, PO_DOCUMENT_RENDER,
 ];
 
 export const SEND_DISABLED_REASON = 'owner_gate_not_opened';
@@ -230,5 +235,53 @@ export const BUSINESS_DEFINITIONS: readonly CapabilityDefinition[] = [
     evidence: INTERNAL_EVIDENCE,
     failure_behavior: 'client_contact_leakage / report_unrecognized terminal before ledger',
     validate_params: validateIqplusIngest,
+  },
+  {
+    name: CONTRACT_PACKAGE_RENDER,
+    version: 1,
+    provider: BUSINESS_PROVIDER,
+    operation_kind: 'write',
+    risk_class: 'GREEN',
+    requires_approval: false,
+    target_scope:
+      'render one internal review package bound to proposal, quote and template hashes; never send',
+    timeout_ms: 10_000,
+    idempotency_strategy: 'ledger_key',
+    dry_run_supported: true,
+    artifact_input: true,
+    artifact_output: true,
+    approval_class: 'INTERNAL',
+    enabled: true,
+    disabled_reason: null,
+    provenance: 'accepted proposal descriptor + deterministic quote total and payment plan',
+    actor: 'trusted executor -> internal deterministic runner',
+    side_effect_key: KEY_STRATEGY,
+    evidence: INTERNAL_EVIDENCE + ' + rendered_not_sent marker',
+    failure_behavior: 'schema or hash binding refusal terminal before ledger',
+    validate_params: validateContractPackageRender,
+  },
+  {
+    name: PO_DOCUMENT_RENDER,
+    version: 1,
+    provider: BUSINESS_PROVIDER,
+    operation_kind: 'write',
+    risk_class: 'GREEN',
+    requires_approval: false,
+    target_scope:
+      'render one prepared hash-bound PO document for owner review; never approve or place',
+    timeout_ms: 10_000,
+    idempotency_strategy: 'ledger_key',
+    dry_run_supported: true,
+    artifact_input: true,
+    artifact_output: true,
+    approval_class: 'INTERNAL',
+    enabled: true,
+    disabled_reason: null,
+    provenance: 'Phase 5 preparePurchaseOrderPackage output in prepared state',
+    actor: 'trusted executor -> internal deterministic runner',
+    side_effect_key: KEY_STRATEGY,
+    evidence: INTERNAL_EVIDENCE + ' + rendered_not_placed marker',
+    failure_behavior: 'schema or package binding refusal terminal before ledger',
+    validate_params: validatePoDocumentRender,
   },
 ];

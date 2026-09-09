@@ -131,6 +131,80 @@ export const ProposalRenderParamsSchema = z.object({
 });
 export type ProposalRenderParams = z.infer<typeof ProposalRenderParamsSchema>;
 
+// Phase 5 external-preparation capabilities. Both schemas are deliberately
+// strict: an action-looking field (send/place/recipient/etc.) is rejected
+// instead of being silently discarded at the trusted boundary.
+export const ContractPackageRenderParamsSchema = z.object({
+  project_id: PROJECT_ID,
+  template_id: z.literal('contract_package_v1'),
+  template_sha256: SHA256,
+  proposal: z.object({
+    document_id: DOC_ID,
+    content_sha256: SHA256,
+    quote_id: DOC_ID,
+    quote_version: z.number().int().min(1).max(99),
+    quote_sha256: SHA256,
+    currency: z.literal('USD'),
+    // Same implausible-value / precision bound as business.isMoneyCents.
+    total_cents: z.number().int().min(0).max(50_000_000_000),
+  }).strict(),
+  payment_plan: z.enum(['installation_50_25_25', 'product_only_75_25']),
+}).strict();
+export type ContractPackageRenderParams = z.infer<
+  typeof ContractPackageRenderParamsSchema
+>;
+
+const PrestonContactBlockSchema = z.object({
+  company: z.string().min(1).max(120),
+  attention: z.string().min(1).max(120),
+  email: EMAIL,
+  phone: z.string().min(1).max(40),
+  address_lines: z.array(z.string().min(1).max(200)).min(1).max(6),
+}).strict();
+
+const PoLineItemSchema = z.object({
+  position: z.number().int().min(1),
+  opening_id: DOC_ID,
+  width_in: z.number().positive().max(1_000),
+  height_in: z.number().positive().max(1_000),
+  unit_type: z.string().min(1).max(80),
+  product_code: z.string().min(1).max(120),
+  options: z.record(z.string(), z.string().max(300)),
+  quantity: z.literal(1),
+}).strict();
+
+export const PoDocumentRenderParamsSchema = z.object({
+  project_id: PROJECT_ID,
+  template_id: z.literal('po_v1'),
+  package: z.object({
+    project_id: PROJECT_ID,
+    contract_id: DOC_ID,
+    measurement_id: DOC_ID,
+    measurement_sha256: SHA256,
+    measurement_version: z.number().int().min(1).max(999),
+    template_sha256: SHA256,
+    configuration_hash: SHA256,
+    po_hash: SHA256,
+    document_id: z.null(),
+    document: z.object({
+      document_type: z.literal('purchase_order'),
+      canonical_filename: z.string().min(1).max(200),
+      mime_type: z.literal('application/json'),
+      sha256: SHA256,
+    }).strict(),
+    vendor: z.string().min(1).max(120),
+    product_line: z.string().min(1).max(120),
+    line_items: z.array(PoLineItemSchema).min(1).max(200),
+    sold_to: PrestonContactBlockSchema,
+    ship_to: PrestonContactBlockSchema,
+    state: z.literal('prepared'),
+    prepared_at: ISO_DATETIME,
+    approved_by: z.null(),
+    placed_at: z.null(),
+  }).strict(),
+}).strict();
+export type PoDocumentRenderParams = z.infer<typeof PoDocumentRenderParamsSchema>;
+
 export const ClientContactSchema = z.object({
   email: EMAIL.optional(),
   phone: z.string().max(40).optional(),

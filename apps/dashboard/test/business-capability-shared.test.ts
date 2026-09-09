@@ -291,10 +291,10 @@ describe('sandbox credential broker', () => {
 });
 
 describe('registry contract pins for the business set', () => {
-  it('registers exactly the eight Phase 3 business capabilities, all frozen', () => {
+  it('registers the exact Phase 3 set plus two safe Phase 5 renderers, all frozen', () => {
     const names = listCapabilities().map((d) => d.name);
     for (const n of BUSINESS_CAPABILITY_NAMES) expect(names).toContain(n);
-    expect(BUSINESS_DEFINITIONS.length).toBe(8);
+    expect(BUSINESS_DEFINITIONS.length).toBe(10);
     for (const d of listCapabilities()) {
       if (!BUSINESS_CAPABILITY_NAMES.includes(d.name)) continue;
       expect(Object.isFrozen(d)).toBe(true);
