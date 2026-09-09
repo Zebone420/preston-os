@@ -755,6 +755,19 @@ export async function prestonGetJob(ctx: ToolContext, jobId: string) {
   };
   const approval = job.approval_id ? await restateApproval(ctx, job.approval_id) : null;
   const results = await readJobResultReports(ctx, id);
+  // M7: lost result-event detection. A terminal job that actually ran
+  // (attempts > 0) is expected to have at least one JobResultRecorded
+  // report (driver.ts appends one per attempt after the run-owned CAS
+  // wins) - but that append is explicitly best-effort ("a failed append
+  // never fails the job"). Zero reports on a job like that is a genuine
+  // evidence gap, not "never ran": surface it rather than let it read as
+  // an ordinary empty list. Rows that went terminal before result recording
+  // existed (pre-Bridge-B2, 5e5ee03) also read as a gap: honest - no
+  // readable report was ever written for them - but not a lost append.
+  const resultEvidenceGap = results.read_ok
+    && TERMINAL_JOB_STATUSES.has(job.status)
+    && job.attempts > 0
+    && results.reports.length === 0;
   return {
     found: true as const,
     job,
@@ -762,6 +775,7 @@ export async function prestonGetJob(ctx: ToolContext, jobId: string) {
     approval,
     result_reports: results.reports,
     result_reports_read_ok: results.read_ok,
+    result_evidence_gap: resultEvidenceGap,
   };
 }
 
