@@ -199,6 +199,9 @@ const BASE_COMMIT_RE = /^[0-9a-f]{7,40}$/i;
 // Per-status selection window. Oldest-first per status, so the globally oldest
 // driveable goal is ALWAYS inside the merged window (no starvation).
 const GOAL_WINDOW_PER_STATUS = 50;
+// Upper bound for selection-window growth (doubling from the per-status
+// window) when a FULL window held only parked/driven goals (P0 item G).
+const GOAL_WINDOW_MAX = 800;
 // Edge read bound; a FULL read is unprovably complete and refuses to drive.
 const DEP_READ_LIMIT = 10000;
 
@@ -344,35 +347,54 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
   // One OLDEST-FIRST read per driveable status, merged: the globally oldest
   // driveable goal is always inside the window, so no goal can starve behind
   // newer ones (Codex initial-review MAJOR #4).
-  const driveable: Record<string, unknown>[] = [];
-  for (const status of DRIVEABLE_GOAL_STATUSES) {
-    const res = await listGoalsByStatus(client, status, GOAL_WINDOW_PER_STATUS);
-    if (!res.ok) {
-      if (isMigrationAbsentError(res.error ?? '')) {
-        log({ level: 'error', command, correlationId, event: 'orchestrate_once', error: 'migration 0010 not applied (fail-closed)' });
-        return { exitCode: EXIT.config, summary: { error: 'migration 0010 not applied' } };
+  // One bounded read per status; `full` marks a status whose read hit the
+  // limit, so goals may exist beyond the window (selection-window growth
+  // below, P0 item G). Every read failure fails the whole run (fail-closed).
+  const readWindow = async (
+    limit: number,
+  ): Promise<
+    | { ok: true; rows: Record<string, unknown>[]; full: boolean }
+    | { ok: false; result: DispatcherResult }
+  > => {
+    const rows: Record<string, unknown>[] = [];
+    let full = false;
+    for (const status of DRIVEABLE_GOAL_STATUSES) {
+      const res = await listGoalsByStatus(client, status, limit);
+      if (!res.ok) {
+        if (isMigrationAbsentError(res.error ?? '')) {
+          log({ level: 'error', command, correlationId, event: 'orchestrate_once', error: 'migration 0010 not applied (fail-closed)' });
+          return { ok: false, result: { exitCode: EXIT.config, summary: { error: 'migration 0010 not applied' } } };
+        }
+        log({ level: 'error', command, correlationId, event: 'orchestrate_once', error: 'goals unreadable: ' + res.error });
+        return { ok: false, result: { exitCode: EXIT.error, summary: { error: 'goals unreadable' } } };
       }
-      log({ level: 'error', command, correlationId, event: 'orchestrate_once', error: 'goals unreadable: ' + res.error });
-      return { exitCode: EXIT.error, summary: { error: 'goals unreadable' } };
+      if (res.rows.length >= limit) full = true;
+      rows.push(...res.rows);
     }
-    driveable.push(...res.rows);
-  }
-  // A driveable row that violates the DB simulation pins is corrupted or
-  // drifted state - refuse the whole run rather than skip it silently.
-  const pinViolations = driveable.filter(
-    (r) => r.simulation_only !== true ||
-      String(r.environment) !== deploymentEnvironment(),
-  );
-  if (pinViolations.length > 0) {
-    log({ level: 'error', command, correlationId, event: 'orchestrate_once', error: 'simulation pin violated on a non-terminal goal (fail-closed)', goals: pinViolations.map((r) => String(r.id)) });
-    return { exitCode: EXIT.error, summary: { error: 'simulation pin violated' } };
-  }
-  if (driveable.length === 0) {
+    // A driveable row that violates the DB simulation pins is corrupted or
+    // drifted state - refuse the whole run rather than skip it silently.
+    const pinViolations = rows.filter(
+      (r) => r.simulation_only !== true ||
+        String(r.environment) !== deploymentEnvironment(),
+    );
+    if (pinViolations.length > 0) {
+      log({ level: 'error', command, correlationId, event: 'orchestrate_once', error: 'simulation pin violated on a non-terminal goal (fail-closed)', goals: pinViolations.map((r) => String(r.id)) });
+      return { ok: false, result: { exitCode: EXIT.error, summary: { error: 'simulation pin violated' } } };
+    }
+    return { ok: true, rows, full };
+  };
+  let windowLimit = GOAL_WINDOW_PER_STATUS;
+  const firstWindow = await readWindow(windowLimit);
+  if (!firstWindow.ok) return firstWindow.result;
+  if (firstWindow.rows.length === 0) {
     log({ level: 'info', command, correlationId, event: 'orchestrate_once', stoppedReason: 'no_eligible_goal' });
     return { exitCode: EXIT.ok, summary: { selected: null, stoppedReason: 'no_eligible_goal' } };
   }
   const selKey = (r: Record<string, unknown>) => `${String(r.created_at ?? '')}|${String(r.id)}`;
-  const ordered = [...driveable].sort((a, b) => (selKey(a) < selKey(b) ? -1 : 1));
+  const orderWindow = (rows: Record<string, unknown>[]) =>
+    [...rows].sort((a, b) => (selKey(a) < selKey(b) ? -1 : 1));
+  let ordered = orderWindow(firstWindow.rows);
+  let windowFull = firstWindow.full;
 
   // Parked goals must not starve the queue (Gate D A7 live finding,
   // 2026-08-05): the oldest driveable goal can be PERMANENTLY parked - every
@@ -407,12 +429,10 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
   // (identical semantics to the former single-goal scan; every read failure
   // still fails the whole run fail-closed).
   const parkedSet = new Set<string>();
-  const selectNext = async (
-    exclude: ReadonlySet<string>,
-  ): Promise<
+  type SelectOutcome =
     | { ok: true; selected: Record<string, unknown> | null }
-    | { ok: false; result: DispatcherResult }
-  > => {
+    | { ok: false; result: DispatcherResult };
+  const scan = async (exclude: ReadonlySet<string>): Promise<SelectOutcome> => {
   for (const cand of ordered) {
     const candId = String(cand.id);
     if (exclude.has(candId) || parkedSet.has(candId)) continue;
@@ -464,6 +484,28 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
     return { ok: true, selected: cand };
   }
   return { ok: true, selected: null };
+  };
+  // Selection-window growth (P0 item G, 2026-09-08): the per-status window
+  // is bounded, so more than GOAL_WINDOW_PER_STATUS parked (or already
+  // driven) goals in ONE status could hide a younger driveable goal of that
+  // same status beyond the window - a residual head-of-line starvation the
+  // oldest-first merge alone cannot see. When the scan exhausts the window
+  // and at least one status read was FULL, re-read with a doubled window
+  // (bounded by GOAL_WINDOW_MAX) and rescan; rows already scanned stay
+  // excluded/parked, so the rescan only costs the new candidates' job reads.
+  // A window that was not full proves there is nothing beyond it.
+  const selectNext = async (exclude: ReadonlySet<string>): Promise<SelectOutcome> => {
+    let sel = await scan(exclude);
+    while (sel.ok && sel.selected === null && windowFull && windowLimit < GOAL_WINDOW_MAX) {
+      windowLimit = Math.min(GOAL_WINDOW_MAX, windowLimit * 2);
+      const again = await readWindow(windowLimit);
+      if (!again.ok) return { ok: false, result: again.result };
+      log({ level: 'info', command, correlationId, event: 'orchestrate_once', windowGrown: windowLimit, candidates: again.rows.length });
+      ordered = orderWindow(again.rows);
+      windowFull = again.full;
+      sel = await scan(exclude);
+    }
+    return sel;
   };
 
   // Shared per-tick drive context: the per-invocation lock-token seed makes
