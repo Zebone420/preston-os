@@ -498,8 +498,14 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
   // pass as before; a halt exits with the halt's mapping immediately.
   const driven: Array<Record<string, unknown>> = [];
   const drivenIds = new Set<string>();
+  // Stalled goals (driveGoal reason no_progress:*) do NOT consume a drive
+  // slot: a stall costs one bounded step and reserves one iteration, and
+  // counting it would let N stalled older goals starve the (N+1)th younger
+  // goal exactly as before (live production finding 2026-09-04). The scan
+  // is still bounded by the selection window and the soft wall budget.
+  let stalled = 0;
   for (let gi = 0; gi < maxGoalsPerTick; gi++) {
-    if (gi > 0 && seams.clock() - tickStartMs > softBudgetMs) {
+    if ((gi > 0 || stalled > 0) && seams.clock() - tickStartMs > softBudgetMs) {
       log({ level: 'info', command, correlationId, event: 'orchestrate_once', stoppedReason: 'tick_soft_budget_reached', goalsDriven: driven.length });
       break;
     }
@@ -541,7 +547,7 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
       seams.newRunId, executeReal ?? undefined, maxParallel,
       executeReal ? resolveRunLeaseMs(env) : undefined,
     );
-    log({ level: 'info', command, correlationId, event: 'orchestrate_once', goal: goalId, cycles: r.cycles, halted: r.halted, reason: r.reason, duration_ms: seams.clock() - tickStartMs, ...(capability.realExecutionAllowed ? { execution_level: 'BOUNDED_CODE_EXECUTION' } : {}), ...(skippedParked.length ? { skippedParked } : {}), ...(unverifiableApprovals.length ? { unverifiableApprovals } : {}), ...(r.unlockRefusals?.length ? { unlockRefusals: r.unlockRefusals } : {}) });
+    log({ level: 'info', command, correlationId, event: 'orchestrate_once', goal: goalId, cycles: r.cycles, halted: r.halted, reason: r.reason, duration_ms: seams.clock() - tickStartMs, ...(capability.realExecutionAllowed ? { execution_level: 'BOUNDED_CODE_EXECUTION' } : {}), ...(skippedParked.length ? { skippedParked } : {}), ...(unverifiableApprovals.length ? { unverifiableApprovals } : {}), ...(r.unlockRefusals?.length ? { unlockRefusals: r.unlockRefusals } : {}), ...(r.stalledJobs?.length ? { stalledJobs: r.stalledJobs } : {}) });
 
     if (r.halted) {
       if (r.reason.includes('owner_stop')) {
@@ -566,7 +572,8 @@ async function orchestrateOnce(input: DispatcherInput): Promise<DispatcherResult
       // invocation resumes from the durable state (restart-safe by design).
       return { exitCode: EXIT.ok, summary: { goal: goalId, cycles: r.cycles, stoppedReason: 'cycle_budget_exhausted', lastReason: r.reason, goalsDriven: driven.length } };
     }
-    driven.push({ goal: goalId, cycles: r.cycles, reason: r.reason, ...(r.unlockRefusals?.length ? { unlockRefusals: r.unlockRefusals } : {}) });
+    driven.push({ goal: goalId, cycles: r.cycles, reason: r.reason, ...(r.unlockRefusals?.length ? { unlockRefusals: r.unlockRefusals } : {}), ...(r.stalledJobs?.length ? { stalledJobs: r.stalledJobs } : {}) });
+    if (r.reason.startsWith('no_progress:')) { stalled++; gi--; }
   }
 
   if (driven.length === 0) {
