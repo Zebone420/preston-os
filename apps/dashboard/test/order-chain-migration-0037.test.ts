@@ -87,6 +87,8 @@ describe('migration 0037 - safe Phase 5 hardening', () => {
     }
     expect(sql).toMatch(/old\.status = 'submitted' and new\.status = 'approved'/);
     expect(sql).toMatch(/new\.approved_by is distinct from auth\.uid\(\)::text/);
+    expect(sql).toMatch(/old\.approved_by is not null or old\.approved_at is not null[\s\S]*new\.approved_by is distinct from old\.approved_by[\s\S]*new\.approved_at is distinct from old\.approved_at/);
+    expect(sql).toContain('measurement approval evidence is immutable once set');
     expect(sql).toMatch(/before update on public\.final_measurements/);
     expect(sql).toMatch(/select c\.signed_at into contract_signed_at[\s\S]*c\.id = new\.contract_id[\s\S]*c\.project_id = new\.project_id[\s\S]*c\.state = 'completed'[\s\S]*c\.provider_event_verified = true/);
     expect(sql).toContain("contract_signed_at at time zone 'UTC'");

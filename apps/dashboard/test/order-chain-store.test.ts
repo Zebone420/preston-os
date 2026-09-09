@@ -204,6 +204,12 @@ describe('order-chain store - contracts', () => {
     const offsetReplay = await applyContractEvent(db.client, sent.contract,
       { ...completedEvent(), occurred_at: '2026-09-04T06:00:00.000-04:00' }, NOW);
     expect(offsetReplay).toMatchObject({ ok: true, duplicate: true });
+    const terminalReplay = await applyContractEvent(db.client, first.contract,
+      completedEvent(), NOW);
+    // Without a durable last-applied-event ID, target-state inference is not
+    // proof that this exact event drove the state. Fail closed; stale-prestate
+    // replay above remains safely idempotent through its expected CAS result.
+    expect(terminalReplay).toMatchObject({ ok: false, error: 'invalid_transition' });
   });
 
   it('reconciles a delivered replay whose signed_at remains null', async () => {
@@ -265,6 +271,38 @@ describe('order-chain store - contracts', () => {
     expect(r.refused).toBe('provider_event_unverified');
     expect(db.rows('contract_provider_events')[0]).toMatchObject({ verified: false });
     expect(db.rows('contracts')[0].state).toBe('sent');
+    const retry = await applyContractEvent(db.client, sent.contract,
+      { ...completedEvent('evt-u'), provider_event_verified: false }, NOW);
+    expect(retry).toMatchObject({ ok: false, error: 'provider_event_unverified' });
+  });
+
+  it('duplicate refused provider evidence never becomes a false success', async () => {
+    const db = makeFakeDb();
+    await insertContract(db.client, draftedContract(), NOW);
+    const sent = await applyContractEvent(db.client, draftedContract(),
+      { type: 'mark_sent', provider_envelope_id: 'env-001', at: NOW }, NOW);
+    const wrongEnvelope = {
+      ...completedEvent('evt-wrong-envelope'), provider_envelope_id: 'env-002',
+    };
+    expect(await applyContractEvent(db.client, sent.contract, wrongEnvelope, NOW))
+      .toMatchObject({ ok: false, error: 'envelope_mismatch' });
+    expect(await applyContractEvent(db.client, sent.contract, wrongEnvelope, NOW))
+      .toMatchObject({ ok: false, error: 'envelope_mismatch' });
+
+    const other = makeFakeDb();
+    await insertContract(other.client, draftedContract(), NOW);
+    const outOfOrder = completedEvent('evt-out-of-order');
+    expect(await applyContractEvent(other.client, draftedContract(), outOfOrder, NOW))
+      .toMatchObject({ ok: false, error: 'invalid_transition' });
+    expect(await applyContractEvent(other.client, draftedContract(), outOfOrder, NOW))
+      .toMatchObject({ ok: false, error: 'invalid_transition' });
+
+    const invalid = { ...completedEvent('evt-invalid'),
+      event_type: 'not-a-provider-event' } as unknown as ProviderEvent;
+    expect(await applyContractEvent(other.client, draftedContract(), invalid, NOW))
+      .toMatchObject({ ok: false, error: 'invalid_event' });
+    expect(await applyContractEvent(other.client, draftedContract(), invalid, NOW))
+      .toMatchObject({ ok: false, error: 'invalid_event' });
   });
 
   it('CAS fails when the row moved elsewhere', async () => {

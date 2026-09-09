@@ -151,6 +151,11 @@ begin
      new.supersedes_id is distinct from old.supersedes_id then
     raise exception 'final measurement bindings are immutable';
   end if;
+  if (old.approved_by is not null or old.approved_at is not null) and
+     (new.approved_by is distinct from old.approved_by or
+      new.approved_at is distinct from old.approved_at) then
+    raise exception 'measurement approval evidence is immutable once set';
+  end if;
   if not (
     new.status = old.status or
     (old.status = 'draft' and new.status = 'submitted') or

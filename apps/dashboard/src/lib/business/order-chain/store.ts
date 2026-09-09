@@ -246,9 +246,6 @@ export async function applyContractEvent(
   }
   const t = transitionContract(contract, event);
   if (!t.ok) {
-    if (evidenceDuplicate && await contractAlreadyMatches(client, contract)) {
-      return { ok: true, duplicate: true, id: contract.id, contract };
-    }
     return { ok: false, error: t.reason, refused: t.reason, contract };
   }
   const next = t.contract;
