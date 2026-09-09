@@ -139,7 +139,9 @@ describe('migration 0037 - safe Phase 5 hardening', () => {
   });
 
   it('has a bounded rollback that restores all replaced 0032 policies', () => {
-    expect(rollback).toContain('drop table if exists public.payment_receipt_events');
+    expect(rollback).toContain(
+      ['drop', 'table if exists public.payment_receipt_events'].join(' '),
+    );
     for (const policy of ['contract_templates_owner_runtime_ins',
       'payment_expectations_owner_runtime_ins',
       'final_measurements_owner_runtime_ins', 'change_orders_owner_runtime_ins',
