@@ -5,14 +5,15 @@ import {
   isCompletionPending,
   isSignedContract,
   type ContractRecord,
+  type ContractTemplateRecord,
   type ProviderEvent,
 } from '../src/lib/business/order-chain/contract-state';
 import {
   completedContract,
+  currentTemplate,
   draftedContract,
   SIGNED_AT,
   STALE_TEMPLATE_SHA,
-  TEMPLATE_SHA,
 } from './order-chain-fixtures';
 
 function sent(): ContractRecord {
@@ -50,7 +51,7 @@ describe('contract state - completion requires a verified provider event', () =>
     expect(c.contract.signed_at).toBe(SIGNED_AT);
     expect(c.contract.provider_event_verified).toBe(true);
     expect(c.provider_event_id).toBe('evt-complete-1');
-    expect(isSignedContract(c.contract, TEMPLATE_SHA)).toEqual({ ok: true });
+    expect(isSignedContract(c.contract, currentTemplate())).toEqual({ ok: true });
   });
 
   it('email text can never complete a contract, whatever it says', () => {
@@ -109,7 +110,7 @@ describe('contract state - completion requires a verified provider event', () =>
   it('a delayed or missing webhook keeps the contract pending, not signed', () => {
     const s = sent();
     expect(isCompletionPending(s)).toBe(true);
-    const signed = isSignedContract(s, TEMPLATE_SHA);
+    const signed = isSignedContract(s, currentTemplate());
     expect(signed.ok).toBe(false);
     if (!signed.ok) expect(signed.reason).toBe('not_completed');
     expect(isCompletionPending(completedContract())).toBe(false);
@@ -157,11 +158,12 @@ describe('contract state - completion requires a verified provider event', () =>
 describe('contract state - template version binding', () => {
   it('a contract bound to a superseded template is stale', () => {
     const c = completedContract();
-    expect(checkTemplateBinding(c, STALE_TEMPLATE_SHA)).toEqual({
+    const stale = { ...currentTemplate(), sha256: STALE_TEMPLATE_SHA };
+    expect(checkTemplateBinding(c, stale)).toEqual({
       ok: false,
       reason: 'stale_contract',
     });
-    const signed = isSignedContract(c, STALE_TEMPLATE_SHA);
+    const signed = isSignedContract(c, stale);
     expect(signed.ok).toBe(false);
     if (!signed.ok) expect(signed.reason).toBe('stale_contract');
   });
@@ -175,8 +177,33 @@ describe('contract state - template version binding', () => {
 
   it('a completed row without provider verification is not signed', () => {
     const c = { ...completedContract(), provider_event_verified: false };
-    const r = isSignedContract(c, TEMPLATE_SHA);
+    const r = isSignedContract(c, currentTemplate());
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe('provider_not_verified');
+  });
+
+  it('requires approved/current exact template, payload, quote, and forms', () => {
+    const contract = completedContract();
+    const template = currentTemplate();
+    const cases: Array<[ContractRecord, ContractTemplateRecord, string]> = [
+      [contract, { ...template, is_current: false }, 'template_not_current'],
+      [contract, { ...template, approved_by: null }, 'template_not_approved'],
+      [{ ...contract, template_id: 'other' }, template, 'template_id_mismatch'],
+      [{ ...contract, payload_hash: '' }, template, 'document_unbound'],
+      [{ ...contract, quote_version_id: '' }, template, 'quote_unbound'],
+      [{ ...contract, included_forms: ['installation-agreement'] }, template,
+        'required_form_missing'],
+    ];
+    for (const [candidate, current, reason] of cases) {
+      expect(isSignedContract(candidate, current)).toEqual({ ok: false, reason });
+    }
+  });
+
+  it('cannot mark an unbound draft sent', () => {
+    const r = applyContractEvent({ ...draftedContract(), payload_hash: '' }, {
+      type: 'mark_sent', provider_envelope_id: 'env-001', at: SIGNED_AT,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe('issuance_unbound');
   });
 });

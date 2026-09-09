@@ -139,6 +139,7 @@ export interface NewMeasurementInput {
   contract_id: string;
   measured_at: string;
   measured_by: string;
+  signed_at?: string | null;
   openings: unknown;
   source?: MeasurementSource;
   previous?: FinalMeasurement | null;
@@ -167,6 +168,10 @@ export function newMeasurementVersion(
     source !== 'intake'
   ) {
     return { ok: false, reason: 'source_invalid' };
+  }
+  if (source === 'final_measure') {
+    const timing = canScheduleFinalMeasure(input.measured_at, input.signed_at ?? '');
+    if (!timing.ok) return { ok: false, reason: `measurement_timing_${timing.reason}` };
   }
   const validated = validateOpenings(input.openings);
   if (!validated.ok) {
@@ -225,6 +230,7 @@ export function approveMeasurement(
   m: FinalMeasurement,
   actor: Actor,
   approvedAt: string,
+  signedAt: string,
 ): MeasurementTransition {
   if (!isHumanActor(actor)) {
     return { ok: false, reason: 'human_actor_required' };
@@ -237,6 +243,10 @@ export function approveMeasurement(
   }
   if (!isIsoTimestamp(approvedAt)) {
     return { ok: false, reason: 'approved_at_invalid' };
+  }
+  const timing = canScheduleFinalMeasure(m.measured_at, signedAt);
+  if (!timing.ok) {
+    return { ok: false, reason: `measurement_timing_${timing.reason}` };
   }
   if (m.sha256 !== measurementSha256(m)) {
     return { ok: false, reason: 'sha256_mismatch' };

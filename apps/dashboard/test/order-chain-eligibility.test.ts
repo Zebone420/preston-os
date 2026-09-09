@@ -27,11 +27,13 @@ import {
   approvedMeasurement,
   CLIENT_CONTACT,
   completedContract,
+  currentTemplate,
   configuration,
   NOW,
   OWNER,
   PRESTON_BLOCK,
   PROJECT_ID,
+  QUOTE_VERSION_ID,
   RUNTIME,
   STALE_TEMPLATE_SHA,
 } from './order-chain-fixtures';
@@ -83,20 +85,23 @@ describe('order eligibility - all-pass case', () => {
 describe('order eligibility - each predicate blocks individually', () => {
   it('signed_contract: missing / pending / unverified / stale', () => {
     expectBlockedOnly(allPassFacts({ contract: null }),
-      ['signed_contract', 'po_hash_matches_approved_configuration'], /contract_missing/);
+      ['signed_contract', 'payment_condition', 'final_measure_approved',
+        'po_hash_matches_approved_configuration'], /contract_missing/);
     const pending = { ...completedContract(), state: 'sent' as const };
     expectBlockedOnly(allPassFacts({ contract: pending }), ['signed_contract'],
       /not_completed/);
     const unverified = { ...completedContract(), provider_event_verified: false };
     expectBlockedOnly(allPassFacts({ contract: unverified }), ['signed_contract'],
       /provider_not_verified/);
-    expectBlockedOnly(allPassFacts({ current_template_sha256: STALE_TEMPLATE_SHA }),
+    expectBlockedOnly(allPassFacts({
+      current_template: { ...currentTemplate(), sha256: STALE_TEMPLATE_SHA },
+    }),
       ['signed_contract'], /stale_contract/);
   });
 
   it('payment_condition: unpaid deposit blocks an installation order', () => {
     const unpaid = paymentState.buildExpectations(
-      'installation_50_25_25', 925438, allPassFacts().payment_ledger!.quote_hash,
+      'installation_50_25_25', allPassFacts().authoritative_quote!,
       { project_id: PROJECT_ID, contract_id: completedContract().id },
     );
     expectBlockedOnly(allPassFacts({ payment_ledger: unpaid }), ['payment_condition'],
@@ -108,21 +113,26 @@ describe('order eligibility - each predicate blocks individually', () => {
   it('payment_condition: product-only requires pre_order (75%) received', () => {
     const quoteHash = sha256Hex('po-quote');
     const contract = completedContract();
-    const ledger = paymentState.buildExpectations('product_only_75_25', 100001,
-      quoteHash, { project_id: PROJECT_ID, contract_id: contract.id });
+    const quote = { quote_version_id: QUOTE_VERSION_ID, quote_hash: quoteHash,
+      total_cents: 100001 };
+    const ledger = paymentState.buildExpectations('product_only_75_25', quote,
+      { project_id: PROJECT_ID, contract_id: contract.id });
     expectBlockedOnly(
-      allPassFacts({ plan_type: 'product_only_75_25', payment_ledger: ledger }),
+      allPassFacts({ plan_type: 'product_only_75_25', payment_ledger: ledger,
+        authoritative_quote: quote }),
       ['payment_condition'], /pre_order_not_received/,
     );
     const paid = paymentState.applyPaymentEvent(ledger, {
       amount_cents: 75001, project_id: PROJECT_ID, contract_id: contract.id,
+      quote_version_id: QUOTE_VERSION_ID,
       milestone: 'pre_order', quote_hash: quoteHash, expected_amount_cents: 75001,
       idempotency_key: 'k1',
     });
     expect(paid.ok).toBe(true);
     if (!paid.ok) return;
     const check = evaluateOrderEligibility(
-      allPassFacts({ plan_type: 'product_only_75_25', payment_ledger: paid.ledger }),
+      allPassFacts({ plan_type: 'product_only_75_25', payment_ledger: paid.ledger,
+        authoritative_quote: quote }),
     );
     expect(check.all_ok).toBe(true);
   });
@@ -132,6 +142,18 @@ describe('order eligibility - each predicate blocks individually', () => {
     const foreign = { ...facts.payment_ledger!, contract_id: 'other' };
     expectBlockedOnly(allPassFacts({ payment_ledger: foreign }), ['payment_condition'],
       /ledger_binding_mismatch/);
+  });
+
+  it('payment_condition: authoritative quote hash, version, and total must match', () => {
+    const facts = allPassFacts();
+    for (const authoritative_quote of [
+      { ...facts.authoritative_quote!, quote_hash: sha256Hex('other') },
+      { ...facts.authoritative_quote!, quote_version_id: 'other-version' },
+      { ...facts.authoritative_quote!, total_cents: 1 },
+    ]) {
+      expectBlockedOnly(allPassFacts({ authoritative_quote }), ['payment_condition'],
+        /authoritative_quote_mismatch/);
+    }
   });
 
   it('final_measure_approved: draft, estimate, or missing measurement blocks', () => {
@@ -144,6 +166,12 @@ describe('order eligibility - each predicate blocks individually', () => {
     expectBlockedOnly(allPassFacts({ measurement: null }),
       ['final_measure_approved', 'po_hash_matches_approved_configuration'],
       /measurement_missing/);
+  });
+
+  it('final_measure_approved: a valid-looking early measure still blocks', () => {
+    const early = { ...approvedMeasurement(), measured_at: '2026-09-08T10:00:00.000Z' };
+    expectBlockedOnly(allPassFacts({ measurement: early }), ['final_measure_approved'],
+      /measurement_timing_too_early/);
   });
 
   it('building / lpc / dob conditions block when required and not evidenced', () => {
@@ -196,7 +224,8 @@ describe('order eligibility - each predicate blocks individually', () => {
   it('a fully missing fact set blocks on every predicate', () => {
     const check = evaluateOrderEligibility({
       project_id: PROJECT_ID, evaluated_at: NOW, contract: null,
-      current_template_sha256: null, plan_type: null, payment_ledger: null,
+      current_template: null, authoritative_quote: null,
+      plan_type: null, payment_ledger: null,
       measurement: null, building_approval: null, lpc: null, dob: null,
       configuration_hash: null, po_hash: null, change_order_states: [],
       vendor_material: null, client_contact: null,
@@ -226,7 +255,7 @@ describe('PO preparation - from the approved measurement only', () => {
     return {
       project_id: PROJECT_ID,
       contract: completedContract(),
-      current_template_sha256: completedContract().template_sha256,
+      current_template: currentTemplate(),
       measurement: approvedMeasurement(),
       configuration: configuration(),
       sold_to: PRESTON_BLOCK,
@@ -286,9 +315,9 @@ describe('PO preparation - from the approved measurement only', () => {
       provider_event_verified: false };
     const r1 = preparePurchaseOrderPackage(input({ contract: pending }));
     expect(r1.ok).toBe(false);
-    if (!r1.ok) expect(r1.reason).toBe('contract_not_signed');
+    if (!r1.ok) expect(r1.reason).toBe('not_completed');
     const r2 = preparePurchaseOrderPackage(
-      input({ current_template_sha256: STALE_TEMPLATE_SHA }));
+      input({ current_template: { ...currentTemplate(), sha256: STALE_TEMPLATE_SHA } }));
     expect(r2.ok).toBe(false);
     if (!r2.ok) expect(r2.reason).toBe('stale_contract');
   });
@@ -352,6 +381,19 @@ describe('PO preparation - from the approved measurement only', () => {
     expect(ok.package.approved_by).toBe('owner-1');
     expect(ok.package.placed_at).toBeNull();
     expect(approveForPlacement(ok.package, facts, OWNER, NOW).ok).toBe(false);
+
+    for (const tampered of [
+      { ...pkg, contract_id: 'other-contract' },
+      { ...pkg, measurement_id: 'other-measurement' },
+      { ...pkg, line_items: [{ ...pkg.line_items[0], width_in: 99 }] },
+      { ...pkg, document: { ...pkg.document, sha256: sha256Hex('forged-doc') } },
+    ]) {
+      expect(approveForPlacement(tampered, facts, OWNER, NOW))
+        .toMatchObject({ ok: false, reason: 'package_binding_invalid' });
+    }
+    expect(approveForPlacement(pkg, { ...facts,
+      evaluated_at: '2026-09-15T11:00:00.000Z' }, OWNER, NOW))
+      .toMatchObject({ ok: false, reason: 'readiness_time_invalid' });
   });
 });
 

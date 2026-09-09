@@ -26,12 +26,16 @@ import {
   type FinalMeasurement,
 } from './final-measure';
 import { isSha256 } from './hash';
-import type { OrderReadinessCheck } from './order-eligibility';
+import {
+  ORDER_PREDICATES,
+  type OrderReadinessCheck,
+} from './order-eligibility';
 import type { PaymentExpectation } from './payment-state';
 import type {
   PoPackageState,
   PurchaseOrderPackage,
 } from './po-preparation';
+import { validatePurchaseOrderPackage } from './po-preparation';
 
 export const ORDER_CHAIN_TABLES = {
   templates: 'contract_templates',
@@ -110,6 +114,9 @@ export async function insertContract(
   if (!UUID_RE.test(contract.template_id)) {
     return { ok: false, error: 'invalid template id' };
   }
+  if (!UUID_RE.test(contract.quote_version_id)) {
+    return { ok: false, error: 'invalid quote version id' };
+  }
   if (!isSha256(contract.template_sha256)) {
     return { ok: false, error: 'invalid template sha256' };
   }
@@ -118,6 +125,13 @@ export async function insertContract(
   }
   if (contract.state !== 'drafted') {
     return { ok: false, error: 'new contracts start drafted' };
+  }
+  if (contract.payload_hash !== '' && !isSha256(contract.payload_hash)) {
+    return { ok: false, error: 'invalid payload hash' };
+  }
+  if (!Array.isArray(contract.included_forms) ||
+      contract.included_forms.some((form) => typeof form !== 'string' || !form.trim())) {
+    return { ok: false, error: 'invalid included forms' };
   }
   return insertRow(client, ORDER_CHAIN_TABLES.contracts, {
     id: contract.id,
@@ -131,6 +145,7 @@ export async function insertContract(
     signed_at: null,
     provider_event_verified: false,
     payload_hash: contract.payload_hash ?? '',
+    included_forms: contract.included_forms,
     created_at: nowIso,
     updated_at: nowIso,
   });
@@ -202,13 +217,14 @@ export async function applyContractEvent(
 function validExpectation(e: PaymentExpectation): string | null {
   if (!UUID_RE.test(e.project_id)) return 'invalid project id';
   if (!UUID_RE.test(e.contract_id)) return 'invalid contract id';
+  if (!UUID_RE.test(e.quote_version_id)) return 'invalid quote version id';
   if (!Number.isSafeInteger(e.expected_amount_cents) || e.expected_amount_cents < 0) {
     return 'invalid expected amount';
   }
   if (!Number.isSafeInteger(e.received_cents) || e.received_cents < 0) {
     return 'invalid received amount';
   }
-  if (typeof e.quote_hash !== 'string' || e.quote_hash.length === 0) {
+  if (!isSha256(e.quote_hash)) {
     return 'quote hash required';
   }
   return null;
@@ -228,6 +244,7 @@ export async function upsertExpectation(
   const inserted = await insertRow(client, ORDER_CHAIN_TABLES.expectations, {
     project_id: e.project_id,
     contract_id: e.contract_id,
+    quote_version_id: e.quote_version_id,
     plan_type: e.plan_type,
     milestone: e.milestone,
     sequence: e.sequence,
@@ -305,11 +322,12 @@ export async function approveMeasurement(
   m: FinalMeasurement,
   actor: Actor,
   approvedAt: string,
+  signedAt: string,
 ): Promise<MeasurementApprovalOutcome> {
   if (!m.id || !UUID_RE.test(m.id)) {
     return { ok: false, error: 'invalid measurement id', measurement: m };
   }
-  const approved = approveMeasurementPure(m, actor, approvedAt);
+  const approved = approveMeasurementPure(m, actor, approvedAt, signedAt);
   if (!approved.ok) return { ok: false, error: approved.reason, measurement: m };
   const next = approved.measurement;
   const cas = await casUpdate(
@@ -343,6 +361,19 @@ export async function insertReadinessCheck(
   if (!isIsoTimestamp(check.evaluated_at)) {
     return { ok: false, error: 'invalid evaluated_at' };
   }
+  const keys = Object.keys(check.predicates ?? {}).sort();
+  const expected = [...ORDER_PREDICATES].sort();
+  if (keys.length !== expected.length ||
+      keys.some((key, index) => key !== expected[index])) {
+    return { ok: false, error: 'predicate_set_invalid' };
+  }
+  for (const name of ORDER_PREDICATES) {
+    const result = check.predicates[name];
+    if (!result || typeof result.ok !== 'boolean' ||
+        typeof result.reason !== 'string' || !result.reason.trim()) {
+      return { ok: false, error: `predicate_invalid:${name}` };
+    }
+  }
   const blocked = Object.entries(check.predicates)
     .filter(([, r]) => !r.ok)
     .map(([name]) => name);
@@ -373,6 +404,8 @@ export async function insertPoPackage(
   if (!isSha256(pkg.po_hash) || !isSha256(pkg.configuration_hash)) {
     return { ok: false, error: 'invalid hash' };
   }
+  const integrity = validatePurchaseOrderPackage(pkg);
+  if (!integrity.ok) return { ok: false, error: integrity.reason };
   if (pkg.state !== 'prepared') {
     return { ok: false, error: 'packages are inserted prepared only' };
   }
@@ -380,25 +413,32 @@ export async function insertPoPackage(
     project_id: pkg.project_id,
     contract_id: pkg.contract_id,
     measurement_id: pkg.measurement_id,
+    measurement_sha256: pkg.measurement_sha256,
+    measurement_version: pkg.measurement_version,
+    template_sha256: pkg.template_sha256,
     configuration_hash: pkg.configuration_hash,
     po_hash: pkg.po_hash,
     document_id: pkg.document_id,
     vendor: pkg.vendor,
+    product_line: pkg.product_line,
     line_items: pkg.line_items,
     sold_to: pkg.sold_to,
     ship_to: pkg.ship_to,
     state: 'prepared',
     prepared_at: pkg.prepared_at,
     approved_by: null,
+    approved_at: null,
+    approval_evidence_hash: null,
+    document_sha256: pkg.document.sha256,
     placed_at: null,
     updated_at: nowIso,
   });
 }
 
 const PO_TRANSITIONS: Record<PoPackageState, PoPackageState[]> = {
-  prepared: ['owner_review', 'approved_for_placement', 'cancelled'],
-  owner_review: ['approved_for_placement', 'cancelled'],
-  approved_for_placement: ['placed_by_owner', 'cancelled'],
+  prepared: ['owner_review', 'cancelled'],
+  owner_review: ['cancelled'],
+  approved_for_placement: ['cancelled'],
   placed_by_owner: [],
   cancelled: [],
 };

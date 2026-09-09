@@ -20,12 +20,15 @@ import {
   OWNER,
   PROJECT_ID,
   QUOTE_HASH,
+  QUOTE_VERSION_ID,
 } from './order-chain-fixtures';
 
 const BINDING = { project_id: PROJECT_ID, contract_id: CONTRACT_ID };
 
 function installLedger(total = CONTRACT_TOTAL): PaymentLedger {
-  return buildExpectations('installation_50_25_25', total, QUOTE_HASH, BINDING);
+  return buildExpectations('installation_50_25_25', {
+    quote_version_id: QUOTE_VERSION_ID, quote_hash: QUOTE_HASH, total_cents: total,
+  }, BINDING);
 }
 
 function depositEvent(over: Partial<PaymentEventInput> = {}): PaymentEventInput {
@@ -33,6 +36,7 @@ function depositEvent(over: Partial<PaymentEventInput> = {}): PaymentEventInput 
     amount_cents: 462719,
     project_id: PROJECT_ID,
     contract_id: CONTRACT_ID,
+    quote_version_id: QUOTE_VERSION_ID,
     milestone: 'deposit',
     quote_hash: QUOTE_HASH,
     expected_amount_cents: 462719,
@@ -56,7 +60,9 @@ describe('payment expectations - schedule math comes from the quote engine', () 
   });
 
   it('product-only 75/25 with half-up rounding and remainder to final', () => {
-    const l = buildExpectations('product_only_75_25', 100001, QUOTE_HASH, BINDING);
+    const l = buildExpectations('product_only_75_25', {
+      quote_version_id: QUOTE_VERSION_ID, quote_hash: QUOTE_HASH, total_cents: 100001,
+    }, BINDING);
     expect(l.expectations.map((e) => [e.milestone, e.expected_amount_cents]))
       .toEqual([['pre_order', 75001], ['final', 25000]]);
     const engine = buildPaymentSchedule('product_only', 100001);
@@ -74,6 +80,7 @@ describe('payment expectations - schedule math comes from the quote engine', () 
     for (const e of installLedger().expectations) {
       expect(e.project_id).toBe(PROJECT_ID);
       expect(e.contract_id).toBe(CONTRACT_ID);
+      expect(e.quote_version_id).toBe(QUOTE_VERSION_ID);
       expect(e.quote_hash).toBe(QUOTE_HASH);
       expect(e.contract_amount_cents).toBe(CONTRACT_TOTAL);
       expect(e.state).toBe('expected');
@@ -88,13 +95,17 @@ describe('payment expectations - schedule math comes from the quote engine', () 
   });
 
   it('fails closed on bad inputs', () => {
-    expect(() => buildExpectations('x' as never, 100, QUOTE_HASH, BINDING)).toThrow();
-    expect(() => buildExpectations('installation_50_25_25', -1, QUOTE_HASH, BINDING))
-      .toThrow();
-    expect(() => buildExpectations('installation_50_25_25', 1.5, QUOTE_HASH, BINDING))
-      .toThrow();
-    expect(() => buildExpectations('installation_50_25_25', 100, '', BINDING))
-      .toThrow();
+    const quote = { quote_version_id: QUOTE_VERSION_ID, quote_hash: QUOTE_HASH,
+      total_cents: 100 };
+    expect(() => buildExpectations('x' as never, quote, BINDING)).toThrow();
+    expect(() => buildExpectations('installation_50_25_25',
+      { ...quote, total_cents: -1 }, BINDING)).toThrow();
+    expect(() => buildExpectations('installation_50_25_25',
+      { ...quote, total_cents: 1.5 }, BINDING)).toThrow();
+    expect(() => buildExpectations('installation_50_25_25',
+      { ...quote, quote_hash: '' }, BINDING)).toThrow();
+    expect(() => buildExpectations('installation_50_25_25',
+      { ...quote, quote_version_id: '' }, BINDING)).toThrow();
   });
 });
 
@@ -113,6 +124,7 @@ describe('payment events - binding, idempotency, over-payment', () => {
   it.each([
     ['project', { project_id: OTHER_PROJECT_ID }],
     ['contract', { contract_id: OTHER_CONTRACT_ID }],
+    ['quote version', { quote_version_id: 'other-version' }],
     ['milestone', { milestone: 'pre_order' as const }],
     ['quote hash', { quote_hash: 'other-hash' }],
     ['expected amount', { expected_amount_cents: 462718 }],

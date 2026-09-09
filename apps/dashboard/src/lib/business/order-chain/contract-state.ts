@@ -18,6 +18,9 @@
 // is retained as the provider (owner rule, plan section 19), and the
 // provider CHECK in 0032 pins that.
 
+import { isIsoTimestamp } from './actor';
+import { isSha256 } from './hash';
+
 export type ContractState =
   | 'drafted'
   | 'sent'
@@ -42,7 +45,7 @@ export type ContractProvider = 'docusign';
 export interface ContractRecord {
   id: string;
   project_id: string;
-  quote_version_id: string | null;
+  quote_version_id: string;
   template_id: string;
   template_sha256: string;
   provider: ContractProvider;
@@ -51,6 +54,18 @@ export interface ContractRecord {
   signed_at: string | null;
   provider_event_verified: boolean;
   payload_hash: string;
+  included_forms: string[];
+}
+
+export interface ContractTemplateRecord {
+  id: string;
+  name: string;
+  version: number;
+  sha256: string;
+  required_forms: string[];
+  approved_by: string | null;
+  approved_at: string | null;
+  is_current: boolean;
 }
 
 export type ProviderEventType =
@@ -86,7 +101,8 @@ export type ContractRefusal =
   | 'envelope_mismatch'
   | 'invalid_transition'
   | 'terminal_state'
-  | 'invalid_event';
+  | 'invalid_event'
+  | 'issuance_unbound';
 
 export type ContractTransition =
   | { ok: true; contract: ContractRecord; provider_event_id: string | null }
@@ -114,6 +130,11 @@ function accept(
 
 function nonEmpty(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function hasIssuanceBindings(contract: ContractRecord): boolean {
+  return nonEmpty(contract.quote_version_id) && isSha256(contract.payload_hash) &&
+    Array.isArray(contract.included_forms);
 }
 
 // Apply one event. knownEventIds is the set of provider_event_id
@@ -171,6 +192,9 @@ export function applyContractEvent(
       if (!nonEmpty(event.provider_envelope_id)) {
         return refuse(contract, 'invalid_event');
       }
+      if (!hasIssuanceBindings(contract)) {
+        return refuse(contract, 'issuance_unbound');
+      }
       return accept({
         ...contract,
         state: 'sent',
@@ -205,6 +229,9 @@ function applyProviderEvent(
     case 'envelope-sent':
       if (contract.state !== 'drafted') {
         return refuse(contract, 'invalid_transition');
+      }
+      if (!hasIssuanceBindings(contract)) {
+        return refuse(contract, 'issuance_unbound');
       }
       return accept({ ...bound, state: 'sent' }, id);
     case 'envelope-delivered':
@@ -242,17 +269,56 @@ function applyProviderEvent(
 // rely on it until re-issued.
 export type TemplateBinding =
   | { ok: true }
-  | { ok: false; reason: 'stale_contract' | 'template_unknown' };
+  | {
+      ok: false;
+      reason:
+        | 'template_unknown'
+        | 'template_not_current'
+        | 'template_not_approved'
+        | 'template_id_mismatch'
+        | 'stale_contract'
+        | 'document_unbound'
+        | 'quote_unbound'
+        | 'required_form_missing';
+    };
 
 export function checkTemplateBinding(
-  contract: Pick<ContractRecord, 'template_sha256'>,
-  currentTemplateSha256: string | null | undefined,
+  contract: Pick<
+    ContractRecord,
+    'template_id' | 'template_sha256' | 'payload_hash' | 'quote_version_id' |
+      'included_forms'
+  >,
+  template: ContractTemplateRecord | null | undefined,
 ): TemplateBinding {
-  if (!nonEmpty(currentTemplateSha256)) {
+  if (!template) {
     return { ok: false, reason: 'template_unknown' };
   }
-  if (contract.template_sha256 !== currentTemplateSha256) {
+  if (template.is_current !== true) {
+    return { ok: false, reason: 'template_not_current' };
+  }
+  if (!nonEmpty(template.approved_by) || !isIsoTimestamp(template.approved_at)) {
+    return { ok: false, reason: 'template_not_approved' };
+  }
+  if (contract.template_id !== template.id) {
+    return { ok: false, reason: 'template_id_mismatch' };
+  }
+  if (!isSha256(template.sha256) || contract.template_sha256 !== template.sha256) {
     return { ok: false, reason: 'stale_contract' };
+  }
+  if (!isSha256(contract.payload_hash)) {
+    return { ok: false, reason: 'document_unbound' };
+  }
+  if (!nonEmpty(contract.quote_version_id)) {
+    return { ok: false, reason: 'quote_unbound' };
+  }
+  const included = new Set(
+    Array.isArray(contract.included_forms) ? contract.included_forms : [],
+  );
+  const required = Array.isArray(template.required_forms)
+    ? template.required_forms.filter(nonEmpty)
+    : [];
+  if (required.some((form) => !included.has(form))) {
+    return { ok: false, reason: 'required_form_missing' };
   }
   return { ok: true };
 }
@@ -268,12 +334,18 @@ export type SignedCheck =
         | 'provider_not_verified'
         | 'stale_contract'
         | 'template_unknown'
+        | 'template_not_current'
+        | 'template_not_approved'
+        | 'template_id_mismatch'
+        | 'document_unbound'
+        | 'quote_unbound'
+        | 'required_form_missing'
         | 'missing_signed_at';
     };
 
 export function isSignedContract(
   contract: ContractRecord,
-  currentTemplateSha256: string | null | undefined,
+  template: ContractTemplateRecord | null | undefined,
 ): SignedCheck {
   if (contract.state !== 'completed') {
     return { ok: false, reason: 'not_completed' };
@@ -284,7 +356,7 @@ export function isSignedContract(
   if (!nonEmpty(contract.signed_at)) {
     return { ok: false, reason: 'missing_signed_at' };
   }
-  const binding = checkTemplateBinding(contract, currentTemplateSha256);
+  const binding = checkTemplateBinding(contract, template);
   if (!binding.ok) return binding;
   return { ok: true };
 }

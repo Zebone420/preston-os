@@ -14,9 +14,11 @@
 import {
   isSignedContract,
   type ContractRecord,
+  type ContractTemplateRecord,
 } from './contract-state';
 import {
   estimateDimensionsCannotFeedPo,
+  canScheduleFinalMeasure,
   isOpenChangeOrderState,
   type FinalMeasurement,
 } from './final-measure';
@@ -26,6 +28,7 @@ import {
   paymentConditionMet,
   type PaymentLedger,
   type PlanType,
+  type AuthoritativeQuoteBinding,
 } from './payment-state';
 import { findContactLeaks, type ClientContactFacts } from './contact-guard';
 
@@ -62,7 +65,8 @@ export interface OrderEligibilityFacts {
   project_id: string;
   evaluated_at: string;
   contract: ContractRecord | null;
-  current_template_sha256: string | null;
+  current_template: ContractTemplateRecord | null;
+  authoritative_quote: AuthoritativeQuoteBinding | null;
   plan_type: PlanType | null;
   payment_ledger: PaymentLedger | null;
   measurement: FinalMeasurement | null;
@@ -110,7 +114,7 @@ function signedContract(f: OrderEligibilityFacts): PredicateResult {
   if (f.contract.project_id !== f.project_id) {
     return fail('contract_project_mismatch');
   }
-  const check = isSignedContract(f.contract, f.current_template_sha256);
+  const check = isSignedContract(f.contract, f.current_template);
   return check.ok ? pass() : fail(check.reason);
 }
 
@@ -125,6 +129,14 @@ function paymentCondition(f: OrderEligibilityFacts): PredicateResult {
   ) {
     return fail('ledger_binding_mismatch');
   }
+  const quote = f.authoritative_quote;
+  if (!quote) return fail('authoritative_quote_missing');
+  if (!f.contract || f.contract.quote_version_id !== quote.quote_version_id ||
+      ledger.quote_version_id !== quote.quote_version_id ||
+      ledger.quote_hash !== quote.quote_hash ||
+      ledger.contract_amount_cents !== quote.total_cents) {
+    return fail('authoritative_quote_mismatch');
+  }
   const milestone = orderPaymentMilestone(f.plan_type);
   const check = paymentConditionMet(ledger, milestone);
   return check.ok ? pass() : fail(`${milestone}_${check.reason}`);
@@ -138,6 +150,9 @@ function finalMeasureApproved(f: OrderEligibilityFacts): PredicateResult {
   if (f.contract && m.contract_id !== f.contract.id) {
     return fail('measurement_contract_mismatch');
   }
+  if (!f.contract?.signed_at) return fail('contract_signed_at_missing');
+  const timing = canScheduleFinalMeasure(m.measured_at, f.contract.signed_at);
+  if (!timing.ok) return fail(`measurement_timing_${timing.reason}`);
   return pass();
 }
 

@@ -27,6 +27,7 @@
 import { buildPaymentSchedule } from '../quote-engine';
 import { isMoneyCents, type PaymentScheduleType } from '../types';
 import { isHumanActor, type Actor } from './actor';
+import { isSha256 } from './hash';
 
 export type PlanType = PaymentScheduleType;
 
@@ -51,6 +52,7 @@ export type ReconciliationState =
 export interface PaymentExpectation {
   project_id: string;
   contract_id: string;
+  quote_version_id: string;
   plan_type: PlanType;
   milestone: PaymentMilestone;
   sequence: number;
@@ -68,6 +70,7 @@ export interface PaymentExpectation {
 export interface PaymentLedger {
   project_id: string;
   contract_id: string;
+  quote_version_id: string;
   plan_type: PlanType;
   contract_amount_cents: number;
   quote_hash: string;
@@ -78,6 +81,12 @@ export interface PaymentLedger {
 export interface PaymentBinding {
   project_id: string;
   contract_id: string;
+}
+
+export interface AuthoritativeQuoteBinding {
+  quote_version_id: string;
+  quote_hash: string;
+  total_cents: number;
 }
 
 const MILESTONES_BY_PLAN: Record<PlanType, PaymentMilestone[]> = {
@@ -99,19 +108,27 @@ export function isPlanType(value: unknown): value is PlanType {
 
 export function buildExpectations(
   planType: PlanType,
-  contractAmountCents: number,
-  quoteHash: string,
+  quote: AuthoritativeQuoteBinding,
   binding: PaymentBinding,
 ): PaymentLedger {
   if (!isPlanType(planType)) {
     throw new Error('payment-state: unknown plan type');
   }
-  if (!isMoneyCents(contractAmountCents)) {
+  if (!quote || !isMoneyCents(quote.total_cents)) {
     throw new Error('payment-state: contract amount out of bounds');
   }
-  if (typeof quoteHash !== 'string' || quoteHash.length === 0) {
+  if (!isSha256(quote.quote_hash)) {
     throw new Error('payment-state: quote hash required');
   }
+  if (typeof quote.quote_version_id !== 'string' || !quote.quote_version_id.trim()) {
+    throw new Error('payment-state: quote version required');
+  }
+  if (typeof binding?.project_id !== 'string' || !binding.project_id.trim() ||
+      typeof binding.contract_id !== 'string' || !binding.contract_id.trim()) {
+    throw new Error('payment-state: project and contract binding required');
+  }
+  const contractAmountCents = quote.total_cents;
+  const quoteHash = quote.quote_hash;
   const scope =
     planType === 'installation_50_25_25' ? 'installation' : 'product_only';
   const plan = buildPaymentSchedule(scope, contractAmountCents);
@@ -122,6 +139,7 @@ export function buildExpectations(
   const expectations = plan.stages.map((stage, i) => ({
     project_id: binding.project_id,
     contract_id: binding.contract_id,
+    quote_version_id: quote.quote_version_id,
     plan_type: planType,
     milestone: milestones[i],
     sequence: i + 1,
@@ -135,6 +153,7 @@ export function buildExpectations(
   return {
     project_id: binding.project_id,
     contract_id: binding.contract_id,
+    quote_version_id: quote.quote_version_id,
     plan_type: planType,
     contract_amount_cents: contractAmountCents,
     quote_hash: quoteHash,
@@ -147,6 +166,7 @@ export interface PaymentEventInput {
   amount_cents: number;
   project_id: string;
   contract_id: string;
+  quote_version_id: string;
   milestone: PaymentMilestone;
   quote_hash: string;
   expected_amount_cents: number;
@@ -189,6 +209,7 @@ export function applyPaymentEvent(
     !expectation ||
     event.project_id !== ledger.project_id ||
     event.contract_id !== ledger.contract_id ||
+    event.quote_version_id !== ledger.quote_version_id ||
     event.quote_hash !== ledger.quote_hash ||
     event.expected_amount_cents !== expectation.expected_amount_cents
   ) {

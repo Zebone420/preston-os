@@ -23,6 +23,7 @@ import {
   approvedMeasurement,
   CLIENT_CONTACT,
   completedContract,
+  currentTemplate,
   configuration,
   CONTRACT_ID,
   draftedContract,
@@ -246,10 +247,12 @@ describe('order-chain store - expectations, measurements, checks, packages', () 
     expect(db.rows('final_measurements')[0]).toMatchObject({
       id: MEASUREMENT_ID, status: 'submitted', approved_by: null,
     });
-    const byRuntime = await approveMeasurement(db.client, submitted, RUNTIME, NOW);
+    const byRuntime = await approveMeasurement(
+      db.client, submitted, RUNTIME, NOW, SIGNED_AT);
     expect(byRuntime.ok).toBe(false);
     expect(byRuntime.error).toBe('human_actor_required');
-    const byOwner = await approveMeasurement(db.client, submitted, OWNER, NOW);
+    const byOwner = await approveMeasurement(
+      db.client, submitted, OWNER, NOW, SIGNED_AT);
     expect(byOwner.ok).toBe(true);
     expect(byOwner.measurement.status).toBe('approved');
     expect(db.rows('final_measurements')[0]).toMatchObject({
@@ -257,7 +260,8 @@ describe('order-chain store - expectations, measurements, checks, packages', () 
     });
     expect(db.ops.at(-1)).toBe('update:final_measurements:id+status+sha256+source');
     // Second approval finds no submitted row: CAS refuses.
-    const twice = await approveMeasurement(db.client, submitted, OWNER, NOW);
+    const twice = await approveMeasurement(
+      db.client, submitted, OWNER, NOW, SIGNED_AT);
     expect(twice.ok).toBe(false);
     expect(twice.error).toBe('state_changed_elsewhere');
   });
@@ -278,13 +282,19 @@ describe('order-chain store - expectations, measurements, checks, packages', () 
     });
     expect(db.rows('order_readiness_checks')).toHaveLength(2);
     expect(db.ops.filter((o) => o.startsWith('update:order_readiness'))).toEqual([]);
+    expect((await insertReadinessCheck(db.client,
+      { ...pass, predicates: {} as never })).error).toBe('predicate_set_invalid');
+    const malformed = { ...pass, predicates: { ...pass.predicates,
+      signed_contract: { ok: true, reason: '' } } };
+    expect((await insertReadinessCheck(db.client, malformed)).error)
+      .toBe('predicate_invalid:signed_contract');
   });
 
   it('PO packages insert prepared only and transition by CAS with actor rules', async () => {
     const db = makeFakeDb();
     const prepared = preparePurchaseOrderPackage({
       project_id: PROJECT_ID, contract: completedContract(),
-      current_template_sha256: completedContract().template_sha256,
+      current_template: currentTemplate(),
       measurement: approvedMeasurement(), configuration: configuration(),
       sold_to: PRESTON_BLOCK, ship_to: PRESTON_BLOCK, client_contact: CLIENT_CONTACT,
       prepared_at: NOW,
@@ -302,30 +312,18 @@ describe('order-chain store - expectations, measurements, checks, packages', () 
     expect((await insertPoPackage(db.client, pkg, NOW)).duplicate).toBe(true);
 
     const base = { package_id: id, at: NOW };
-    // Non-human cannot approve for placement or record placement.
+    // Generic persistence cannot approve or record placement. Those states
+    // require the separate evidence-bound governed path.
     expect((await transitionPoPackage(db.client, { ...base, from: 'prepared',
-      to: 'approved_for_placement', actor: RUNTIME })).error).toBe('human_actor_required');
+      to: 'approved_for_placement', actor: RUNTIME })).error).toBe('invalid_transition');
     expect((await transitionPoPackage(db.client, { ...base, from: 'prepared',
       to: 'placed_by_owner', actor: OWNER })).error).toBe('invalid_transition');
     expect((await transitionPoPackage(db.client, { ...base, from: 'prepared',
       to: 'owner_review', actor: AGENT })).ok).toBe(true);
     expect((await transitionPoPackage(db.client, { ...base, from: 'owner_review',
-      to: 'approved_for_placement', actor: OWNER })).ok).toBe(true);
-    expect(db.rows('purchase_order_packages')[0]).toMatchObject({
-      state: 'approved_for_placement', approved_by: 'owner-1', placed_at: null,
-    });
-    expect((await transitionPoPackage(db.client, { ...base,
-      from: 'approved_for_placement', to: 'placed_by_owner', actor: AGENT })).error)
-      .toBe('human_actor_required');
-    const placed = await transitionPoPackage(db.client, { ...base,
-      from: 'approved_for_placement', to: 'placed_by_owner', actor: OWNER });
-    expect(placed.ok).toBe(true);
-    expect(db.rows('purchase_order_packages')[0]).toMatchObject({
-      state: 'placed_by_owner', placed_at: NOW,
-    });
-    // Terminal: nothing moves out of placed_by_owner.
-    expect((await transitionPoPackage(db.client, { ...base, from: 'placed_by_owner',
-      to: 'cancelled', actor: OWNER })).error).toBe('invalid_transition');
+      to: 'approved_for_placement', actor: OWNER })).error).toBe('invalid_transition');
+    expect((await transitionPoPackage(db.client, { ...base, from: 'owner_review',
+      to: 'cancelled', actor: OWNER })).ok).toBe(true);
     // Stale CAS: the row is no longer in 'prepared'.
     expect((await transitionPoPackage(db.client, { ...base, from: 'prepared',
       to: 'cancelled', actor: OWNER })).error).toBe('state_changed_elsewhere');

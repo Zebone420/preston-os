@@ -20,6 +20,7 @@ import {
   OWNER,
   PROJECT_ID,
   RUNTIME,
+  SIGNED_AT,
 } from './order-chain-fixtures';
 
 function draft(over: Record<string, unknown> = {}): FinalMeasurement {
@@ -28,6 +29,7 @@ function draft(over: Record<string, unknown> = {}): FinalMeasurement {
     contract_id: CONTRACT_ID,
     measured_at: '2026-09-10T15:00:00.000Z',
     measured_by: 'field-tech-1',
+    signed_at: SIGNED_AT,
     openings: OPENINGS,
     ...over,
   });
@@ -101,6 +103,7 @@ describe('final measure - versioning and approval', () => {
       contract_id: CONTRACT_ID,
       measured_at: '2026-09-10T15:00:00.000Z',
       measured_by: 't',
+      signed_at: SIGNED_AT,
       openings: OPENINGS,
       previous: v1,
     });
@@ -125,6 +128,7 @@ describe('final measure - versioning and approval', () => {
         contract_id: CONTRACT_ID,
         measured_at: '2026-09-10T15:00:00.000Z',
         measured_by: 't',
+        signed_at: SIGNED_AT,
         openings,
       });
       expect(r.ok).toBe(false);
@@ -133,16 +137,19 @@ describe('final measure - versioning and approval', () => {
 
   it('approval requires submitted status and a HUMAN actor', () => {
     const d = draft();
-    expect(approveMeasurement(d, OWNER, '2026-09-11T09:00:00.000Z').ok).toBe(false);
+    expect(approveMeasurement(d, OWNER, '2026-09-11T09:00:00.000Z', SIGNED_AT).ok)
+      .toBe(false);
     const s = submitMeasurement(d);
     expect(s.ok && s.measurement.status).toBe('submitted');
     if (!s.ok) return;
     for (const actor of [RUNTIME, AGENT, { kind: 'human', id: ' ' } as const]) {
-      const r = approveMeasurement(s.measurement, actor, '2026-09-11T09:00:00.000Z');
+      const r = approveMeasurement(
+        s.measurement, actor, '2026-09-11T09:00:00.000Z', SIGNED_AT);
       expect(r.ok).toBe(false);
       if (!r.ok) expect(r.reason).toBe('human_actor_required');
     }
-    const ok = approveMeasurement(s.measurement, OWNER, '2026-09-11T09:00:00.000Z');
+    const ok = approveMeasurement(
+      s.measurement, OWNER, '2026-09-11T09:00:00.000Z', SIGNED_AT);
     expect(ok.ok).toBe(true);
     if (!ok.ok) return;
     expect(ok.measurement.status).toBe('approved');
@@ -159,7 +166,7 @@ describe('final measure - versioning and approval', () => {
     expect(submitMeasurement(tampered).ok).toBe(false);
     expect(
       approveMeasurement({ ...tampered, status: 'submitted' }, OWNER,
-        '2026-09-11T09:00:00.000Z').ok,
+        '2026-09-11T09:00:00.000Z', SIGNED_AT).ok,
     ).toBe(false);
     expect(measurementSha256(tampered)).not.toBe(d.sha256);
   });
@@ -169,9 +176,28 @@ describe('final measure - versioning and approval', () => {
     const s = submitMeasurement(est);
     expect(s.ok).toBe(true);
     if (!s.ok) return;
-    const r = approveMeasurement(s.measurement, OWNER, '2026-09-11T09:00:00.000Z');
+    const r = approveMeasurement(
+      s.measurement, OWNER, '2026-09-11T09:00:00.000Z', SIGNED_AT);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe('estimate_source_refused');
+  });
+
+  it('refuses creation and approval before the three-business-day boundary', () => {
+    const early = newMeasurementVersion({
+      project_id: PROJECT_ID, contract_id: CONTRACT_ID,
+      measured_at: '2026-09-08T10:00:00.000Z', measured_by: 'field-tech-1',
+      signed_at: SIGNED_AT, openings: OPENINGS,
+    });
+    expect(early).toMatchObject({ ok: false, reason: 'measurement_timing_too_early' });
+
+    const submitted = submitMeasurement(draft());
+    if (!submitted.ok) throw new Error('fixture');
+    const wrongSigning = approveMeasurement(
+      submitted.measurement, OWNER, '2026-09-11T09:00:00.000Z',
+      '2026-09-09T10:00:00.000Z');
+    expect(wrongSigning).toMatchObject({
+      ok: false, reason: 'measurement_timing_too_early',
+    });
   });
 
   it('supersede is one-way', () => {

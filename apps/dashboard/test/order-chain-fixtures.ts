@@ -1,7 +1,7 @@
 // Shared synthetic fixtures for the order-chain test suites. Every id
 // and value here is fabricated; no real client data.
 
-import type { ContractRecord }
+import type { ContractRecord, ContractTemplateRecord }
   from '../src/lib/business/order-chain/contract-state';
 import {
   approveMeasurement,
@@ -27,6 +27,7 @@ import type { Actor } from '../src/lib/business/order-chain/actor';
 export const PROJECT_ID = '11111111-1111-4111-8111-111111111111';
 export const CONTRACT_ID = '22222222-2222-4222-8222-222222222222';
 export const TEMPLATE_ID = '33333333-3333-4333-8333-333333333333';
+export const QUOTE_VERSION_ID = '77777777-7777-4777-8777-777777777777';
 export const MEASUREMENT_ID = '44444444-4444-4444-8444-444444444444';
 export const OTHER_PROJECT_ID = '55555555-5555-4555-8555-555555555555';
 export const OTHER_CONTRACT_ID = '66666666-6666-4666-8666-666666666666';
@@ -34,6 +35,7 @@ export const OTHER_CONTRACT_ID = '66666666-6666-4666-8666-666666666666';
 export const TEMPLATE_SHA = sha256Hex('contract-template-v3');
 export const STALE_TEMPLATE_SHA = sha256Hex('contract-template-v4');
 export const QUOTE_HASH = sha256Hex('quote-version-7');
+export const CONTRACT_PAYLOAD_HASH = sha256Hex('signed-contract-payload-v3');
 
 export const OWNER: Actor = { kind: 'human', id: 'owner-1' };
 export const RUNTIME: Actor = { kind: 'runtime', id: 'os-runtime' };
@@ -46,7 +48,7 @@ export function draftedContract(): ContractRecord {
   return {
     id: CONTRACT_ID,
     project_id: PROJECT_ID,
-    quote_version_id: null,
+    quote_version_id: QUOTE_VERSION_ID,
     template_id: TEMPLATE_ID,
     template_sha256: TEMPLATE_SHA,
     provider: 'docusign',
@@ -54,7 +56,21 @@ export function draftedContract(): ContractRecord {
     state: 'drafted',
     signed_at: null,
     provider_event_verified: false,
-    payload_hash: '',
+    payload_hash: CONTRACT_PAYLOAD_HASH,
+    included_forms: ['installation-agreement', 'cancellation-notice'],
+  };
+}
+
+export function currentTemplate(): ContractTemplateRecord {
+  return {
+    id: TEMPLATE_ID,
+    name: 'installation-contract',
+    version: 3,
+    sha256: TEMPLATE_SHA,
+    required_forms: ['installation-agreement', 'cancellation-notice'],
+    approved_by: OWNER.id,
+    approved_at: '2026-09-01T12:00:00.000Z',
+    is_current: true,
   };
 }
 
@@ -79,6 +95,7 @@ export function approvedMeasurement(): FinalMeasurement {
     contract_id: CONTRACT_ID,
     measured_at: '2026-09-10T15:00:00.000Z',
     measured_by: 'field-tech-1',
+    signed_at: SIGNED_AT,
     openings: OPENINGS,
   });
   if (!created.ok) throw new Error('fixture: measurement invalid');
@@ -89,6 +106,7 @@ export function approvedMeasurement(): FinalMeasurement {
     submitted.measurement,
     OWNER,
     '2026-09-11T09:00:00.000Z',
+    SIGNED_AT,
   );
   if (!approved.ok) throw new Error('fixture: approve failed');
   return approved.measurement;
@@ -99,14 +117,15 @@ export const CONTRACT_TOTAL = 925438;
 export function paidDepositLedger(): PaymentLedger {
   const ledger = buildExpectations(
     'installation_50_25_25',
-    CONTRACT_TOTAL,
-    QUOTE_HASH,
+    { quote_version_id: QUOTE_VERSION_ID, quote_hash: QUOTE_HASH,
+      total_cents: CONTRACT_TOTAL },
     { project_id: PROJECT_ID, contract_id: CONTRACT_ID },
   );
   const applied = applyPaymentEvent(ledger, {
     amount_cents: 462719,
     project_id: PROJECT_ID,
     contract_id: CONTRACT_ID,
+    quote_version_id: QUOTE_VERSION_ID,
     milestone: 'deposit',
     quote_hash: QUOTE_HASH,
     expected_amount_cents: 462719,
@@ -154,7 +173,9 @@ export function allPassFacts(
     project_id: PROJECT_ID,
     evaluated_at: NOW,
     contract,
-    current_template_sha256: TEMPLATE_SHA,
+    current_template: currentTemplate(),
+    authoritative_quote: { quote_version_id: QUOTE_VERSION_ID,
+      quote_hash: QUOTE_HASH, total_cents: CONTRACT_TOTAL },
     plan_type: 'installation_50_25_25',
     payment_ledger: paidDepositLedger(),
     measurement,

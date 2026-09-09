@@ -11,7 +11,8 @@
 import { isHumanActor, isIsoTimestamp, type Actor } from './actor';
 import { findContactLeaks, isPrestonEmail, type ClientContactFacts }
   from './contact-guard';
-import type { ContractRecord } from './contract-state';
+import { isSignedContract, type ContractRecord, type ContractTemplateRecord }
+  from './contract-state';
 import {
   estimateDimensionsCannotFeedPo,
   type FinalMeasurement,
@@ -87,13 +88,15 @@ export interface PurchaseOrderPackage {
   state: PoPackageState;
   prepared_at: string;
   approved_by: string | null;
+  approved_at: string | null;
+  approval_evidence_hash: string | null;
   placed_at: string | null;
 }
 
 export interface PreparePoInput {
   project_id: string;
   contract: ContractRecord;
-  current_template_sha256: string | null;
+  current_template: ContractTemplateRecord | null;
   measurement: FinalMeasurement;
   configuration: PoConfiguration;
   sold_to: PrestonContactBlock;
@@ -155,15 +158,8 @@ export function preparePurchaseOrderPackage(
   if (!contract || contract.project_id !== input.project_id) {
     return { ok: false, reason: 'contract_binding_mismatch' };
   }
-  if (contract.state !== 'completed' || !contract.provider_event_verified) {
-    return { ok: false, reason: 'contract_not_signed' };
-  }
-  if (
-    !nonEmpty(input.current_template_sha256) ||
-    contract.template_sha256 !== input.current_template_sha256
-  ) {
-    return { ok: false, reason: 'stale_contract' };
-  }
+  const signed = isSignedContract(contract, input.current_template);
+  if (!signed.ok) return { ok: false, reason: signed.reason };
   const feed = estimateDimensionsCannotFeedPo(measurement);
   if (!feed.ok) return { ok: false, reason: feed.reason };
   if (
@@ -277,6 +273,8 @@ export function preparePurchaseOrderPackage(
     state: 'prepared',
     prepared_at: input.prepared_at,
     approved_by: null,
+    approved_at: null,
+    approval_evidence_hash: null,
     placed_at: null,
   };
   return { ok: true, package: pkg };
@@ -287,7 +285,8 @@ export type ApproveForPlacementOutcome =
   | {
       ok: false;
       reason: 'human_actor_required' | 'invalid_state' | 'eligibility_blocked'
-        | 'approved_at_invalid';
+        | 'approved_at_invalid' | 'package_binding_invalid' |
+          'readiness_time_invalid';
       blocked_by?: string[];
       check?: OrderReadinessCheck;
     };
@@ -310,6 +309,20 @@ export function approveForPlacement(
   if (pkg.state !== 'prepared' && pkg.state !== 'owner_review') {
     return { ok: false, reason: 'invalid_state' };
   }
+  const integrity = validatePurchaseOrderPackage(pkg);
+  if (!integrity.ok) return { ok: false, reason: 'package_binding_invalid' };
+  if (facts.contract?.id !== pkg.contract_id ||
+      facts.measurement?.id !== pkg.measurement_id ||
+      facts.measurement.sha256 !== pkg.measurement_sha256 ||
+      facts.measurement.version !== pkg.measurement_version) {
+    return { ok: false, reason: 'package_binding_invalid' };
+  }
+  const evaluatedMs = Date.parse(facts.evaluated_at);
+  const approvedMs = Date.parse(approvedAt);
+  if (!Number.isFinite(evaluatedMs) || approvedMs < evaluatedMs ||
+      approvedMs - evaluatedMs > 5 * 60 * 1000) {
+    return { ok: false, reason: 'readiness_time_invalid' };
+  }
   const check = evaluateOrderEligibility({
     ...facts,
     project_id: pkg.project_id,
@@ -328,6 +341,70 @@ export function approveForPlacement(
   return {
     ok: true,
     check,
-    package: { ...pkg, state: 'approved_for_placement', approved_by: actor.id },
+    package: {
+      ...pkg,
+      state: 'approved_for_placement',
+      approved_by: actor.id,
+      approved_at: approvedAt,
+      approval_evidence_hash: hashCanonical(check),
+    },
   };
+}
+
+export type PackageIntegrity =
+  | { ok: true }
+  | { ok: false; reason: string };
+
+// Recompute every durable binding from the package itself. This catches a
+// caller changing line items, document content, contract/measurement hashes,
+// or configuration after preparation and before owner review.
+export function validatePurchaseOrderPackage(
+  pkg: PurchaseOrderPackage,
+): PackageIntegrity {
+  if (!pkg || !isSha256(pkg.measurement_sha256) ||
+      !isSha256(pkg.template_sha256) || !isSha256(pkg.configuration_hash) ||
+      !isSha256(pkg.po_hash) || !isSha256(pkg.document?.sha256)) {
+    return { ok: false, reason: 'hash_invalid' };
+  }
+  if (!nonEmpty(pkg.project_id) || !nonEmpty(pkg.contract_id) ||
+      !nonEmpty(pkg.measurement_id) || !nonEmpty(pkg.vendor) ||
+      !nonEmpty(pkg.product_line) || !Array.isArray(pkg.line_items)) {
+    return { ok: false, reason: 'binding_missing' };
+  }
+  const config = configurationHash({
+    vendor: pkg.vendor,
+    product_line: pkg.product_line,
+    lines: pkg.line_items.map((line) => ({
+      opening_id: line.opening_id,
+      product_code: line.product_code,
+      options: line.options,
+    })),
+  });
+  if (config !== pkg.configuration_hash) {
+    return { ok: false, reason: 'configuration_hash_mismatch' };
+  }
+  const po = computePoHash({
+    measurement_sha256: pkg.measurement_sha256,
+    configuration_hash: pkg.configuration_hash,
+    template_sha256: pkg.template_sha256,
+  });
+  if (po !== pkg.po_hash) return { ok: false, reason: 'po_hash_mismatch' };
+  const body = {
+    project_id: pkg.project_id,
+    contract_id: pkg.contract_id,
+    measurement_id: pkg.measurement_id,
+    measurement_sha256: pkg.measurement_sha256,
+    configuration_hash: pkg.configuration_hash,
+    template_sha256: pkg.template_sha256,
+    po_hash: pkg.po_hash,
+    vendor: pkg.vendor,
+    product_line: pkg.product_line,
+    line_items: pkg.line_items,
+    sold_to: pkg.sold_to,
+    ship_to: pkg.ship_to,
+  };
+  if (hashCanonical(body) !== pkg.document.sha256) {
+    return { ok: false, reason: 'document_hash_mismatch' };
+  }
+  return { ok: true };
 }
