@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  checkContractTemplate,
   renderContractPackage,
 } from '../src/lib/ai-os/capabilities/business/contract-package-render';
 import {
@@ -33,8 +34,21 @@ const CONTRACT_TOTAL = 376_285;
 function contractParams(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     project_id: PROJECT,
-    template_id: 'contract_package_v1',
-    template_sha256: SHA_A,
+    template: {
+      id: 'template-contract-package-v3',
+      name: 'contract_package',
+      version: 3,
+      sha256: SHA_A,
+      document_id: 'doc-contract-template-v3',
+      required_forms: ['ny-hic', 'rrp-ack'],
+      approved_by: 'owner@example.com',
+      approved_at: '2026-09-01T10:00:00.000Z',
+      is_current: true,
+    },
+    included_forms: [
+      { form_id: 'rrp-ack', document_id: 'doc-rrp-ack-v2', sha256: SHA_B },
+      { form_id: 'ny-hic', document_id: 'doc-ny-hic-v4', sha256: SHA_A },
+    ],
     proposal: {
       document_id: 'doc-proposal-0041-v1',
       content_sha256: SHA_B,
@@ -56,11 +70,22 @@ const CONTRACT_SPEC: MatrixSpec = {
   operation_kind: 'write',
   valid: () => contractParams(),
   schemaInvalid: [
-    { name: 'unknown template', reason: 'schema_invalid:template_id',
-      params: contractParams({ template_id: 'contract_package_v2' }) },
+    { name: 'wrong template kind', reason: 'schema_invalid:template.name',
+      params: contractParams({ template: {
+        ...(contractParams().template as Record<string, unknown>), name: 'proposal',
+      } }) },
     { name: 'invalid proposal hash', reason: 'schema_invalid:proposal.content_sha256',
       params: contractParams({ proposal: {
         ...(contractParams().proposal as Record<string, unknown>), content_sha256: 'x',
+      } }) },
+    { name: 'template without approval actor', reason: 'schema_invalid:template.approved_by',
+      params: contractParams({ template: {
+        ...(contractParams().template as Record<string, unknown>), approved_by: null,
+      } }) },
+    { name: 'template without approval timestamp',
+      reason: 'schema_invalid:template.approved_at',
+      params: contractParams({ template: {
+        ...(contractParams().template as Record<string, unknown>), approved_at: null,
       } }) },
     { name: 'fractional contract cents', reason: 'schema_invalid:proposal.total_cents',
       params: contractParams({ proposal: {
@@ -75,7 +100,33 @@ const CONTRACT_SPEC: MatrixSpec = {
     { name: 'send instruction at strict boundary', reason: 'schema_invalid:root',
       params: contractParams({ send: true }) },
   ],
-  negatives: [],
+  negatives: [
+    { name: 'superseded template', reason: 'template_not_current',
+      params: contractParams({ template: {
+        ...(contractParams().template as Record<string, unknown>), is_current: false,
+      } }) },
+    { name: 'missing required form', reason: 'required_form_missing',
+      params: contractParams({ included_forms: [
+        { form_id: 'ny-hic', document_id: 'doc-ny-hic-v4', sha256: SHA_A },
+      ] }) },
+    { name: 'unapproved extra form', reason: 'form_not_required',
+      params: contractParams({ included_forms: [
+        ...(contractParams().included_forms as Record<string, unknown>[]),
+        { form_id: 'extra-form', document_id: 'doc-extra', sha256: SHA_A },
+      ] }) },
+    { name: 'duplicate required form ids', reason: 'required_forms_not_unique',
+      params: contractParams({ template: {
+        ...(contractParams().template as Record<string, unknown>),
+        required_forms: ['ny-hic', 'ny-hic'],
+      }, included_forms: [
+        { form_id: 'ny-hic', document_id: 'doc-ny-hic-v4', sha256: SHA_A },
+      ] }) },
+    { name: 'duplicate included form descriptors', reason: 'included_forms_not_unique',
+      params: contractParams({ included_forms: [
+        ...(contractParams().included_forms as Record<string, unknown>[]),
+        { form_id: 'ny-hic', document_id: 'doc-ny-hic-other', sha256: SHA_B },
+      ] }) },
+  ],
 };
 
 describeCapabilityMatrix(CONTRACT_SPEC);
@@ -83,22 +134,47 @@ describeCapabilityMatrix(CONTRACT_SPEC);
 describe('contract.package.render - deterministic safe package', () => {
   it('binds template, proposal, quote, amount and exact 50/25/25 schedule', () => {
     const params = ContractPackageRenderParamsSchema.parse(contractParams());
+    expect(checkContractTemplate(params)).toBeNull();
     const first = renderContractPackage(params);
     expect(renderContractPackage(params)).toEqual(first);
     expect(first.descriptor).toMatchObject({
       document_type: 'contract_package',
       project_id: PROJECT,
+      template_id: 'template-contract-package-v3',
+      template_version: 3,
       template_sha256: SHA_A,
+      template_document_id: 'doc-contract-template-v3',
+      template_approved_by: 'owner@example.com',
+      template_approved_at: '2026-09-01T10:00:00.000Z',
       proposal_sha256: SHA_B,
       quote_sha256: SHA_A,
       total_cents: CONTRACT_TOTAL,
       provider_state: 'rendered_not_sent',
     });
     expect(first.descriptor.content_sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(first.descriptor.required_forms).toEqual([
+      { form_id: 'ny-hic', document_id: 'doc-ny-hic-v4', sha256: SHA_A },
+      { form_id: 'rrp-ack', document_id: 'doc-rrp-ack-v2', sha256: SHA_B },
+    ]);
+    expect(first.rendered_text).toContain(
+      `ny-hic: doc-ny-hic-v4 SHA-256 ${SHA_A}`,
+    );
     expect(first.rendered_text).toContain('Payment 1: 50% $1,881.43');
     expect(first.rendered_text).toContain('Payment 2: 25% $940.71');
     expect(first.rendered_text).toContain('Payment 3: 25% $940.71');
     expect(first.rendered_text).not.toMatch(/recipient|envelope|send now/i);
+  });
+
+  it('binds every exact required-form document and hash into the content hash', () => {
+    const first = ContractPackageRenderParamsSchema.parse(contractParams());
+    const changed = ContractPackageRenderParamsSchema.parse(contractParams({
+      included_forms: [
+        { form_id: 'rrp-ack', document_id: 'doc-rrp-ack-v2', sha256: SHA_A },
+        { form_id: 'ny-hic', document_id: 'doc-ny-hic-v4', sha256: SHA_A },
+      ],
+    }));
+    expect(renderContractPackage(changed).descriptor.content_sha256)
+      .not.toBe(renderContractPackage(first).descriptor.content_sha256);
   });
 
   it('supports only the deterministic 75/25 product-only schedule', () => {

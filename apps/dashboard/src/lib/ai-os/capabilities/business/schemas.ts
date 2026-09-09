@@ -136,8 +136,24 @@ export type ProposalRenderParams = z.infer<typeof ProposalRenderParamsSchema>;
 // instead of being silently discarded at the trusted boundary.
 export const ContractPackageRenderParamsSchema = z.object({
   project_id: PROJECT_ID,
-  template_id: z.literal('contract_package_v1'),
-  template_sha256: SHA256,
+  template: z.object({
+    id: DOC_ID,
+    name: z.literal('contract_package'),
+    version: z.number().int().min(1).max(999),
+    sha256: SHA256,
+    document_id: DOC_ID,
+    required_forms: z.array(
+      z.string().regex(/^[a-z0-9][a-z0-9_.-]{0,63}$/),
+    ).min(1).max(30),
+    approved_by: z.string().min(1).max(128),
+    approved_at: ISO_DATETIME,
+    is_current: z.boolean(),
+  }).strict(),
+  included_forms: z.array(z.object({
+    form_id: z.string().regex(/^[a-z0-9][a-z0-9_.-]{0,63}$/),
+    document_id: DOC_ID,
+    sha256: SHA256,
+  }).strict()).min(1).max(30),
   proposal: z.object({
     document_id: DOC_ID,
     content_sha256: SHA256,

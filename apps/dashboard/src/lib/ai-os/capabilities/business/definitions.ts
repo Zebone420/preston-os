@@ -244,7 +244,7 @@ export const BUSINESS_DEFINITIONS: readonly CapabilityDefinition[] = [
     risk_class: 'GREEN',
     requires_approval: false,
     target_scope:
-      'render one internal review package bound to proposal, quote and template hashes; never send',
+      'render one internal review package bound to the current owner-approved template and required forms; never send',
     timeout_ms: 10_000,
     idempotency_strategy: 'ledger_key',
     dry_run_supported: true,
@@ -253,11 +253,13 @@ export const BUSINESS_DEFINITIONS: readonly CapabilityDefinition[] = [
     approval_class: 'INTERNAL',
     enabled: true,
     disabled_reason: null,
-    provenance: 'accepted proposal descriptor + deterministic quote total and payment plan',
+    provenance:
+      'accepted proposal + current contract_templates record + required form document hashes',
     actor: 'trusted executor -> internal deterministic runner',
     side_effect_key: KEY_STRATEGY,
     evidence: INTERNAL_EVIDENCE + ' + rendered_not_sent marker',
-    failure_behavior: 'schema or hash binding refusal terminal before ledger',
+    failure_behavior:
+      'unapproved/noncurrent template or incomplete required-form binding terminal before ledger',
     validate_params: validateContractPackageRender,
   },
   {
