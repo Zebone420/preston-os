@@ -21,8 +21,8 @@ import {
 } from '../src/lib/preston-control/schemas';
 import { TOOL_NAMES } from '../src/lib/preston-control/server';
 
-// AG-5 requires the authenticated owner identity to use RUNTIME_ID_RE.
-const OWNER = 'owner-0001';
+// AG-5 preserves Preston Control's exact authenticated owner email.
+const OWNER = 'info@preston.nyc';
 const NOW = '2026-09-09T12:01:00.000Z';
 const POLICY = evaluatePolicy({ action: 'push exact change and open pull request',
   agent: 'claude', environment: 'staging' });

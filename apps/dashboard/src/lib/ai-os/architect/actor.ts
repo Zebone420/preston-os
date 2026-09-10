@@ -34,19 +34,26 @@ export type AttributionResult =
   | { ok: false; errors: AttributionError[] };
 
 const EXECUTORS: ReadonlySet<string> = new Set(['claude', 'codex', 'hermes', 'audit']);
+// Preston Control authenticates the owner by email. Keep that exact principal
+// rather than inventing an opaque alias; other Architect identities continue
+// to use the shared runtime ID format. This is intentionally conservative and
+// bounded to the two owner-bearing fields.
+const OWNER_EMAIL_RE = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
 const own = (o: Record<string, unknown>, key: string): boolean =>
   Object.prototype.hasOwnProperty.call(o, key);
 const validId = (value: unknown): value is string =>
   typeof value === 'string' && RUNTIME_ID_RE.test(value);
+const validOwnerIdentity = (value: unknown): value is string =>
+  validId(value) || (typeof value === 'string' && value.length <= 254 && OWNER_EMAIL_RE.test(value));
 
 export function requireAttribution(raw: unknown): AttributionResult {
   const value = raw !== null && typeof raw === 'object' && !Array.isArray(raw)
     ? raw as Record<string, unknown> : {};
   const errors: AttributionError[] = [];
-  if (!validId(value.requested_by)) errors.push('requested_by_invalid');
+  if (!validOwnerIdentity(value.requested_by)) errors.push('requested_by_invalid');
   if (!validId(value.proposer)) errors.push('proposer_invalid');
   if (!own(value, 'approver')) errors.push('approver_missing');
-  else if (value.approver !== null && !validId(value.approver)) {
+  else if (value.approver !== null && !validOwnerIdentity(value.approver)) {
     errors.push('approver_invalid');
   }
   if (typeof value.executor !== 'string' || !EXECUTORS.has(value.executor)) {

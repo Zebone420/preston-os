@@ -10,6 +10,11 @@ describe('AG-5 actor attribution', () => {
   it('accepts a complete, separated, capable attribution', () => {
     expect(requireAttribution(VALID)).toEqual({ ok: true, attribution: VALID });
     expect(requireAttribution({ ...VALID, approver: null, run_id: null }).ok).toBe(true);
+    expect(requireAttribution({
+      ...VALID,
+      requested_by: 'info@preston.nyc',
+      approver: 'info@preston.nyc',
+    }).ok).toBe(true);
   });
 
   it('rejects every missing mandatory field without throwing', () => {
@@ -43,12 +48,17 @@ describe('AG-5 actor attribution', () => {
     }
   });
 
-  it('requires every non-null identity to match the shared runtime ID format', () => {
+  it('requires runtime IDs except for bounded authenticated owner-email fields', () => {
     for (const [field, value] of [
       ['requested_by', 'x'], ['proposer', 'x'], ['approver', 'x'],
       ['correlation_id', 'x'], ['run_id', 'x'],
     ]) {
       expect(requireAttribution({ ...VALID, [field]: value }).ok, field).toBe(false);
     }
+    expect(requireAttribution({ ...VALID, proposer: 'worker@preston.nyc' }).ok).toBe(false);
+    expect(requireAttribution({ ...VALID, requested_by: 'not-an-email@' }).ok).toBe(false);
+    expect(requireAttribution({ ...VALID, requested_by: 'owner@localhost' }).ok).toBe(false);
+    expect(requireAttribution({ ...VALID, approver: `${'a'.repeat(243)}@example.com` }).ok)
+      .toBe(false);
   });
 });

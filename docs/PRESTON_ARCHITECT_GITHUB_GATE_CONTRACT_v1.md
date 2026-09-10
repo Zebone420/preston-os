@@ -7,6 +7,11 @@ the requirements established in the owning conversation and grounded in the
 CURRENT Preston codebase (not invented from scratch where existing
 primitives already do the job).
 
+Owner approval provenance: the owner explicitly approved this document as
+the implementation contract for AG-1 through AG-10 in the governing
+conversation on 2026-09-08. No deployment, credential provisioning, live
+GitHub write, merge, or standing approval was included in that authorization.
+
 ## 1. Design summary
 
 Architect is a bounded, advisory capability set that lives entirely inside
@@ -207,8 +212,11 @@ change invalidates every existing approval against it (AG-4 + AG-6).
 - **Files:** NEW `architect/actor.ts`.
 - **Inputs:** candidate attribution object.
 - **Outputs:** validated `ActorAttribution` or errors.
-- **Invariants:** all 5 fields match `RUNTIME_ID_RE` (existing ID format,
-  no new one); `executor` is always one of `claude`/`codex`/`hermes`/
+- **Invariants:** proposer, correlation, and non-null run identifiers match
+  `RUNTIME_ID_RE`; requested-by and approver preserve the exact bounded
+  authenticated owner email used by Preston Control (or an existing runtime
+  identity for non-email principals), never an invented alias. `executor` is
+  always one of `claude`/`codex`/`hermes`/
   `audit` — never `chatgpt` (chatgpt is intake/architect, never
   implementer, per the existing `AgentRole` contract).
 - **Policy interaction:** feeds `agent-contracts.ts`'s per-role capability
