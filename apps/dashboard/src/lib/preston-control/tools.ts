@@ -717,6 +717,8 @@ export async function readJobResultReports(ctx: ToolContext, jobId: string) {
         structured_error: p['structured_error'] == null ? null : safeText(p['structured_error'], 120),
         provider_model: p['provider_model'] == null ? null : safeText(p['provider_model'], 80),
         duration_ms: Number.isFinite(Number(p['duration_ms'])) ? Number(p['duration_ms']) : null,
+        // M7: provider-reported USD cost for this run, when the CLI exposed one.
+        cost_usd: typeof p['cost_usd'] === 'number' && Number.isFinite(p['cost_usd']) ? p['cost_usd'] : null,
         recorded_at: String(row['created_at'] ?? ''),
       };
     });
@@ -753,6 +755,19 @@ export async function prestonGetJob(ctx: ToolContext, jobId: string) {
   };
   const approval = job.approval_id ? await restateApproval(ctx, job.approval_id) : null;
   const results = await readJobResultReports(ctx, id);
+  // M7: lost result-event detection. A terminal job that actually ran
+  // (attempts > 0) is expected to have at least one JobResultRecorded
+  // report (driver.ts appends one per attempt after the run-owned CAS
+  // wins) - but that append is explicitly best-effort ("a failed append
+  // never fails the job"). Zero reports on a job like that is a genuine
+  // evidence gap, not "never ran": surface it rather than let it read as
+  // an ordinary empty list. Rows that went terminal before result recording
+  // existed (pre-Bridge-B2, 5e5ee03) also read as a gap: honest - no
+  // readable report was ever written for them - but not a lost append.
+  const resultEvidenceGap = results.read_ok
+    && TERMINAL_JOB_STATUSES.has(job.status)
+    && job.attempts > 0
+    && results.reports.length === 0;
   return {
     found: true as const,
     job,
@@ -760,6 +775,7 @@ export async function prestonGetJob(ctx: ToolContext, jobId: string) {
     approval,
     result_reports: results.reports,
     result_reports_read_ok: results.read_ok,
+    result_evidence_gap: resultEvidenceGap,
   };
 }
 
@@ -1223,6 +1239,25 @@ export async function prestonPollEvents(
   const nowMs = Date.parse(ctx.now);
   const ctl = await readSystemControlsChecked(client);
   const model = await loadOrchestrationReadModel(client, 20, nowMs);
+
+  // Fail closed on the AUTHORITATIVE buckets (same rule as preston_status's
+  // posture): an unreadable goal/job read model is never served as an empty
+  // page, because a supervisor that advanced its cursor past one would
+  // silently lose every transition in it. Controls and rejection records
+  // stay best-effort and are reported in the window as before.
+  const readable = (state: string) => state === 'ok' || state === 'empty';
+  if (!model.applied || !readable(model.goals.state) || !readable(model.jobs.state)) {
+    return {
+      ok: false as const,
+      error: (!model.applied ? 'migration_absent' : 'read_model_unreadable') as
+        'migration_absent' | 'read_model_unreadable',
+      window: {
+        goals_state: model.goals.state,
+        jobs_state: model.jobs.state,
+        migration_applied: model.applied,
+      },
+    };
+  }
 
   // Best-effort rejection records: absence of read authorization is
   // REPORTED (rejections_readable:false), never silently treated as

@@ -297,6 +297,11 @@ export interface RealCodexAdapterResult {
   structured_error: string | null;
   provider_model: string | null;
   routing_reason: string | null;
+  // M7 parity with the claude adapter. The Codex CLI's `exec --json` output
+  // is an NDJSON event stream, not one JSON object, so extractResultParts'
+  // single-object cost parse never matches it - this is honestly null until
+  // Codex's event-stream format is separately parsed for a cost/usage event.
+  cost_usd: number | null;
 }
 
 function processEvidence(o: ProcessOutcome): RealProcessEvidence {
@@ -353,6 +358,7 @@ function refuse(
     structured_error: null,
     provider_model: null,
     routing_reason: null,
+    cost_usd: null,
   };
 }
 
@@ -420,5 +426,6 @@ export async function runRealCodexJob(
     structured_error: parts.structured_error,
     provider_model: routed.model,
     routing_reason: routed.reason,
+    cost_usd: parts.cost_usd,
   };
 }

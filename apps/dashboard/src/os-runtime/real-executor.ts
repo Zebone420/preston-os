@@ -284,7 +284,7 @@ export async function buildRealExecutor(
         result_excerpt: null, files_changed: [],
         structured: null, structured_error: null,
       },
-      provider_model: null, routing_reason: null, duration_ms: null,
+      provider_model: null, routing_reason: null, duration_ms: null, cost_usd: null,
     }, { job_id: job.id, goal_id: job.goal_id, run_id: runId, role });
 
     // Re-resolve the capability EVERY job (owner may have downgraded).
@@ -411,6 +411,7 @@ export async function buildRealExecutor(
         provider_model: result.provider_model ?? null,
         routing_reason: result.routing_reason ?? null,
         duration_ms: result.process?.duration_ms ?? null,
+        cost_usd: typeof result.cost_usd === 'number' ? result.cost_usd : null,
       };
       if (!audit.ok || !audit.audit) {
         return logResult({
