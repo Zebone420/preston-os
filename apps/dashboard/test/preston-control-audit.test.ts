@@ -344,7 +344,9 @@ describe('AUDIT 5 - no token / code / secret / key in logs, audit rows, evidence
 });
 
 describe('AUDIT 6 - surface isolation: client A (MCP) cannot call REST; client B (GPT) cannot call MCP', () => {
-  it('REST routes refuse the MCP token; /mcp refuses the GPT token; both with wrong_client, no tool runs', async () => {
+  // Imports six route modules and runs ~3s of real work; under full-suite CPU
+  // load it exceeded vitest's 5s default (observed 10.4s), never on a quiet host.
+  it('REST routes refuse the MCP token; /mcp refuses the GPT token; both with wrong_client, no tool runs', { timeout: 30_000 }, async () => {
     const routes = [
       (await import('../src/app/api/control/status/route')).GET,
       (await import('../src/app/api/control/approvals/route')).GET,
