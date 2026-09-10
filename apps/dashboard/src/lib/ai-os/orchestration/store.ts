@@ -117,8 +117,15 @@ export async function persistDecomposedGoal(
     const j = await insertGoalJob(client, job);
     if (!j.ok) errors.push(j.error ?? `job:${job.id}`);
   }
+  // job_dependencies has a random PK and no natural key (D2-L1), so a
+  // re-persist must skip edges that already exist; an unreadable edge set
+  // fails closed rather than risk duplicating the graph.
+  const existing = await listDependenciesForGoal(client, state.goal.id);
+  if (!existing.ok) return { ok: false, errors: [...errors, existing.error ?? 'deps_unreadable'] };
+  const present = new Set(existing.rows.map((r) => `${r.job_id}->${r.depends_on_job_id}`));
   for (const job of state.jobs) {
     for (const dep of job.depends_on) {
+      if (present.has(`${job.id}->${dep}`)) continue;
       const d = await insertRow(client, ORCH_TABLES.deps, {
         goal_id: state.goal.id,
         job_id: job.id,
