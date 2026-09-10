@@ -1,7 +1,7 @@
 // Preston Supervisor - plugin API client. Every request goes to THIS
 // plugin's own backend routes (/api/plugins/preston-supervisor/*),
 // which the Hermes dashboard mounts behind its auth gate and which
-// proxy ONLY the seven supported Preston Control reads. The security
+// proxy ONLY the supported Preston Control reads. The security
 // boundary test pins that no other path is ever fetched and that no
 // credential appears in frontend code.
 
@@ -53,4 +53,16 @@ export async function readLink(): Promise<LinkState> {
   } catch {
     return { configured: false, host: "" };
   }
+}
+
+export type OwnerViewName =
+  | "today" | "project" | "approvals" | "workforce" | "incidents" | "brief";
+
+export async function readOwnerView<T>(
+  view: OwnerViewName,
+  projectRef?: string,
+): Promise<ApiResult<T>> {
+  const params = new URLSearchParams({ view });
+  if (projectRef) params.set("project_ref", projectRef);
+  return readOp<T>(`/owner-view?${params.toString()}`);
 }

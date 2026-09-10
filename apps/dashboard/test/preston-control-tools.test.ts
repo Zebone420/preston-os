@@ -104,6 +104,41 @@ describe('preston_status', () => {
     expect(s.posture).toBe('halted');
     expect(s.needs_attention.join(' ')).toContain('owner_stop');
   });
+
+  it('fails closed instead of reporting operating when job reads fail', async () => {
+    const db = makeDb();
+    db.rowsOf('master_goals').push({
+      id: 'goal-read-error', title: 'read failure', status: 'running',
+      requested_by: OWNER, environment: 'staging', simulation_only: true,
+      created_at: NOW, updated_at: NOW,
+    });
+    const base = db.client;
+    const broken = {
+      from(table: string) {
+        if (table !== 'goal_jobs') return base.from(table);
+        const failed = Promise.resolve({
+          data: null, error: { message: 'permission denied' },
+        });
+        const chain = (): Record<string, unknown> => ({
+          eq: () => chain(),
+          order: () => ({ limit: () => failed }),
+          limit: () => failed,
+        });
+        return {
+          insert: base.from(table).insert,
+          update: base.from(table).update,
+          select: () => chain(),
+        };
+      },
+      rpc: base.rpc.bind(base),
+    } as unknown as ComposerClient;
+    const s = await prestonStatus(ctxFor(broken));
+    expect(s.posture).toBe('read_model_unreadable');
+    expect(s.read_states.jobs).toBe('error');
+    expect(s.read_states.failures).toBe('error');
+    expect(s.read_states.dead_letters).toBe('error');
+    expect(s.needs_attention.join(' ')).toContain('read model unreadable');
+  });
 });
 
 describe('preston_submit_goal', () => {

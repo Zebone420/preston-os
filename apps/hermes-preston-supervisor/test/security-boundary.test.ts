@@ -144,7 +144,7 @@ describe("backend boundary - preston_client + plugin_api", () => {
   it("plugin_api exposes GET routes only", () => {
     const api = pySources().find((f) => f.rel === "plugin_api.py");
     expect(api).toBeTruthy();
-    expect(api!.text.match(/@router\.get\(/g)?.length ?? 0).toBe(8);
+    expect(api!.text.match(/@router\.get\(/g)?.length ?? 0).toBe(9);
     for (const verb of ["post", "put", "delete", "patch", "websocket"]) {
       expect(
         api!.text.includes(`@router.${verb}`),
@@ -153,7 +153,7 @@ describe("backend boundary - preston_client + plugin_api", () => {
     }
   });
 
-  it("the op allowlist is exactly the seven supported reads", () => {
+  it("the op allowlist is exactly the supported reads", () => {
     const client = pySources().find((f) => f.rel === "preston_client.py");
     expect(client).toBeTruthy();
     const paths = [
@@ -167,6 +167,7 @@ describe("backend boundary - preston_client + plugin_api", () => {
         "/api/control/evidence",
         "/api/control/goals/{goal_id}",
         "/api/control/jobs/{job_id}",
+        "/api/control/owner-view",
         "/api/control/status",
       ].sort(),
     );

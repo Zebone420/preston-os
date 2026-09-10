@@ -75,6 +75,7 @@ function makeFakeDb(controls?: Record<string, unknown>) {
         select() {
           const chain = (f: Array<(r: Record<string, unknown>) => boolean>) => ({
             eq(c: string, v: string) { return chain([...f, (r) => String(r[c]) === v]); },
+            gt(c: string, v: string) { return chain([...f, (r) => String(r[c]) > v]); },
             order() { return { limit(n: number) { return Promise.resolve({ data: rowsOf(table).filter((r) => f.every((g) => g(r))).slice(0, n), error: null }); } }; },
             limit(n: number) { return Promise.resolve({ data: rowsOf(table).filter((r) => f.every((g) => g(r))).slice(0, n), error: null }); },
           });
@@ -324,6 +325,26 @@ describe('B. structured result contract', () => {
     expect(parts.excerpt).toBe('plain answer');
   });
 
+  it('M7 extractResultParts: captures the CLI-reported total_cost_usd, never estimated', () => {
+    const parts = extractResultParts(JSON.stringify({ result: 'done', total_cost_usd: 0.0431 }));
+    expect(parts.cost_usd).toBe(0.0431);
+  });
+
+  it('M7 extractResultParts: cost_usd is null when the field is absent (never fabricated)', () => {
+    const parts = extractResultParts(JSON.stringify({ result: 'done' }));
+    expect(parts.cost_usd).toBeNull();
+  });
+
+  it('M7 extractResultParts: cost_usd is null when stdout is not JSON-shaped (e.g. Codex NDJSON)', () => {
+    const parts = extractResultParts('{"type":"turn"}\n{"type":"agent_message","text":"done"}');
+    expect(parts.cost_usd).toBeNull();
+  });
+
+  it('M7 extractResultParts: a non-numeric total_cost_usd is ignored, never coerced', () => {
+    const parts = extractResultParts(JSON.stringify({ result: 'done', total_cost_usd: 'free' }));
+    expect(parts.cost_usd).toBeNull();
+  });
+
   it('the prompt clause names the contract', () => {
     const c = structuredResultPromptClause();
     expect(c).toContain(BEGIN_MARKER);
@@ -547,13 +568,39 @@ describe('H. attention notifications (dedup, bounded, inert-unless-configured)',
     db.rowsOf('orchestration_approvals').push({
       approval_id: 'apr-00000000000000000001', id: 'apr-00000000000000000001',
       status: 'pending', action: 'apply schema migration plan', risk_class: 'YELLOW',
-      expires_at: '2026-08-27T12:00:00.000Z', created_at: NOW,
+      expires_at: '2026-08-27T13:00:00.000Z', created_at: NOW,
     });
     const f = sendRecorder();
     const r = await notifyAttentionOnce(db.client, TG_ENV, NOW, f.impl);
     expect(r.sent).toBe(1);
     expect(f.sends[0]).toContain('apr-00000000000000000001');
     expect(f.sends[0]).toContain('approval required');
+  });
+
+  it('notifies only decision-open approvals under the tick clock', async () => {
+    const db = makeFakeDb();
+    const rows = [
+      ...Array.from({ length: 12 }, (_, i) =>
+        [`apr-expired-${i}`, '2026-08-26T11:59:59.999Z']),
+      ['apr-boundary', NOW],
+      ['apr-malformed', 'not-a-date'],
+      // Inserted last: without expiry-before-limit filtering, the twelve
+      // expired rows fill the ten-row window and hide this open approval.
+      ['apr-open', '2026-08-26T12:00:00.001Z'],
+    ];
+    for (const [id, expires_at] of rows) {
+      db.rowsOf('orchestration_approvals').push({
+        approval_id: id, status: 'pending', action: 'review bounded change',
+        risk_class: 'YELLOW', expires_at, created_at: NOW,
+      });
+    }
+    const f = sendRecorder();
+    const r = await notifyAttentionOnce(db.client, TG_ENV, NOW, f.impl);
+    expect(r.candidates).toBe(1);
+    expect(r.sent).toBe(1);
+    expect(f.sends).toHaveLength(1);
+    expect(f.sends[0]).toContain('apr-open');
+    expect(f.sends[0]).not.toMatch(/apr-expired|apr-boundary|apr-malformed/);
   });
 });
 

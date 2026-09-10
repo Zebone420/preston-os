@@ -245,18 +245,11 @@ describe('D2 local - atomic persistence, no partial rows', () => {
 
   });
 
-  // D2-L1 KNOWN LATENT DEFECT - recorded, NOT desired behavior. Dependency
-  // edges are NOT idempotent on re-persist: job_dependencies has a
-  // random-uuid PK and no unique(goal_id, job_id, depends_on_job_id), and
-  // persistDecomposedGoal re-inserts edges, so a same-state re-persist
-  // duplicates them. Unreachable from the form (fresh goal ids per
-  // submission). This test asserts the DESIRED behavior (edges stay 2)
-  // under it.fails: it "passes" only while the defect exists. When a
-  // later owner-gated migration adds the natural-key constraint and an
-  // idempotent insert, this marker will error ("expected to fail but
-  // passed") and MUST then be promoted to a plain it() - the defect can
-  // never be silently entrenched or its fix concealed.
-  it.fails('D2-L1: dependency re-persist SHOULD be idempotent (known defect)', async () => {
+  // D2-L1 (formerly a known latent defect under it.fails): job_dependencies
+  // has a random-uuid PK and no natural key, so persistDecomposedGoal now
+  // skips edges already present before inserting. A DB-level natural-key
+  // constraint remains a separate owner-gated migration.
+  it('D2-L1: dependency re-persist is idempotent', async () => {
     const db = makeFakeDb();
     const d = decomposeGoal(drillGoal(), drillSpecs(), (l) => `job-d2-${l}`, NOW);
     if (!d.ok) throw new Error('decompose failed');

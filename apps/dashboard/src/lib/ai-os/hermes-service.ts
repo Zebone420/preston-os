@@ -94,7 +94,13 @@ export async function hermesObserveOrchestration(
       controls.owner_stop || controls.paused || controls.hermes_mode === 'paused') {
     return out; // same halt semantics as the observe loop
   }
-  const ready = await loadBridgeReadiness(client);
+  // Observe under the tick clock (defect B): an approval that expired
+  // undecided is not "waiting for the owner". An unparseable tick clock
+  // falls back to the wall clock rather than counting nothing.
+  const tickMs = Date.parse(nowIso);
+  const ready = await loadBridgeReadiness(
+    client, Number.isFinite(tickMs) ? tickMs : Date.now(),
+  );
   out.status = ready.status;
   out.open_approvals = ready.open_approvals;
   out.failed_jobs = ready.failed_jobs;

@@ -154,17 +154,32 @@ describe('nothing weakened by the remap', () => {
   });
 });
 
-describe('setup/branch wording - CURRENT behavior pinned (separate work unit)', () => {
-  // The same live wizard goal also carries setup/branch phrasing. Today that
-  // wording resolves to NO kind and the request is rejected fail-closed at
-  // submission (visible to ChatGPT immediately; rephrasing with an edit verb
-  // like "implement" composes fine). Mapping bare setup/configure/branch
-  // words to an executable kind is deliberately NOT part of this owner-
-  // approved remap: those words have plausible non-repository readings, so
-  // widening them is a separate reviewed work unit. These pins document the
-  // gap and will fail loudly if the behavior drifts silently.
-  it('"Set up the wizard branch." is rejected task_kind_unresolved (unchanged)', () => {
-    expect(errsOf(composeRequest('Set up the wizard branch.')).join(','))
+describe('setup/branch wording - reviewed lexicon widening (P0 defect E, 2026-09-08)', () => {
+  // The same live wizard goal also carries setup/branch phrasing. Until the
+  // 2026-09-08 widening that wording resolved to NO kind and was rejected
+  // at submission. The widening work unit appended edit verbs (set up /
+  // configure / update / ...) and analysis verbs to the lexicon AFTER the
+  // existing entries, so every text that resolved before keeps its kind and
+  // only formerly-unknown wording resolves. Policy classification is still
+  // the policy engine's alone; prohibited scans still run first.
+  it('"Set up the wizard branch." composes as code (widened lexicon)', () => {
+    const p = okOf(composeRequest('Set up the wizard branch.'));
+    expect(p.goals[0].tasks[0].kind).toBe('code');
+  });
+
+  it('formerly-unknown owner wording resolves deterministically', () => {
+    const kindOf = (s: string) => okOf(composeRequest(s)).goals[0].tasks[0].kind;
+    expect(kindOf('Update the status page copy.')).toBe('code');
+    expect(kindOf('Configure the eslint rules for the dashboard.')).toBe('code');
+    expect(kindOf('Create a file apps/dashboard/src/lib/x.ts with the drill helper.')).toBe('code');
+    expect(kindOf('Analyze the dispatcher selection window.')).toBe('audit');
+    expect(kindOf('List the stale worktrees.')).toBe('audit');
+    expect(kindOf('Describe the lease lifecycle.')).toBe('documentation');
+  });
+
+  it('a compound "<system>-write" stays unresolved (external write is not an edit)', () => {
+    expect(errsOf(composeRequest(
+      'Create one task to airtable-write the drill results into the base.')).join(','))
       .toContain('ambiguous_request:task_kind_unresolved');
   });
 

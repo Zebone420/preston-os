@@ -14,6 +14,7 @@ import type { GoalJob, GoalState, MasterGoal } from './model';
 import {
   canTransitionGoal,
   canTransitionJob,
+  isTerminalGoal,
 } from './transitions';
 import type { ApprovalRequest } from './approvals';
 import { canonicalActionHash, jobApprovalEnvelope } from './crypto-binding';
@@ -116,8 +117,15 @@ export async function persistDecomposedGoal(
     const j = await insertGoalJob(client, job);
     if (!j.ok) errors.push(j.error ?? `job:${job.id}`);
   }
+  // job_dependencies has a random PK and no natural key (D2-L1), so a
+  // re-persist must skip edges that already exist; an unreadable edge set
+  // fails closed rather than risk duplicating the graph.
+  const existing = await listDependenciesForGoal(client, state.goal.id);
+  if (!existing.ok) return { ok: false, errors: [...errors, existing.error ?? 'deps_unreadable'] };
+  const present = new Set(existing.rows.map((r) => `${r.job_id}->${r.depends_on_job_id}`));
   for (const job of state.jobs) {
     for (const dep of job.depends_on) {
+      if (present.has(`${job.id}->${dep}`)) continue;
       const d = await insertRow(client, ORCH_TABLES.deps, {
         goal_id: state.goal.id,
         job_id: job.id,
@@ -193,6 +201,78 @@ export function transitionJobOwned(
     client, ORCH_TABLES.jobs, id, from, { ...patch, status: to }, canTransitionJob, nowIso,
     [{ col: 'run_id', val: runId }],
   );
+}
+
+// The only job statuses that can be stranded: the complement of isTerminalJob.
+const STRANDABLE_JOB_STATUSES = [
+  'pending', 'ready', 'assigned', 'in_progress',
+  'awaiting_review', 'awaiting_approval', 'failed',
+] as const;
+
+// Recover job rows left non-terminal under an ALREADY-terminal goal (the
+// terminal-parent/nonterminal-child gap): the dispatcher only ever selects
+// goals in a driveable status, so once a goal reaches completed/failed/
+// cancelled/dead_lettered, driveGoal/driverStep never runs for it again -
+// including its OWN in_progress lease-expiry recovery. Discovery is
+// JOBS-FIRST: one indexed read per strandable job status, then each row's
+// parent goal read once. Terminal-goal history grows without bound, so any
+// oldest-first window over terminal goals goes blind past its first page
+// (a stranded child under the 26th-oldest completed goal was provably never
+// reached); the live non-terminal job set is small and self-draining. A
+// status page that fills its limit is reported as complete:false rather than
+// silently treated as exhaustive. This NEVER re-runs a job - the goal is
+// terminal, so every recovered row moves to 'cancelled' (never back to
+// 'ready'). An in_progress job with a live or unprovable lease, or a job
+// whose parent cannot be read or is not terminal, is left untouched
+// (fail-closed). Idempotent (CAS-guarded) and restart-safe: no process
+// state, only durable rows.
+export async function recoverStrandedChildJobs(
+  client: RuntimeClient,
+  nowIso: string,
+  jobLimit = 500,
+): Promise<{ recovered: number; scanned: number; complete: boolean; error?: string }> {
+  const nowMs = Date.parse(nowIso);
+  let recovered = 0;
+  let scanned = 0;
+  let complete = true;
+  const parentStatus = new Map<string, string | null>();
+  for (const status of STRANDABLE_JOB_STATUSES) {
+    const jobs = await listJobsByStatus(client, status, jobLimit);
+    if (!jobs.ok) return { recovered, scanned, complete: false, error: jobs.error };
+    if (jobs.rows.length >= jobLimit) complete = false;
+    for (const job of jobs.rows) {
+      const jobId = String(job.id ?? '');
+      const goalId = String(job.goal_id ?? '');
+      if (!jobId || !goalId) continue;
+      if (!parentStatus.has(goalId)) {
+        const g = await readGoalById(client, goalId);
+        if (!g.ok) return { recovered, scanned, complete: false, error: g.error };
+        parentStatus.set(goalId, g.rows.length > 0 ? String(g.rows[0].status ?? '') : null);
+      }
+      const parent = parentStatus.get(goalId);
+      if (!parent || !isTerminalGoal(parent)) continue;
+      scanned++;
+      if (status === 'in_progress') {
+        const leaseMs = Date.parse(String(job.run_lease_expires_at ?? ''));
+        const expired = Number.isFinite(leaseMs) && leaseMs <= nowMs;
+        if (!expired) continue; // live lease or unprovable expiry: never touch
+        const runId = String(job.run_id ?? '');
+        const t = await transitionJobOwned(
+          client, jobId, 'in_progress', 'cancelled', runId,
+          { run_id: null, run_lease_expires_at: null, failure_reason: 'stranded_under_terminal_goal' },
+          nowIso,
+        );
+        if (t.ok) recovered++;
+        continue;
+      }
+      const t = await transitionJob(
+        client, jobId, status, 'cancelled',
+        { failure_reason: 'stranded_under_terminal_goal' }, nowIso,
+      );
+      if (t.ok) recovered++;
+    }
+  }
+  return { recovered, scanned, complete };
 }
 
 // Park a gated job at awaiting_approval, but ONLY while it is STILL gated
@@ -479,6 +559,9 @@ async function runList(q: PromiseLike<QueryResult>): Promise<ListOutcome> {
 
 export function listGoals(client: RuntimeClient, limit = 50): Promise<ListOutcome> {
   return runList(client.from(ORCH_TABLES.goals).select('*').order('created_at', { ascending: false }).limit(limit));
+}
+export function listJobsByStatus(client: RuntimeClient, status: string, limit = 500): Promise<ListOutcome> {
+  return runList(client.from(ORCH_TABLES.jobs).select('*').eq('status', status).order('created_at', { ascending: true }).limit(limit));
 }
 export function listJobsForGoal(client: RuntimeClient, goalId: string, limit = 200): Promise<ListOutcome> {
   return runList(client.from(ORCH_TABLES.jobs).select('*').eq('goal_id', goalId).order('created_at', { ascending: true }).limit(limit));

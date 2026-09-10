@@ -163,8 +163,9 @@ def _refresh(cfg, refresh_token, opener):
     try:
         with open_fn(request, timeout=TIMEOUT_SECONDS) as response:
             raw = response.read(MAX_RESPONSE_BYTES)
-    except urllib.error.HTTPError:
+    except urllib.error.HTTPError as exc:
         # Revoked / rotated-away / bad client auth. Tag only.
+        exc.close()
         raise TokenError("token_refresh_refused")
     except Exception:
         raise TokenError("token_endpoint_unreachable")
