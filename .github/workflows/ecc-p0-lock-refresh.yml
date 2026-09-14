@@ -5,13 +5,16 @@ on:
     branches: [master]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   refresh-locks:
+    if: github.head_ref == 'integration/ecc-p0-capability-pack'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: integration/ecc-p0-capability-pack
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
@@ -21,12 +24,17 @@ jobs:
       - name: Refresh guards lockfile without scripts
         working-directory: packages/guards
         run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
-      - name: Upload refreshed lockfiles
-        uses: actions/upload-artifact@v4
-        with:
-          name: ecc-p0-refreshed-lockfiles
-          path: |
-            apps/dashboard/package-lock.json
-            packages/guards/package-lock.json
-          if-no-files-found: error
-          retention-days: 1
+      - name: Commit only generated lockfiles
+        shell: bash
+        run: |
+          if git diff --quiet -- apps/dashboard/package-lock.json packages/guards/package-lock.json; then
+            echo "Lockfiles already current"
+            exit 0
+          fi
+          git config user.name "Preston ECC P0 Lock Bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- apps/dashboard/package-lock.json packages/guards/package-lock.json
+          git diff --cached --name-only
+          test "$(git diff --cached --name-only | wc -l | tr -d ' ')" = "2"
+          git commit -m "fix(deps): refresh lockfiles for security patches"
+          git push origin HEAD:integration/ecc-p0-capability-pack
