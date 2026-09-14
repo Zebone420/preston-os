@@ -1,0 +1,49 @@
+{
+  "schema_version": "preston.ecc-p0.v1",
+  "upstream": {
+    "repo": "affaan-m/ECC",
+    "commit": "8321021c54d670126ce3b2969d5deb880b4b0c2a",
+    "release_context": "2.2.1"
+  },
+  "authority": {
+    "control_plane": "preston-control",
+    "ssot": "supabase",
+    "safety_authority": "preston",
+    "owner_approval_required_for_promotion": true
+  },
+  "enabled_advisory_capabilities": [
+    "agent-architecture-audit",
+    "security-scan-methodology",
+    "verification-loop",
+    "parallel-execution-optimizer-methodology",
+    "council-multi-model-critique",
+    "cost-aware-llm-recommendations"
+  ],
+  "disabled_runtime_capabilities": [
+    "ecc-hooks",
+    "gateguard-enforcement",
+    "ecc-auto-fix",
+    "ecc-repair",
+    "ecc-auto-update",
+    "ecc-control-plane",
+    "ecc-control-pane",
+    "ecc-worktree-executor",
+    "ecc-tmux-executor",
+    "ecc-memory-writes",
+    "ecc-memory-mcp",
+    "ecc-mcp-config-mutation"
+  ],
+  "hard_boundaries": {
+    "may_expand_allowed_paths": false,
+    "may_modify_githooks": false,
+    "may_modify_safety_scanners": false,
+    "may_modify_credentials": false,
+    "may_modify_env": false,
+    "may_apply_db_migrations": false,
+    "may_change_rls_or_policy": false,
+    "may_deploy": false,
+    "may_push_or_merge": false,
+    "may_contact_external_services": false,
+    "may_promote_memory_to_policy": false
+  }
+}
