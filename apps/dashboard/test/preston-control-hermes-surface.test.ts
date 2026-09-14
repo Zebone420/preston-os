@@ -339,6 +339,7 @@ describe('hermes surface - route source pins', () => {
     'events/route.ts',
     'evidence/route.ts',
     'artifacts/[artifact_id]/route.ts',
+    'owner-view/route.ts',
   ];
   const WRITE_ROUTES = [
     'goals/route.ts',

@@ -30,6 +30,9 @@ const MOBILE_GATE_MARKERS: RegExp[] = [
   /\bremote[_-]?runner|remote_runner_enabled\b/i,
   /\bhermes[_-]?mode\b/i,
   /\bpush\b/i,
+  /\bmerge\b/i,
+  /\bforce[_-]?push\b/i,
+  /\bbranch[_-]?protection\b/i,
 ];
 
 export type PolicyTier = 'GREEN' | 'YELLOW' | 'RED';

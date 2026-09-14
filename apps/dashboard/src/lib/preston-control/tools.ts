@@ -21,7 +21,7 @@
 // (never spread), and free-text fields are screened with hasSecretText so a
 // secret can never leave through a tool result even if one were stored.
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { RUNTIME_ID_RE, hasSecretText } from '@/lib/ai-os/commands';
 import { readSystemControlsChecked, type RuntimeClient } from '@/lib/ai-os/store';
 import { composeRequest, MAX_REQUEST_CHARS } from '@/lib/ai-os/orchestration/composer';
@@ -50,11 +50,83 @@ import {
   normalizeSupervisorEvents,
   pageAfterCursor,
 } from './supervisor-events';
+import {
+  loadOwnerOverview,
+  loadOwnerProject,
+} from '@/lib/business/owner-views/service';
+import {
+  githubChangeDigest,
+  hasRequiredEvidence,
+  isBranchAllowed,
+  proposalTransition,
+  requireAttribution,
+  evaluateRepoAllowlist,
+  validateArchitectRequest,
+  validateGithubChangeEnvelope,
+  type ArchitectProposal,
+} from '@/lib/ai-os/architect';
+import {
+  validateApprovalDecision,
+  type ApprovalDecisionInput,
+  type ApprovalRequest,
+} from '@/lib/ai-os/orchestration/approvals';
 
 export interface ToolContext {
   client: ComposerClient;
   ownerEmail: string;
   now: string; // ISO
+  architectSession?: ArchitectToolSession;
+  architectRepoAllowlist?: string;
+}
+
+export interface ArchitectSessionDecision {
+  approval: ApprovalDecisionInput;
+  proposal: ArchitectProposal;
+}
+
+export interface ArchitectToolSession {
+  getApproval(proposalId: string, approvalId: string): ApprovalRequest | null;
+  getProposal(proposalId: string): ArchitectProposal | null;
+  listProposals(limit: number): ArchitectProposal[];
+  recordDecision(proposalId: string, decision: ArchitectSessionDecision): boolean;
+  seenNonces: Set<string>;
+}
+
+// V1 deliberately has no second durable store. The caller may create this
+// bounded object for the authenticated tool-call session; Preston's existing
+// approval primitive remains the authority for every recorded decision.
+export function createArchitectToolSession(args: {
+  approvals: Array<{ proposal_id: string; request: ApprovalRequest }>;
+  proposals: ArchitectProposal[];
+}): ArchitectToolSession {
+  const proposals = new Map(args.proposals.map((p) =>
+    [p.request.correlation_id, structuredClone(p)]));
+  const approvals = new Map(args.approvals.map((item) =>
+    [`${item.proposal_id}:${item.request.approval_id}`, structuredClone(item.request)]));
+  const seenNonces = new Set<string>();
+  return {
+    seenNonces,
+    getApproval(proposalId, approvalId) {
+      const value = approvals.get(`${proposalId}:${approvalId}`);
+      return value ? structuredClone(value) : null;
+    },
+    getProposal(proposalId) {
+      const value = proposals.get(proposalId);
+      return value ? structuredClone(value) : null;
+    },
+    listProposals(limit) {
+      return [...proposals.values()].slice(0, limit).map((p) => structuredClone(p));
+    },
+    recordDecision(proposalId, decision) {
+      const key = `${proposalId}:${decision.approval.approval_id}`;
+      const request = approvals.get(key);
+      if (!request || request.status !== 'pending') return false;
+      request.status = decision.approval.outcome === 'approve' ? 'approved' : 'rejected';
+      proposals.set(proposalId, structuredClone(decision.proposal));
+      seenNonces.add(decision.approval.nonce);
+      return true;
+    },
+  };
 }
 
 type Row = Record<string, unknown>;
@@ -218,12 +290,21 @@ export async function prestonStatus(ctx: ToolContext) {
   const hermes = await loadLatestHermesStatus(client);
   const c = ctl.controls;
   const halted = c.owner_stop || c.paused;
+  const readable = (state: string) => state === 'ok' || state === 'empty';
+  const readModelReadable = model.applied &&
+    readable(model.goals.state) && readable(model.approvals.state) &&
+    readable(model.jobs.state) && readable(model.failures.state) &&
+    readable(model.dead_letters.state);
   const posture = !ctl.readOk ? 'controls_unreadable'
     : !model.applied ? 'migration_absent'
+    : !readModelReadable ? 'read_model_unreadable'
     : halted ? 'halted'
     : 'operating';
   const attention: string[] = [];
   if (!ctl.readOk) attention.push('control plane unreadable (fail-closed)');
+  if (ctl.readOk && model.applied && !readModelReadable) {
+    attention.push('orchestration read model unreadable (fail-closed)');
+  }
   if (c.owner_stop) attention.push('owner_stop is set');
   if (c.paused) attention.push('runtime is paused');
   if (model.summary.open_approvals > 0) attention.push(`${model.summary.open_approvals} approval(s) waiting for the owner`);
@@ -271,6 +352,51 @@ export async function prestonStatus(ctx: ToolContext) {
     },
     needs_attention: attention,
   };
+}
+
+// ---------------------------------------------------------------------------
+// 1b. preston_owner_view (READ ONLY) - Phase 2 owner operating interface.
+// One bounded, RLS-bound gateway for Today / Project / Approvals / AI
+// Workforce / Incidents / Brief.  No action or provider credential is
+// reachable through this function.
+export async function prestonOwnerView(
+  ctx: ToolContext,
+  input: {
+    view: 'today' | 'project' | 'approvals' | 'workforce' | 'incidents' | 'brief';
+    project_ref?: string;
+  },
+) {
+  const client = ctx.client as unknown as RuntimeClient;
+  if (input.view === 'project') {
+    const ref = String(input.project_ref ?? '').trim();
+    if (!ref) return { ok: false as const, error: 'project_ref_required' };
+    return {
+      ok: true as const,
+      view: 'project' as const,
+      data: await loadOwnerProject(client, ctx.now, ref, 'owner'),
+    };
+  }
+  if (input.project_ref) {
+    return { ok: false as const, error: 'project_ref_only_valid_for_project' };
+  }
+  const overview = await loadOwnerOverview(client, ctx.now);
+  const data = input.view === 'today' ? overview.today
+    : input.view === 'approvals' ? overview.approvals
+      : input.view === 'workforce' ? overview.workforce
+        : input.view === 'incidents' ? overview.incidents
+          : overview.brief;
+  // Defense in depth: the builders do not expose bodies or credentials, but
+  // stored subjects/titles may still contain secret-shaped spans.
+  const screen = (value: unknown): unknown => {
+    if (typeof value === 'string') return safeText(value, 2000);
+    if (Array.isArray(value)) return value.slice(0, 500).map(screen);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value as Row)
+        .slice(0, 500).map(([k, v]) => [k, screen(v)]));
+    }
+    return value;
+  };
+  return { ok: true as const, view: input.view, data: screen(data) };
 }
 
 // ---------------------------------------------------------------------------
@@ -591,6 +717,8 @@ export async function readJobResultReports(ctx: ToolContext, jobId: string) {
         structured_error: p['structured_error'] == null ? null : safeText(p['structured_error'], 120),
         provider_model: p['provider_model'] == null ? null : safeText(p['provider_model'], 80),
         duration_ms: Number.isFinite(Number(p['duration_ms'])) ? Number(p['duration_ms']) : null,
+        // M7: provider-reported USD cost for this run, when the CLI exposed one.
+        cost_usd: typeof p['cost_usd'] === 'number' && Number.isFinite(p['cost_usd']) ? p['cost_usd'] : null,
         recorded_at: String(row['created_at'] ?? ''),
       };
     });
@@ -627,6 +755,19 @@ export async function prestonGetJob(ctx: ToolContext, jobId: string) {
   };
   const approval = job.approval_id ? await restateApproval(ctx, job.approval_id) : null;
   const results = await readJobResultReports(ctx, id);
+  // M7: lost result-event detection. A terminal job that actually ran
+  // (attempts > 0) is expected to have at least one JobResultRecorded
+  // report (driver.ts appends one per attempt after the run-owned CAS
+  // wins) - but that append is explicitly best-effort ("a failed append
+  // never fails the job"). Zero reports on a job like that is a genuine
+  // evidence gap, not "never ran": surface it rather than let it read as
+  // an ordinary empty list. Rows that went terminal before result recording
+  // existed (pre-Bridge-B2, 5e5ee03) also read as a gap: honest - no
+  // readable report was ever written for them - but not a lost append.
+  const resultEvidenceGap = results.read_ok
+    && TERMINAL_JOB_STATUSES.has(job.status)
+    && job.attempts > 0
+    && results.reports.length === 0;
   return {
     found: true as const,
     job,
@@ -634,6 +775,7 @@ export async function prestonGetJob(ctx: ToolContext, jobId: string) {
     approval,
     result_reports: results.reports,
     result_reports_read_ok: results.read_ok,
+    result_evidence_gap: resultEvidenceGap,
   };
 }
 
@@ -1098,6 +1240,25 @@ export async function prestonPollEvents(
   const ctl = await readSystemControlsChecked(client);
   const model = await loadOrchestrationReadModel(client, 20, nowMs);
 
+  // Fail closed on the AUTHORITATIVE buckets (same rule as preston_status's
+  // posture): an unreadable goal/job read model is never served as an empty
+  // page, because a supervisor that advanced its cursor past one would
+  // silently lose every transition in it. Controls and rejection records
+  // stay best-effort and are reported in the window as before.
+  const readable = (state: string) => state === 'ok' || state === 'empty';
+  if (!model.applied || !readable(model.goals.state) || !readable(model.jobs.state)) {
+    return {
+      ok: false as const,
+      error: (!model.applied ? 'migration_absent' : 'read_model_unreadable') as
+        'migration_absent' | 'read_model_unreadable',
+      window: {
+        goals_state: model.goals.state,
+        jobs_state: model.jobs.state,
+        migration_applied: model.applied,
+      },
+    };
+  }
+
   // Best-effort rejection records: absence of read authorization is
   // REPORTED (rejections_readable:false), never silently treated as
   // "no rejections happened".
@@ -1145,5 +1306,165 @@ export async function prestonPollEvents(
       migration_applied: model.applied,
     },
     unmapped_states: normalized.unmapped_states,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 12-14. Architect Gate AG-10. Session-scoped visibility and decision
+// recording only: no function below calls GitHub or creates a new authority.
+
+function architectEvidenceBindings(proposal: ArchitectProposal): string[] {
+  return proposal.evidence_refs.map((reference) => createHash('sha256')
+    .update(reference, 'utf8').digest('hex'));
+}
+
+function validateSessionProposal(
+  proposal: ArchitectProposal,
+  allowlist: string | undefined,
+): string | null {
+  const intake = validateArchitectRequest(proposal.request);
+  if (!intake.ok) return `architect_request_invalid:${intake.errors.join(',')}`;
+  const change = validateGithubChangeEnvelope(proposal.change);
+  if (!change.ok) return `architect_change_invalid:${change.errors.join(',')}`;
+  const actor = requireAttribution(proposal.actor);
+  if (!actor.ok) return `architect_attribution_invalid:${actor.errors.join(',')}`;
+  const repo = evaluateRepoAllowlist(proposal.change.repo, allowlist);
+  if (!repo.allowed) return `architect_repo_invalid:${repo.reason}`;
+  if (!isBranchAllowed(proposal.change.head_branch, proposal.request.correlation_id)) {
+    return 'architect_head_branch_invalid';
+  }
+  return null;
+}
+
+function projectArchitectProposal(proposal: ArchitectProposal, detail: boolean) {
+  const base = {
+    proposal_id: proposal.request.correlation_id,
+    objective: safeText(proposal.request.objective, 1000),
+    repo: proposal.change.repo,
+    base_branch: proposal.change.base_branch,
+    head_branch: proposal.change.head_branch,
+    base_sha: proposal.change.base_sha,
+    head_sha: proposal.change.head_sha,
+    diff_hash: proposal.change.diff_hash,
+    approval_digest: githubChangeDigest(proposal.change),
+    risk_class: proposal.risk_class,
+    status: proposal.status,
+  };
+  if (!detail) return base;
+  return {
+    ...base,
+    requested_by: proposal.actor.requested_by,
+    proposer: proposal.actor.proposer,
+    approver: proposal.actor.approver,
+    executor: proposal.actor.executor,
+    correlation_id: proposal.actor.correlation_id,
+    run_id: proposal.actor.run_id,
+    evidence_bindings: architectEvidenceBindings(proposal),
+    policy_requires_approval: proposal.policy_decision?.requires_approval ?? null,
+    pr: proposal.pr ? { ...proposal.pr } : null,
+  };
+}
+
+export async function prestonListArchitectProposals(
+  ctx: ToolContext,
+  input: { limit?: number },
+) {
+  if (!ctx.architectSession) {
+    return { ok: false as const, error: 'architect_session_unavailable', proposals: [] };
+  }
+  const limit = Number.isInteger(input.limit) ? Math.max(1, Math.min(50, input.limit!)) : 20;
+  const proposals = ctx.architectSession.listProposals(limit);
+  const projected = [];
+  for (const proposal of proposals) {
+    const error = validateSessionProposal(
+      proposal, ctx.architectRepoAllowlist ?? process.env.ARCHITECT_REPO_ALLOWLIST,
+    );
+    if (error) return { ok: false as const, error, proposals: [] };
+    projected.push(projectArchitectProposal(proposal, false));
+  }
+  return { ok: true as const, proposals: projected };
+}
+
+export async function prestonGetArchitectProposal(
+  ctx: ToolContext,
+  input: { proposal_id: string },
+) {
+  if (!ctx.architectSession) {
+    return { ok: false as const, error: 'architect_session_unavailable' };
+  }
+  const proposal = ctx.architectSession.getProposal(input.proposal_id);
+  if (!proposal) return { ok: false as const, error: 'architect_proposal_not_found' };
+  const error = validateSessionProposal(
+    proposal, ctx.architectRepoAllowlist ?? process.env.ARCHITECT_REPO_ALLOWLIST,
+  );
+  if (error) return { ok: false as const, error };
+  return { ok: true as const, proposal: projectArchitectProposal(proposal, true) };
+}
+
+export async function prestonDecideArchitectProposal(
+  ctx: ToolContext,
+  input: {
+    proposal_id: string;
+    approval_id: string;
+    outcome: 'approved' | 'rejected';
+    presented_hash: string;
+    owner_confirmation: string;
+  },
+) {
+  const session = ctx.architectSession;
+  if (!session) return { ok: false as const, error: 'architect_session_unavailable' };
+  const proposal = session.getProposal(input.proposal_id);
+  if (!proposal) return { ok: false as const, error: 'architect_proposal_not_found' };
+  const proposalError = validateSessionProposal(
+    proposal, ctx.architectRepoAllowlist ?? process.env.ARCHITECT_REPO_ALLOWLIST,
+  );
+  if (proposalError) return { ok: false as const, error: proposalError };
+  if (proposal.policy_decision?.requires_approval !== true) {
+    return { ok: false as const, error: 'approval_policy_missing' };
+  }
+  const evidence = hasRequiredEvidence(proposal);
+  if (!evidence.complete) {
+    return { ok: false as const,
+      error: `evidence_incomplete:${evidence.missing.join(',')}` };
+  }
+  const request = session.getApproval(input.proposal_id, input.approval_id);
+  if (!request) return { ok: false as const, error: 'approval_not_found' };
+
+  const confirmation = evaluateOwnerConfirmation(
+    input.owner_confirmation, input.approval_id, input.outcome,
+  );
+  if (!confirmation.ok) return { ok: false as const, error: confirmation.error };
+
+  const decision: ApprovalDecisionInput = {
+    approval_id: input.approval_id,
+    outcome: input.outcome === 'approved' ? 'approve' : 'reject',
+    decided_by: ctx.ownerEmail,
+    decided_at: ctx.now,
+    nonce: `pc-${randomUUID()}`,
+    presented_hash: input.presented_hash,
+  };
+  const checked = validateApprovalDecision(
+    request, decision, session.seenNonces, proposal.actor.proposer,
+  );
+  if (!checked.ok) return { ok: false as const, error: checked.reason };
+
+  const transition = proposalTransition(proposal, input.outcome === 'approved'
+    ? { type: 'approve', approver: ctx.ownerEmail,
+      evidence_ref: `architect_decision:${proposal.change.head_sha}:${input.approval_id}` }
+    : { type: 'reject',
+      evidence_ref: `architect_decision:${proposal.change.head_sha}:${input.approval_id}` });
+  if (!transition.ok) return { ok: false as const, error: transition.reason };
+  if (!session.recordDecision(input.proposal_id, {
+    approval: decision, proposal: transition.proposal,
+  })) return { ok: false as const, error: 'architect_session_write_failed' };
+  return {
+    ok: true as const,
+    proposal_id: input.proposal_id,
+    approval_id: input.approval_id,
+    outcome: input.outcome,
+    status: transition.proposal.status,
+    decided_by: ctx.ownerEmail,
+    decided_at: ctx.now,
+    note: 'Decision recorded in the authenticated Architect session. GitHub was not called.',
   };
 }

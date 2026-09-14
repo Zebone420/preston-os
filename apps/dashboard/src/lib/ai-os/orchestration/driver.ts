@@ -84,12 +84,28 @@ export interface RealExecutionResult {
     // successful work (never silently lost - master goal section 6).
     artifact_refs?: string[];
     artifact_unrecorded?: boolean;
+    // Durable patch preservation (P0 defect C, 2026-09-08, additive): the
+    // whole-run unified diff the executor wrote to the host patch directory
+    // before worktree cleanup (ref + sha256 + bytes + path), or the
+    // explicit unrecorded condition with its static reason.
+    patch_ref?: string;
+    patch_sha256?: string;
+    patch_bytes?: number;
+    patch_path?: string;
+    patch_unrecorded?: boolean;
+    patch_unrecorded_reason?: string;
   };
   // Fast-track Phase E telemetry (optional, additive): the model the routing
   // table requested for this run, why, and the real process duration.
   provider_model?: string | null;
   routing_reason?: string | null;
   duration_ms?: number | null;
+  // M7 operational hardening (additive): the provider CLI's own reported
+  // USD cost for this run, when the CLI's output format exposes one (the
+  // claude CLI's --output-format json total_cost_usd field). Never
+  // estimated or derived - null when the CLI's output does not carry it
+  // (e.g. the Codex CLI's NDJSON event stream is not parsed for cost).
+  cost_usd?: number | null;
 }
 
 export type RealJobExecutor = (input: {
@@ -274,6 +290,12 @@ export interface DriverStepResult {
   // non-terminal jobs was re-stepped to the harness cycle bound, burning
   // one reserved iteration per cycle - observed cycles:11 / iteration 11).
   done?: boolean;
+  // Run actions that made NO progress this step and why (worktree lock
+  // refused, claim CAS lost). Observability only - the reasons are static
+  // codes so a stalled goal is DIAGNOSABLE from the tick log (live
+  // production finding 2026-09-04: a silently skipped run looked identical
+  // to a healthy tick).
+  stalledJobs?: Array<{ job_id: string; reason: string }>;
 }
 
 // Advance one durable step. Halts fail-closed on owner_stop/execution-disabled
@@ -493,6 +515,7 @@ export async function driverStep(
   let persisted = 0;
   let lockRequired = false;
   let resultEventUnrecorded = false; // B2: a result record failed to append
+  const stalledJobs: Array<{ job_id: string; reason: string }> = [];
 
   // Fast-track D1: run actions are collected and executed with BOUNDED
   // parallelism (maxParallel, clamped 1..4); every other action type stays a
@@ -506,9 +529,10 @@ export async function driverStep(
     halt: string | null;
     lockRequired: boolean;
     eventGap: boolean;
+    skipped: string | null; // static reason a run action made no progress
   }
   const runOne = async (job: GoalJob): Promise<RunOutcome> => {
-    const none: RunOutcome = { persisted: 0, halt: null, lockRequired: false, eventGap: false };
+    const none: RunOutcome = { persisted: 0, halt: null, lockRequired: false, eventGap: false, skipped: null };
     {
       const isEdit = EDIT_KINDS.has(job.kind);
       // Mandatory-lock gate (audit #2): an edit-capable job (code/test/
@@ -534,7 +558,8 @@ export async function driverStep(
           allowed_paths: lockCtx!.allowed_paths, now: nowIso,
           tree_dirty: false, branch_exists: false,
         });
-        if (!acq.ok) return none; // held by another / unsafe => skip this cycle
+        // held by another / unsafe => skip this cycle (reason surfaced)
+        if (!acq.ok) return { ...none, skipped: 'lock_refused:' + acq.reason };
         fence = acq.lock.fence;
         acquired = true;
       }
@@ -558,7 +583,7 @@ export async function driverStep(
         const runLeaseIso = new Date(nowMs + runLeaseMs).toISOString();
         const mark = await transitionJob(client, job.id, job.status, 'in_progress',
           { run_id: runId, run_lease_expires_at: runLeaseIso }, nowIso);
-        if (!mark.ok) return none;
+        if (!mark.ok) return { ...none, skipped: 'claim_cas_lost' };
         // The claim just won: the adapter must see the POST-claim row image
         // (status/run_id/lease are what the CAS persisted), not the stale
         // pre-claim snapshot. 11R-04 live decline (2026-08-10):
@@ -693,10 +718,19 @@ export async function driverStep(
               provider_model: real?.provider_model ?? null,
               routing_reason: real?.routing_reason ?? null,
               duration_ms: real?.duration_ms ?? null,
+              // M7: provider-reported USD cost for this run, when available.
+              cost_usd: typeof real?.cost_usd === 'number' ? real.cost_usd : null,
               // Power-station artifact durability (additive): what this run
               // durably persisted, and the explicit unrecorded condition.
               artifact_refs: (real?.report?.artifact_refs ?? []).slice(0, 10),
               artifact_unrecorded: real?.report?.artifact_unrecorded === true,
+              // Durable patch preservation (P0 defect C, additive): the
+              // whole-run patch reference + hash the executor wrote to the
+              // host patch directory before worktree cleanup, and the
+              // explicit unrecorded condition when it could not.
+              patch_ref: typeof real?.report?.patch_ref === 'string' ? real.report.patch_ref : null,
+              patch_sha256: typeof real?.report?.patch_sha256 === 'string' ? real.report.patch_sha256 : null,
+              patch_unrecorded: real?.report?.patch_unrecorded === true,
             },
           });
           const rec = await insertEvent(client, ev);
@@ -750,12 +784,14 @@ export async function driverStep(
   // and releases its own lock, so nothing is orphaned by the halt.
   const width = Math.max(1, Math.min(4, Math.floor(maxParallel) || 1));
   for (let i = 0; i < runQueue.length; i += width) {
-    const outs = await Promise.all(runQueue.slice(i, i + width).map(runOne));
-    for (const o of outs) {
+    const batch = runQueue.slice(i, i + width);
+    const outs = await Promise.all(batch.map(runOne));
+    outs.forEach((o, k) => {
       persisted += o.persisted;
       if (o.lockRequired) lockRequired = true;
       if (o.eventGap) resultEventUnrecorded = true;
-    }
+      if (o.skipped) stalledJobs.push({ job_id: batch[k].id, reason: o.skipped });
+    });
     const halted = outs.find((o) => o.halt !== null);
     if (halted?.halt) {
       return { halted: true, reason: halted.halt, actions: s.actions, persisted, lockRequired };
@@ -779,6 +815,7 @@ export async function driverStep(
   return {
     halted: false, reason, actions: s.actions, persisted, lockRequired, done: s.done,
     ...(unlockRefusals.length ? { unlockRefusals } : {}),
+    ...(stalledJobs.length ? { stalledJobs } : {}),
   };
 }
 
@@ -827,7 +864,11 @@ export async function driveGoal(
   executeReal?: RealJobExecutor,
   maxParallel = 1,
   runLeaseMs = RUN_LEASE_MS, // see driverStep: derived from the worker timeout
-): Promise<{ cycles: number; halted: boolean; reason: string; unlockRefusals?: Array<{ job_id: string; reason: string }> }> {
+): Promise<{
+  cycles: number; halted: boolean; reason: string;
+  unlockRefusals?: Array<{ job_id: string; reason: string }>;
+  stalledJobs?: Array<{ job_id: string; reason: string }>;
+}> {
   let cycles = 0;
   let lastReason = 'noop';
   let lastRefusals: Array<{ job_id: string; reason: string }> | undefined;
@@ -894,6 +935,26 @@ export async function driveGoal(
       return {
         cycles, halted: false, reason: withGap(r.reason),
         ...(lastRefusals?.length ? { unlockRefusals: lastRefusals } : {}),
+      };
+    }
+    // STALL exit (live production finding 2026-09-04): the step reserved an
+    // iteration but persisted NOTHING - every scheduled run was skipped
+    // (worktree lock held elsewhere, claim CAS lost), or the engine had
+    // nothing runnable that is not a legitimate wait (jobs_in_flight under a
+    // live lease, a partially parked graph). Re-stepping the SAME persisted
+    // state cannot make progress within this invocation; it only burned one
+    // goal iteration per cycle up to the harness bound and then reported
+    // halted, which made the dispatcher END THE TICK on this goal - starving
+    // every younger goal on every tick (GREEN approval-free jobs stayed
+    // pending, attempts 0, no lease). Return a NON-halting stall so the
+    // dispatcher moves on; the next tick re-drives this goal from durable
+    // state exactly as before. Checked LAST so every terminal / parked /
+    // done exit above keeps its existing reason.
+    if (r.persisted === 0) {
+      return {
+        cycles, halted: false, reason: withGap(`no_progress:${r.reason}`),
+        ...(lastRefusals?.length ? { unlockRefusals: lastRefusals } : {}),
+        ...(r.stalledJobs?.length ? { stalledJobs: r.stalledJobs } : {}),
       };
     }
   }

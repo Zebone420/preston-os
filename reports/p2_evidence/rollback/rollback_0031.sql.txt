@@ -1,0 +1,35 @@
+-- ============================================================================
+-- ROLLBACK 0031 (Phase 1 Lane D communications + deal intelligence)
+-- OWNER-RUN ONLY. Exact, bounded. Named .sql.txt per RED-boundary
+-- scanner convention. Safe at any time: every row here is re-creatable
+-- by re-running the read-only importer; Gmail itself is never touched.
+-- Verify first (owner-resolved attention decisions would be lost):
+--   select count(*) from public.attention_items where status <> 'open';
+-- ============================================================================
+drop policy if exists attention_items_owner_runtime_upd on public.attention_items;
+drop policy if exists attention_items_owner_runtime_ins on public.attention_items;
+drop policy if exists attention_items_owner_runtime_sel on public.attention_items;
+drop index if exists public.idx_attention_items_project;
+drop index if exists public.idx_attention_items_status;
+drop table if exists public.attention_items;
+
+drop policy if exists communication_events_owner_upd on public.communication_events;
+drop policy if exists communication_events_owner_runtime_ins on public.communication_events;
+drop policy if exists communication_events_owner_runtime_sel on public.communication_events;
+drop index if exists public.idx_communication_events_project;
+drop index if exists public.idx_communication_events_type;
+drop table if exists public.communication_events;
+
+drop policy if exists communication_messages_owner_upd on public.communication_messages;
+drop policy if exists communication_messages_owner_runtime_ins on public.communication_messages;
+drop policy if exists communication_messages_owner_runtime_sel on public.communication_messages;
+drop index if exists public.idx_communication_messages_class;
+drop index if exists public.idx_communication_messages_project;
+drop index if exists public.idx_communication_messages_thread;
+drop table if exists public.communication_messages;
+
+drop policy if exists mailbox_identities_owner_upd on public.mailbox_identities;
+drop policy if exists mailbox_identities_owner_ins on public.mailbox_identities;
+drop policy if exists mailbox_identities_owner_runtime_sel on public.mailbox_identities;
+drop index if exists public.idx_mailbox_identities_mailbox;
+drop table if exists public.mailbox_identities;

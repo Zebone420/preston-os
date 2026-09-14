@@ -1,0 +1,36 @@
+-- ============================================================================
+-- ROLLBACK 0029 (Phase 1 Lane B document registry) - OWNER-RUN ONLY.
+-- Exact, bounded. Named .sql.txt per RED-boundary scanner convention.
+-- Safe ONLY while no document has been registered for a real project.
+-- Verify first:
+--   select count(*) from public.documents;             -- expect 0 (or pilot rows)
+--   select count(*) from public.project_drive_folders; -- expect 0
+--   select count(*) from public.drive_inventory;       -- inventory rows are re-creatable
+-- Registry rows carry Drive file ids and hashes only; Drive itself is
+-- never touched by this rollback.
+-- ============================================================================
+drop policy if exists drive_inventory_owner_runtime_upd on public.drive_inventory;
+drop policy if exists drive_inventory_owner_runtime_ins on public.drive_inventory;
+drop policy if exists drive_inventory_owner_runtime_sel on public.drive_inventory;
+drop index if exists public.idx_drive_inventory_run;
+drop index if exists public.idx_drive_inventory_status;
+drop index if exists public.idx_drive_inventory_sha256;
+drop index if exists public.uq_drive_inventory_drive_file_id;
+drop table if exists public.drive_inventory;
+
+drop policy if exists project_drive_folders_owner_upd on public.project_drive_folders;
+drop policy if exists project_drive_folders_owner_runtime_ins on public.project_drive_folders;
+drop policy if exists project_drive_folders_owner_runtime_sel on public.project_drive_folders;
+drop index if exists public.uq_project_drive_folders_folder_id;
+drop table if exists public.project_drive_folders;
+
+drop policy if exists documents_owner_runtime_upd on public.documents;
+drop policy if exists documents_owner_runtime_ins on public.documents;
+drop policy if exists documents_owner_runtime_sel on public.documents;
+drop index if exists public.idx_documents_client;
+drop index if exists public.idx_documents_sha256;
+drop index if exists public.idx_documents_project;
+drop index if exists public.uq_documents_current;
+drop index if exists public.uq_documents_project_type_version;
+drop index if exists public.uq_documents_drive_file_id;
+drop table if exists public.documents;

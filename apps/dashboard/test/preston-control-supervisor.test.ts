@@ -313,6 +313,54 @@ describe('preston_poll_events end-to-end (fake DB)', () => {
     expect(p.ok).toBe(false);
     if (!p.ok) expect(p.error).toBe('cursor_invalid');
   });
+
+  // M4: a failed read of an AUTHORITATIVE bucket is refused, never served as
+  // an empty page (which an advancing supervisor would take as "nothing
+  // happened"). Any query chain against the failing table resolves to an
+  // error, whatever the read model chains.
+  function failingTableClient(inner: ToolContext['client'], table: string, message: string) {
+    const chain: unknown = new Proxy({}, {
+      get(_t, prop) {
+        if (prop === 'then') {
+          return (resolve: (v: unknown) => void) => resolve({ data: null, error: { message } });
+        }
+        return () => chain;
+      },
+    });
+    return {
+      from(t: string) {
+        return t === table ? chain : (inner as { from: (x: string) => unknown }).from(t);
+      },
+    } as unknown as ToolContext['client'];
+  }
+
+  it('an unreadable goal bucket fails CLOSED: ok:false read_model_unreadable, no events page', async () => {
+    const db = makeComposerFakeDb();
+    await prestonSubmitGoal(ctxFor(db.client), { request: 'Audit the repository.', request_id: 'pc-sup-fc-0001' });
+    const p = await prestonPollEvents(ctxFor(failingTableClient(db.client, 'master_goals', 'simulated read failure')), {});
+    expect(p.ok).toBe(false);
+    if (!p.ok) {
+      expect(p.error).toBe('read_model_unreadable');
+      expect('events' in p).toBe(false);
+      expect('next_cursor' in p).toBe(false);
+    }
+  });
+
+  it('an unreadable job bucket fails CLOSED the same way', async () => {
+    const db = makeComposerFakeDb();
+    await prestonSubmitGoal(ctxFor(db.client), { request: 'Audit the repository.', request_id: 'pc-sup-fc-0002' });
+    const p = await prestonPollEvents(ctxFor(failingTableClient(db.client, 'goal_jobs', 'simulated read failure')), {});
+    expect(p.ok).toBe(false);
+    if (!p.ok) expect(p.error).toBe('read_model_unreadable');
+  });
+
+  it('an absent 0010 migration is the distinct migration_absent refusal', async () => {
+    const db = makeComposerFakeDb();
+    const p = await prestonPollEvents(ctxFor(failingTableClient(
+      db.client, 'master_goals', 'relation "public.master_goals" does not exist')), {});
+    expect(p.ok).toBe(false);
+    if (!p.ok) expect(p.error).toBe('migration_absent');
+  });
 });
 
 describe('SB-1 regression: same-millisecond lifecycle transitions stay visible', () => {
@@ -364,18 +412,18 @@ describe('SB-1 regression: same-millisecond lifecycle transitions stay visible',
   });
 });
 
-describe('surface registration (deliberate 11th operation)', () => {
-  it('preston_poll_events is registered on the MCP catalogue (11 tools)', () => {
+describe('surface registration (supervisor operations)', () => {
+  it('preston_poll_events remains registered on the MCP catalogue', () => {
     expect(TOOL_NAMES).toContain('preston_poll_events');
-    expect(TOOL_NAMES).toHaveLength(11);
+    expect(TOOL_NAMES).toHaveLength(15);
   });
 
-  it('pollPrestonEvents is the 11th REST operation and is read-only', () => {
+  it('pollPrestonEvents remains a read-only REST operation', () => {
     const doc = buildOpenApiDocument('https://example.test') as {
       paths: Record<string, Record<string, { operationId: string; 'x-openai-isConsequential': boolean }>>;
     };
     const ops = Object.values(doc.paths).flatMap((m) => Object.values(m));
-    expect(ops).toHaveLength(11);
+    expect(ops).toHaveLength(12);
     const poll = ops.find((o) => o.operationId === 'pollPrestonEvents');
     expect(poll).toBeTruthy();
     expect(poll?.['x-openai-isConsequential']).toBe(false);

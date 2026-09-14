@@ -2,7 +2,7 @@
 
 This module is the ONLY doorway between the Hermes dashboard plugin
 and Preston Control. It speaks the supported authenticated HTTP
-surface (/api/control/*) and exposes EXACTLY the seven supported read
+surface (/api/control/*) and exposes only the supported read
 operations. Everything else is refused by the op allowlist.
 
 Security posture (pinned by test/security-boundary.test.ts and
@@ -46,6 +46,13 @@ UUID_RE = re.compile(
 )
 ARTIFACT_ID_RE = re.compile(r"^art-[0-9a-f]{32}$")
 CURSOR_RE = re.compile(r"^[A-Za-z0-9:._-]{1,240}$")
+PROJECT_REF_RE = re.compile(
+    r"^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|P[0-9]{2}-[0-9]{4})$",
+    re.IGNORECASE,
+)
+OWNER_VIEWS = {
+    "today", "project", "approvals", "workforce", "incidents", "brief"
+}
 
 # The COMPLETE reachable Preston surface. Adding an entry here is a
 # governance change; the boundary tests pin this map to reads only.
@@ -57,6 +64,7 @@ ALLOWED_OPS = {
     "events": "/api/control/events",
     "evidence": "/api/control/evidence",
     "artifact": "/api/control/artifacts/{artifact_id}",
+    "owner_view": "/api/control/owner-view",
 }
 
 PATH_PARAM_RES = {
@@ -69,6 +77,7 @@ PATH_PARAM_RES = {
 ALLOWED_QUERY = {
     "events": ("cursor", "limit"),
     "evidence": ("goal_id", "job_id"),
+    "owner_view": ("view", "project_ref"),
 }
 
 
@@ -130,6 +139,10 @@ def build_url(base, op, path_params, query):
             value = str(max(1, min(100, int(value))))
         if key in ("goal_id", "job_id") and not UUID_RE.match(value):
             raise ValueError(key + "_invalid")
+        if key == "view" and value not in OWNER_VIEWS:
+            raise ValueError("view_invalid")
+        if key == "project_ref" and not PROJECT_REF_RE.match(value):
+            raise ValueError("project_ref_invalid")
         pairs.append((key, value))
     qs = urllib.parse.urlencode(pairs)
     return base + path + ("?" + qs if qs else "")
@@ -188,11 +201,14 @@ def fetch_op(op, path_params=None, query=None, env=None, opener=None,
                 # rotated away inside its reuse window; a second 401
                 # fails closed below - never more than one retry.
                 forced = True
+                exc.close()
                 continue
             try:
                 raw = exc.read(MAX_RESPONSE_BYTES + 1)
             except Exception:
                 raw = b""
+            finally:
+                exc.close()
             if status in (401, 403):
                 return {
                     "linked": True,

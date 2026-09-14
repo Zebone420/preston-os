@@ -1,0 +1,42 @@
+-- ============================================================================
+-- ROLLBACK 0028 (Phase 1 Lane A canonical identity) - OWNER-RUN ONLY.
+-- Exact, bounded. Named .sql.txt per RED-boundary scanner convention.
+-- Safe ONLY before any project code has been minted for a real project.
+-- Verify first:
+--   select count(*) from public.projects where project_code is not null; -- expect 0
+--   select count(*) from public.identity_links;                           -- expect 0
+-- Minted codes are permanent by rule: if the first count is > 0, do NOT
+-- run the projects.project_code lines; keep the column and codes.
+-- ============================================================================
+drop policy if exists business_field_ownership_owner_upd on public.business_field_ownership;
+drop policy if exists business_field_ownership_owner_ins on public.business_field_ownership;
+drop policy if exists business_field_ownership_owner_runtime_sel on public.business_field_ownership;
+drop table if exists public.business_field_ownership;
+
+drop policy if exists identity_review_owner_runtime_upd on public.identity_review_queue;
+drop policy if exists identity_review_owner_runtime_ins on public.identity_review_queue;
+drop policy if exists identity_review_owner_runtime_sel on public.identity_review_queue;
+drop index if exists public.idx_identity_review_queue_status;
+drop table if exists public.identity_review_queue;
+
+drop policy if exists contact_aliases_owner_upd on public.contact_aliases;
+drop policy if exists contact_aliases_owner_runtime_ins on public.contact_aliases;
+drop policy if exists contact_aliases_owner_runtime_sel on public.contact_aliases;
+drop index if exists public.idx_contact_aliases_project;
+drop index if exists public.idx_contact_aliases_client;
+drop table if exists public.contact_aliases;
+
+drop policy if exists identity_links_owner_runtime_upd on public.identity_links;
+drop policy if exists identity_links_owner_runtime_ins on public.identity_links;
+drop policy if exists identity_links_owner_runtime_sel on public.identity_links;
+drop index if exists public.idx_identity_links_entity;
+drop table if exists public.identity_links;
+
+drop function if exists public.mint_project_code(uuid, text);
+drop policy if exists project_code_sequences_owner_runtime_sel on public.project_code_sequences;
+drop table if exists public.project_code_sequences;
+
+-- Only while no code has been minted (see verification above):
+drop index if exists public.uq_projects_project_code;
+alter table public.projects drop constraint if exists projects_project_code_format;
+alter table public.projects drop column if exists project_code;

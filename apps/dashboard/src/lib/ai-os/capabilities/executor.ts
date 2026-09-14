@@ -54,6 +54,21 @@ import {
   settleSideEffectTerminal,
 } from './ledger-store';
 import { deploymentEnvironment } from '../runtime-environment';
+import { runtimeActive, type SystemControls } from '../controls';
+import type { ProviderState } from './contract';
+import {
+  approvalBindingHash,
+  verifyApprovalBinding,
+} from './business/stale-approval';
+import {
+  providerStateFromEvidence,
+  sandboxEvidenceRefs,
+} from './business/replay';
+import {
+  evaluateConnectorPassport,
+  type ConnectorMode,
+  type ConnectorPassport,
+} from '../connectors/passport';
 
 // Durable attempt cap for one side-effect row (aligned with the job retry
 // budget; the ledger's attempt_count survives restarts so the cap is real).
@@ -61,7 +76,10 @@ export const MAX_SIDE_EFFECT_ATTEMPTS = 3;
 
 export type AdapterOutcome =
   | { status: 'ok'; provider_result_id: string | null; summary: string;
-      artifact_refs?: string[] }
+      artifact_refs?: string[];
+      // Phase 3: sandbox adapters report their state + bounded output.
+      provider_state?: ProviderState;
+      output?: Record<string, unknown> }
   | { status: 'terminal' | 'retryable' | 'uncertain'; reason: string };
 
 // A provider adapter performs EXACTLY ONE already-authorized, already-
@@ -91,6 +109,18 @@ export interface CapabilityExecutorDeps {
   readApproval: (
     client: RuntimeClient, approvalId: string,
   ) => Promise<Record<string, unknown> | undefined>;
+  // Phase 3 kill behavior: when bound, the global system_controls row is
+  // consulted BEFORE the ledger and BEFORE any adapter; owner_stop /
+  // execution disabled / paused refuse terminally. business/compose.ts
+  // always binds a fail-closed reader for the business capability set.
+  readControls?: (client: RuntimeClient) => Promise<SystemControls>;
+  // M8: provider-backed business paths bind this reader.  Legacy/internal
+  // executor callers remain compatible, but makeBusinessExecutorDeps always
+  // enforces a fresh passport before any ledger or adapter access.
+  readConnectorPassport?: (
+    client: RuntimeClient, provider: string,
+  ) => Promise<ConnectorPassport | undefined>;
+  connectorMode?: ConnectorMode;
   log?: (fields: Record<string, unknown>) => void;
 }
 
@@ -196,14 +226,17 @@ function replayFromRow(
 ): CapabilityResult | null {
   const status = String(row.status ?? '');
   if (status === 'succeeded') {
+    const refs = Array.isArray(row.evidence_refs)
+      ? (row.evidence_refs as string[]).slice(0, 20) : [];
+    const state = providerStateFromEvidence(refs);
     return {
       ok: true, side_effect_id: sideEffectId,
       provider_result_id: row.provider_result_id == null
         ? null : String(row.provider_result_id),
       summary: 'replayed: side effect already succeeded (no re-execution)',
-      artifact_refs: Array.isArray(row.evidence_refs)
-        ? (row.evidence_refs as string[]).slice(0, 20) : [],
+      artifact_refs: refs,
       error: null,
+      ...(state ? { provider_state: state } : {}),
     };
   }
   if (status === 'failed' || status === 'refused') {
@@ -245,11 +278,74 @@ export async function executeCapability(
   const def = found.definition;
   const sideEffectId = deriveSideEffectId(request.idempotency_key);
 
+  // 2b. (Phase 3) disabled capability: a static refusal BEFORE the kill
+  // switch read, BEFORE the ledger, BEFORE any adapter. An approval cannot
+  // lift it - only a code change behind an owner gate can.
+  if (def.enabled !== true) {
+    const reason = `capability_disabled:${def.disabled_reason ?? 'unspecified'}`;
+    log({ stage: 'enabled', refused: reason, capability: def.name });
+    return errResult(sideEffectId, terminal(reason));
+  }
+
+  // 2c. (Phase 3) kill behavior: the global controls row halts everything
+  // before any ledger or provider step. An unreadable row is the caller's
+  // reader responsibility (compose.ts binds a fail-closed reader).
+  if (deps.readControls) {
+    const controls = await deps.readControls(deps.client);
+    if (!runtimeActive(controls)) {
+      const why = controls.owner_stop ? 'owner_stop'
+        : !controls.execution_enabled ? 'execution_disabled' : 'paused';
+      log({ stage: 'controls', refused: `runtime_halted:${why}` });
+      return errResult(sideEffectId, terminal(`runtime_halted:${why}`));
+    }
+  }
+
+  // 2d. (Phase 3) per-capability deterministic validation (schema +
+  // business policy). Invalid params terminalize with a static reason and
+  // touch nothing - the same posture as contract_invalid above.
+  let validated: { canonical: Record<string, unknown>;
+    binding: ReturnType<typeof emptyBinding> } | null = null;
+  if (def.validate_params) {
+    const pv = def.validate_params(request.params);
+    if (!pv.ok) {
+      log({ stage: 'params', refused: pv.reason, capability: def.name });
+      return errResult(sideEffectId, terminal(pv.reason));
+    }
+    validated = { canonical: pv.canonical, binding: pv.binding };
+  }
+
   // 3. adapter presence (fail closed before any ledger write).
   const adapter = deps.adapters[def.provider];
   if (!adapter) {
     log({ stage: 'adapter', refused: 'provider_adapter_unavailable', provider: def.provider });
     return errResult(sideEffectId, terminal('provider_adapter_unavailable'));
+  }
+
+  // 3b. M8 connector truth.  A configured adapter is not proof of a current
+  // authorization/data session.  Refuse before the ledger so retries cannot
+  // leave misleading side-effect proposals for work that never reached a
+  // provider.  Nothing executes on an unreadable, stale, mis-scoped, or
+  // cross-environment passport.
+  if (deps.readConnectorPassport) {
+    let passport: ConnectorPassport | undefined;
+    try {
+      passport = await deps.readConnectorPassport(deps.client, def.provider);
+    } catch {
+      passport = undefined;
+    }
+    const check = evaluateConnectorPassport(passport, {
+      provider: def.provider,
+      capability: def.name,
+      operation_kind: def.operation_kind,
+      environment: deploymentEnvironment(),
+      required_mode: deps.connectorMode ?? 'read_only',
+      now_ms: deps.now(),
+    });
+    if (!check.ok) {
+      const reason = `connector_not_ready:${check.reason}`;
+      log({ stage: 'connector_passport', refused: reason, provider: def.provider });
+      return errResult(sideEffectId, retryable(reason));
+    }
   }
 
   // 4. idempotent ledger proposal. A ledger that cannot be written REFUSES
@@ -325,6 +421,23 @@ export async function executeCapability(
         await recordEvent(deps, sideEffectId, 'refused', 0, request, def);
         return errResult(sideEffectId, terminal(`approval_${check.reason}`));
       }
+      // (Phase 3) EXTERNAL / STEP_UP approvals must ALSO bind the field-
+      // level envelope (actor, action, project_id, payload hash, document
+      // hash, amount, recipient, expiry, nonce). Stale payload => reject.
+      if (def.approval_class !== 'INTERNAL') {
+        const expected = approvalBindingHash({
+          actor: deps.actorId, action: def.name,
+          payload_hash: v.payload_hash,
+          ...(validated?.binding ?? emptyBinding()),
+        });
+        const bound = verifyApprovalBinding(record, expected, deps.now());
+        if (!bound.ok) {
+          await refuseSideEffect(deps.client, sideEffectId, 'proposed',
+            `approval_${bound.reason}`, nowIso());
+          await recordEvent(deps, sideEffectId, 'refused', 0, request, def);
+          return errResult(sideEffectId, terminal(`approval_${bound.reason}`));
+        }
+      }
       approvalId = claimed;
     }
     const auth = await authorizeSideEffect(
@@ -361,7 +474,10 @@ export async function executeCapability(
   // unsettleable success is reported UNCERTAIN (the action happened but the
   // ledger could not prove it - reconciliation path, not silence).
   if (out.status === 'ok') {
-    const evidence = [`se:${sideEffectId}:attempt:${attempt}:succeeded`];
+    const evidence = [
+      `se:${sideEffectId}:attempt:${attempt}:succeeded`,
+      ...sandboxEvidenceRefs(out.provider_state, out.output),
+    ];
     const settled = await settleSideEffectSuccess(
       deps.client, sideEffectId,
       out.provider_result_id, evidence, nowIso());
@@ -374,8 +490,10 @@ export async function executeCapability(
       ok: true, side_effect_id: sideEffectId,
       provider_result_id: out.provider_result_id,
       summary: String(out.summary ?? '').slice(0, 400),
-      artifact_refs: (out.artifact_refs ?? []).slice(0, 20),
+      artifact_refs: [...(out.artifact_refs ?? []), ...evidence.slice(1)].slice(0, 20),
       error: null,
+      ...(out.provider_state ? { provider_state: out.provider_state } : {}),
+      ...(out.output ? { output: out.output } : {}),
     };
   }
   if (out.status === 'terminal') {
@@ -392,6 +510,15 @@ export async function executeCapability(
   await requeueSideEffectRetryable(deps.client, sideEffectId, out.reason, nowIso());
   await recordEvent(deps, sideEffectId, 'retryable', attempt, request, def);
   return errResult(sideEffectId, retryable(out.reason));
+}
+
+// Empty field-level binding for EXTERNAL definitions without a validator
+// (none ship in Phase 3; kept so the binding step never fails open).
+function emptyBinding(): {
+  project_id: string | null; document_hash: string | null;
+  amount: number | null; recipient: string | null;
+} {
+  return { project_id: null, document_hash: null, amount: null, recipient: null };
 }
 
 // History rides the EXISTING append-only os_events mechanism (master goal

@@ -122,6 +122,42 @@ describe('composer engine - interpretation', () => {
     expect(p.goals[0].tasks[0].requested_role).toBe('codex');
   });
 
+  it('honors an explicit claude assignment (M2)', () => {
+    const p = okOf(composeRequest(
+      'Create a goal to improve tests. Create tasks to add a regression test using claude.'));
+    expect(p.goals[0].tasks[0].requested_role).toBe('claude');
+  });
+
+  it('automatic routing still works: no explicit role defaults to claude (M2)', () => {
+    const p = okOf(composeRequest(
+      'Create a goal to improve tests. Create tasks to add a regression test.'));
+    expect(p.goals[0].tasks[0].requested_role).toBe('claude');
+  });
+
+  it('rejects a conflicting explicit role reference in the same task instead of silently honoring the first (M2)', () => {
+    const errs = errsOf(composeRequest(
+      'Create a goal to improve tests. Task 1: add a helper using claude using codex.'));
+    expect(errs).toContain('conflicting_agent_reference:t1:claude,codex');
+  });
+
+  it('rejects the conjunction form "using claude and codex" (M2)', () => {
+    const errs = errsOf(composeRequest(
+      'Create a goal to improve tests. Task 1: add a helper using claude and codex.'));
+    expect(errs).toContain('conflicting_agent_reference:t1:claude,codex');
+  });
+
+  it('rejects a bare role pair with no keyword ("codex/claude") instead of silently defaulting (M2)', () => {
+    const errs = errsOf(composeRequest(
+      'Create a goal to improve tests. Task 1: add a helper, codex/claude.'));
+    expect(errs).toContain('conflicting_agent_reference:t1:claude,codex');
+  });
+
+  it('a task ABOUT the codex adapter explicitly routed to claude is not a conflict (M2)', () => {
+    const p = okOf(composeRequest(
+      'Create a goal to improve tests. Task 1: add a regression test for the codex adapter using claude.'));
+    expect(p.goals[0].tasks[0].requested_role).toBe('claude');
+  });
+
   it('rejects the audit role for edit work (contract-incapable)', () => {
     const errs = errsOf(composeRequest(
       'Create a goal to improve tests. Create tasks to implement a helper using audit.'));
@@ -243,9 +279,14 @@ describe('composer engine - interpretation', () => {
       const q = composeRequest(
         `Create a goal to tidy notes. Create ${form} to summarize the notes.`);
       if (form === 'an extra-numbered task') {
-        // Unknown filler words still fall through - only count words are
-        // accepted; anything else stays fail-closed unparsed.
+        // Unknown filler words still fail closed - only count words are
+        // accepted. Since the 2026-09-08 prose derivation a malformed task
+        // marker is rejected explicitly (task_sentence_unparsed) rather
+        // than guessed as a plain step.
         expect(q.ok).toBe(false);
+        if (!q.ok) {
+          expect(q.errors.join(',')).toContain('ambiguous_request:task_sentence_unparsed');
+        }
       } else {
         expect(okOf(q).goals[0].tasks.length).toBeGreaterThanOrEqual(1);
       }

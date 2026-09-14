@@ -1,0 +1,3 @@
+-- Rollback for 0038_job_dependencies_natural_key.sql (owner-run).
+-- Removes only the natural-key index; no rows are touched.
+drop index if exists public.uq_job_dependencies_edge;

@@ -139,6 +139,21 @@ export function buildOpenApiDocument(origin: string): Record<string, unknown> {
           responses: { '200': { description: 'Status snapshot', content: { 'application/json': { schema: { $ref: '#/components/schemas/Result' } } } }, '401': { description: 'Not authenticated' }, '403': { description: 'Not the owner' } },
         },
       },
+      '/api/control/owner-view': {
+        get: {
+          operationId: 'getPrestonOwnerView',
+          summary: 'Read a Preston owner business view',
+          description:
+            'Read-only Today, Project, Approvals, AI Workforce, Incidents/Evidence, or owner Brief. ' +
+            'Project reads require project_ref (UUID or P26-0001). Bounded, RLS-scoped, no action authority.',
+          'x-openai-isConsequential': false,
+          parameters: [
+            { name: 'view', in: 'query', required: true, schema: { type: 'string', enum: ['today', 'project', 'approvals', 'workforce', 'incidents', 'brief'] } },
+            { name: 'project_ref', in: 'query', required: false, schema: { type: 'string', maxLength: 36 } },
+          ],
+          responses: { '200': { description: 'Owner view', content: { 'application/json': { schema: { $ref: '#/components/schemas/Result' } } } }, '400': { description: 'Invalid input' }, '401': { description: 'Not authenticated' } },
+        },
+      },
       '/api/control/goals': {
         post: {
           operationId: 'submitPrestonGoal',

@@ -40,6 +40,10 @@ export interface CapabilityError {
   reason: string; // static reason code, never provider free text
 }
 
+// Phase 3: the ONLY provider state that exists. A 'live' state is
+// deliberately absent from the type until an owner-gated activation adds it.
+export type ProviderState = 'sandbox_only';
+
 export interface CapabilityResult {
   ok: boolean;
   side_effect_id: string;
@@ -47,6 +51,9 @@ export interface CapabilityResult {
   summary: string; // bounded, secret-screened
   artifact_refs: string[];
   error: CapabilityError | null;
+  // Phase 3 additions (optional; absent for the dry-run provider).
+  provider_state?: ProviderState; // set by sandbox adapters and on replay
+  output?: Record<string, unknown>; // bounded structured adapter output
 }
 
 // Map an executor/adapter error class onto the job failure_reason prefix the
@@ -67,8 +74,9 @@ export type RequestValidation =
   | { ok: false; reason: string };
 
 // Canonical JSON: keys sorted recursively so the payload hash is stable for
-// semantically identical params regardless of construction order.
-function canonicalJson(v: unknown): string {
+// semantically identical params regardless of construction order. Exported
+// (Phase 3) so business modules hash canonical payloads the SAME way.
+export function canonicalJson(v: unknown): string {
   if (v === null || typeof v !== 'object') return JSON.stringify(v);
   if (Array.isArray(v)) return '[' + v.map(canonicalJson).join(',') + ']';
   const o = v as Record<string, unknown>;
@@ -78,6 +86,12 @@ function canonicalJson(v: unknown): string {
 
 export function payloadHash(params: Record<string, unknown>): string {
   return createHash('sha256').update(canonicalJson(params), 'utf8').digest('hex');
+}
+
+// sha256 hex of any canonicalized value (Phase 3 helper for document,
+// manifest and canonical-payload hashes).
+export function sha256Canonical(v: unknown): string {
+  return createHash('sha256').update(canonicalJson(v), 'utf8').digest('hex');
 }
 
 // Fail-closed structural validation of a request AGAINST its definition.

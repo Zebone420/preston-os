@@ -160,7 +160,9 @@ describe('capability registry (in-code, versioned, fail-closed)', () => {
     if (r.ok) expect(r.definition.provider).toBe('preston.dryrun');
   });
   it('unknown capability fails closed', () => {
-    const r = lookupCapability('gmail.message.send', 1);
+    // 2026-09-08 Phase 3: gmail.message.send is now REGISTERED (disabled),
+    // so the unknown-name fixture moved to a name that is still absent.
+    const r = lookupCapability('gmail.message.search', 1);
     expect(r).toEqual({ ok: false, reason: 'unknown_capability' });
   });
   it('malformed names fail closed', () => {
@@ -172,14 +174,34 @@ describe('capability registry (in-code, versioned, fail-closed)', () => {
     expect(lookupCapability(DRYRUN_READ_TEST, 2))
       .toEqual({ ok: false, reason: 'capability_version_mismatch' });
   });
-  it('definitions are frozen and name-valid; only dryrun ships in this goal', () => {
+  // 2026-09-08 Phase 3 DELIBERATE WIDENING (Safe Business Capability
+  // Foundation). The prior pin ("exactly two definitions, all
+  // preston.dryrun") is replaced by the invariants that actually matter:
+  // the EXACT registered name set, every definition frozen + name-valid,
+  // the two dryrun definitions untouched, every business provider a
+  // SANDBOX (no credential; proven in business-capability-*.test.ts),
+  // gmail.message.send registered but DISABLED, and every non-INTERNAL
+  // capability approval-gated.
+  it('definitions are frozen and name-valid; exact Phase 3 set; dryrun + sandbox only', () => {
     const all = listCapabilities();
-    expect(all.length).toBe(2);
+    expect(all.map((d) => d.name).sort()).toEqual([
+      DRYRUN_READ_TEST, DRYRUN_WRITE_TEST,
+      'gmail.message.draft', 'gmail.message.send',
+      'calendar.event.create', 'drive.file.write',
+      'proposal.document.render', 'vendor.quote.parse',
+      'vendor.quote.reconcile', 'iqplus.report.ingest',
+      'contract.package.render', 'po.document.render',
+    ].sort());
     for (const d of all) {
       expect(Object.isFrozen(d)).toBe(true);
       expect(CAPABILITY_NAME_RE.test(d.name)).toBe(true);
-      expect(d.provider).toBe('preston.dryrun');
+      expect(typeof d.enabled).toBe('boolean');
+      if (d.approval_class !== 'INTERNAL') expect(d.requires_approval).toBe(true);
     }
+    expect(all.filter((d) => d.provider === 'preston.dryrun').length).toBe(2);
+    const send = all.find((d) => d.name === 'gmail.message.send');
+    expect(send?.enabled).toBe(false);
+    expect(send?.disabled_reason).toBe('owner_gate_not_opened');
   });
   it('the gated write test carries approval + YELLOW; read is GREEN ungated', () => {
     const w = lookupCapability(DRYRUN_WRITE_TEST, 1);
@@ -557,9 +579,11 @@ describe('failure isolation (master goal section 16)', () => {
   });
   it('unknown capability -> terminal, zero DB touches', async () => {
     const db = makeFakeDb();
+    // 2026-09-08 Phase 3: gmail.message.send is registered (disabled); the
+    // still-unregistered gmail.message.search keeps this pin meaningful.
     const res = await executeCapability(
       makeDeps(db, makeDryrunAdapter()),
-      request({ capability: 'gmail.message.send' }));
+      request({ capability: 'gmail.message.search' }));
     expect(res.error?.reason).toBe('unknown_capability');
     expect(db.touched.length).toBe(0);
   });

@@ -1,0 +1,13 @@
+-- OWNER-RUN rollback for 0032 (staging first).
+-- Preconditions: export any safe order-chain records that must be retained;
+-- verify no later migration or application release depends on these tables.
+begin;
+drop table if exists public.purchase_order_packages;
+drop table if exists public.order_readiness_checks;
+drop table if exists public.change_orders;
+drop table if exists public.final_measurements;
+drop table if exists public.payment_expectations;
+drop table if exists public.contract_provider_events;
+drop table if exists public.contracts;
+drop table if exists public.contract_templates;
+commit;

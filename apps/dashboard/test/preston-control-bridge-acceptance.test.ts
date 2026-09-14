@@ -102,10 +102,11 @@ describe('bridge acceptance - transport parity (G12)', () => {
     operationId: string; description: string; 'x-openai-isConsequential': boolean;
   }>>).flatMap((p) => Object.values(p));
 
-  it('every MCP tool has exactly one GPT Actions operation (same count, no drift)', () => {
-    // 11 as of the supervisor bridge slice 1 (preston_poll_events).
-    expect(TOOL_NAMES).toHaveLength(11);
-    expect(ops).toHaveLength(11);
+  it('keeps REST parity for durable tools and documents session-only Architect tools', () => {
+    // Architect v1 is deliberately tool-call-session-scoped, so its three MCP
+    // tools have no stateless REST route. Every durable tool retains parity.
+    expect(TOOL_NAMES).toHaveLength(15);
+    expect(ops).toHaveLength(12);
     const expectPairs: Array<[string, string]> = [
       ['preston_status', 'getPrestonStatus'],
       ['preston_submit_goal', 'submitPrestonGoal'],
@@ -120,12 +121,17 @@ describe('bridge acceptance - transport parity (G12)', () => {
       ['preston_get_artifact', 'getPrestonArtifact'],
       // Supervisor bridge slice 1 (read-only, non-consequential).
       ['preston_poll_events', 'pollPrestonEvents'],
+      ['preston_owner_view', 'getPrestonOwnerView'],
     ];
     const opIds = new Set(ops.map((o) => o.operationId));
     for (const [tool, op] of expectPairs) {
       expect(TOOL_NAMES).toContain(tool);
       expect(opIds.has(op), `missing operation ${op}`).toBe(true);
     }
+    expect(TOOL_NAMES.filter((name) => name.includes('architect'))).toEqual([
+      'list_architect_proposals', 'get_architect_proposal',
+      'decide_architect_proposal',
+    ]);
   });
 
   it('every operation description fits the GPT Actions 300-char import limit', () => {

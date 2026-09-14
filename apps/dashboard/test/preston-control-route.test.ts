@@ -169,7 +169,7 @@ describe('/mcp route gates', () => {
 });
 
 describe('/mcp end-to-end through a real MCP client', () => {
-  it('lists exactly the six tools with accurate annotations', async () => {
+  it('lists every tool with accurate annotations', async () => {
     const client = await connect(OWNER_TOKEN);
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([...TOOL_NAMES].sort());
@@ -183,6 +183,13 @@ describe('/mcp end-to-end through a real MCP client', () => {
     expect(by['preston_decide_approval'].annotations?.readOnlyHint).toBe(false);
     expect(by['preston_decide_approval'].annotations?.destructiveHint).toBe(true);
     expect(by['preston_decide_approval'].annotations?.idempotentHint).toBe(false);
+    for (const n of ['list_architect_proposals', 'get_architect_proposal']) {
+      expect(by[n].annotations?.readOnlyHint, n).toBe(true);
+      expect(by[n].annotations?.destructiveHint, n).toBe(false);
+    }
+    expect(by['decide_architect_proposal'].annotations?.readOnlyHint).toBe(false);
+    expect(by['decide_architect_proposal'].annotations?.destructiveHint).toBe(true);
+    expect(by['decide_architect_proposal'].annotations?.idempotentHint).toBe(false);
     await client.close();
   });
 

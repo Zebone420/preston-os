@@ -4,6 +4,7 @@ Phase 0A gate protocol: `docs/PRESTON_AI_PHASE_0A_FOUNDATION_GATE.md`
 Action classes: use the Action Classes summary inside `docs/PRESTON_AI_PHASE_0A_FOUNDATION_GATE.md`
 Verification register: `docs/PRESTON_AI_VERIFICATION_REGISTER_v1.md`
 Master plan: `docs/PRESTON_AI_BUSINESS_POWERSTATION_MASTER_PLAN_v2_1_REVISED.md` is committed to the repo (added 2026-07-03 at commit 1878120).
+Authoritative build contract (supersedes older build-order documents where they conflict): `docs/PRESTON_AI_OS_FINAL_MASTER_BUILD_PLAN_v1.md` (committed 2026-09-08).
 
 ## Build rules
 

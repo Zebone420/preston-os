@@ -118,19 +118,41 @@ export async function loadOrchestrationReadModel(
 
   const failedRows = allJobs.filter((j) => str(j, 'status') === 'failed');
   const deadRows = allJobs.filter((j) => str(j, 'status') === 'dead_lettered');
+  // Derived failure buckets inherit a partial job-read failure. Reporting
+  // them as `empty` while the source bucket is `error` contradicts the
+  // authoritative read state and can hide incidents from consumers that
+  // inspect the individual bucket rather than BridgeReadiness.
+  const failures: Bucket = jobsErr
+    ? { state: 'error', rows: failedRows, note: jobsErr }
+    : failedRows.length ? { state: 'ok', rows: failedRows }
+    : { state: 'empty', rows: [] };
+  const dead_letters: Bucket = jobsErr
+    ? { state: 'error', rows: deadRows, note: jobsErr }
+    : deadRows.length ? { state: 'ok', rows: deadRows }
+    : { state: 'empty', rows: [] };
 
   return {
     applied: true,
     goals,
     approvals,
     jobs,
-    failures: failedRows.length ? { state: 'ok', rows: failedRows } : { state: 'empty', rows: [] },
-    dead_letters: deadRows.length ? { state: 'ok', rows: deadRows } : { state: 'empty', rows: [] },
+    failures,
+    dead_letters,
     summary: {
       total_goals: goals.rows.length,
       running_goals: goals.rows.filter((g) => str(g, 'status') === 'running').length,
       blocked_goals: goals.rows.filter((g) => str(g, 'status') === 'blocked').length,
-      open_approvals: approvals.state === 'ok' ? approvals.rows.length : 0,
+      // Status-truth repair (P0 defect B, 2026-09-08): the aggregate counted
+      // EVERY status='pending' row, so an approval that had already expired
+      // undecided (its decision is refused at decision time) kept reporting
+      // "N approval(s) waiting for the owner" / approval_attention forever
+      // in preston_status, the Hermes status row, the notifier, and the
+      // dashboard. Only rows whose decision is still OPEN (decision_open,
+      // expiry-aware, fail-closed on an unparseable expiry) count; the
+      // expired rows stay in the bucket for display, labeled by the UI.
+      open_approvals: approvals.state === 'ok'
+        ? approvals.rows.filter((r) => r['decision_open'] === true).length
+        : 0,
       failed_jobs: failedRows.length,
       dead_lettered_jobs: deadRows.length,
     },
@@ -214,10 +236,16 @@ export async function loadLatestHermesStatus(
   };
 }
 
-export async function loadBridgeReadiness(client: RuntimeClient): Promise<BridgeReadiness> {
+export async function loadBridgeReadiness(
+  client: RuntimeClient,
+  nowMs: number = Date.now(),
+): Promise<BridgeReadiness> {
   const ctl = await readSystemControlsChecked(client);
   const c = ctl.controls;
-  const model = await loadOrchestrationReadModel(client);
+  // The caller's clock decides which pending approvals are still open
+  // (defect B): the observer passes its tick clock so the recorded status
+  // row and the open-approval count agree on the same instant.
+  const model = await loadOrchestrationReadModel(client, 20, nowMs);
   const simulation_safe =
     ctl.readOk && c.execution_enabled === false &&
     c.remote_runner_enabled === false && c.hermes_mode === 'observe_only';

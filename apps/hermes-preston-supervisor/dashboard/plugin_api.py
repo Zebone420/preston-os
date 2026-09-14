@@ -3,7 +3,7 @@
 Mounted by the Hermes dashboard at /api/plugins/preston-supervisor/*
 BEHIND the dashboard's own auth gate (unauthenticated requests are
 rejected with 401 before these handlers run). Every route here is a
-GET-only pass-through to the seven supported Preston Control reads in
+GET-only pass-through to the supported Preston Control reads in
 preston_client.py. There are no write routes, no admin routes, and no
 access to Hermes cron/MCP/gateway/config surfaces - Preston authority
 never derives from Hermes admin capability.
@@ -72,3 +72,10 @@ def evidence(goal_id: str = "", job_id: str = ""):
 @router.get("/artifacts/{artifact_id}")
 def artifact(artifact_id: str):
     return preston_client.fetch_op("artifact", {"artifact_id": artifact_id})
+
+
+@router.get("/owner-view")
+def owner_view(view: str = "", project_ref: str = ""):
+    return preston_client.fetch_op(
+        "owner_view", None, {"view": view, "project_ref": project_ref}
+    )

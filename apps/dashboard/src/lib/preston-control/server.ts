@@ -9,25 +9,33 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   CANCEL_GOAL_SHAPE,
+  DECIDE_ARCHITECT_PROPOSAL_SHAPE,
   DECIDE_APPROVAL_SHAPE,
   FOLLOW_UP_GOAL_SHAPE,
   GET_ARTIFACT_SHAPE,
+  GET_ARCHITECT_PROPOSAL_SHAPE,
   GET_EVIDENCE_SHAPE,
   GET_GOAL_SHAPE,
   GET_JOB_SHAPE,
   POLL_EVENTS_SHAPE,
+  OWNER_VIEW_SHAPE,
+  LIST_ARCHITECT_PROPOSALS_SHAPE,
   SUBMIT_GOAL_SHAPE,
 } from './schemas';
 import {
   prestonCancelGoal,
+  prestonDecideArchitectProposal,
   prestonDecideApproval,
   prestonFollowUpGoal,
   prestonGetArtifact,
+  prestonGetArchitectProposal,
   prestonGetEvidence,
   prestonGetGoal,
   prestonGetJob,
   prestonListApprovals,
+  prestonListArchitectProposals,
   prestonPollEvents,
+  prestonOwnerView,
   prestonStatus,
   prestonSubmitGoal,
   type ToolContext,
@@ -48,6 +56,10 @@ export const TOOL_NAMES = [
   'preston_get_evidence',
   'preston_get_artifact',
   'preston_poll_events',
+  'preston_owner_view',
+  'list_architect_proposals',
+  'get_architect_proposal',
+  'decide_architect_proposal',
 ] as const;
 
 function result(payload: unknown) {
@@ -182,6 +194,47 @@ export function buildPrestonControlServer(ctx: ToolContext): McpServer {
     inputSchema: POLL_EVENTS_SHAPE,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async (args) => result(await prestonPollEvents(ctx, args)));
+
+  server.registerTool('preston_owner_view', {
+    title: 'Read Preston owner view',
+    description:
+      'Read-only business command view: Today, one Project, Approvals, AI Workforce, ' +
+      'Incidents/Evidence, or the event-aware owner Brief. Project accepts a UUID or P26-0001 ID. ' +
+      'Every result is bounded, RLS-scoped, evidence-linked, and exposes no action authority.',
+    inputSchema: OWNER_VIEW_SHAPE,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  }, async (args) => result(await prestonOwnerView(ctx, args)));
+
+  server.registerTool('list_architect_proposals', {
+    title: 'List Architect proposals',
+    description:
+      'Read-only: list bounded Architect/GitHub Gate proposals in this authenticated session. ' +
+      'No GitHub operation is performed.',
+    inputSchema: LIST_ARCHITECT_PROPOSALS_SHAPE,
+    annotations: { readOnlyHint: true, destructiveHint: false,
+      idempotentHint: true, openWorldHint: false },
+  }, async (args) => result(await prestonListArchitectProposals(ctx, args)));
+
+  server.registerTool('get_architect_proposal', {
+    title: 'Get Architect proposal',
+    description:
+      'Read-only: retrieve one exact Architect proposal, immutable SHA/diff approval digest, ' +
+      'actor attribution, evidence bindings, and PR state from this authenticated session.',
+    inputSchema: GET_ARCHITECT_PROPOSAL_SHAPE,
+    annotations: { readOnlyHint: true, destructiveHint: false,
+      idempotentHint: true, openWorldHint: false },
+  }, async (args) => result(await prestonGetArchitectProposal(ctx, args)));
+
+  server.registerTool('decide_architect_proposal', {
+    title: 'Decide Architect proposal (owner only)',
+    description:
+      'CONSEQUENTIAL: records an owner decision for one exact Architect proposal and approval ' +
+      'digest through the existing Preston approval validator. It does not call GitHub. Requires ' +
+      "the owner's verbatim confirmation naming the approval id.",
+    inputSchema: DECIDE_ARCHITECT_PROPOSAL_SHAPE,
+    annotations: { readOnlyHint: false, destructiveHint: true,
+      idempotentHint: false, openWorldHint: false },
+  }, async (args) => result(await prestonDecideArchitectProposal(ctx, args)));
 
   return server;
 }

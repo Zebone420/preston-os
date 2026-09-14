@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
@@ -11,6 +12,25 @@ import {
 
 // Repo root: apps/dashboard/test -> ../../.. -> repo root.
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
+const BASH = process.platform === 'win32'
+  ? [
+      'C:\\Program Files\\Git\\bin\\bash.exe',
+      'C:\\Program Files\\Git\\usr\\bin\\bash.exe',
+    ].find(existsSync) ?? 'bash'
+  : 'bash';
+
+function runScanner(kind: 'secret' | 'red_boundary'): string {
+  if (process.platform === 'win32') {
+    return execFileSync('powershell.exe', [
+      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+      `scripts/${kind}_scan_phase0a.ps1`,
+    ], { cwd: REPO_ROOT, encoding: 'utf8' });
+  }
+  return execFileSync(BASH, [`scripts/${kind}_scan.sh`, REPO_ROOT], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+  });
+}
 
 const VALID_COMMIT = 'a'.repeat(40);
 
@@ -243,41 +263,64 @@ describe('workerPushAllowed', () => {
 });
 
 describe('bash scanner scripts - syntax and self-scan', () => {
+  it('bash and PowerShell scanners keep the same rule-label sets', () => {
+    const pairs = [
+      {
+        sh: readFileSync(`${REPO_ROOT}scripts/secret_scan.sh`, 'utf8'),
+        ps: readFileSync(`${REPO_ROOT}scripts/secret_scan_phase0a.ps1`, 'utf8'),
+        labels: [
+          'private-key-block', 'jwt-token', 'openai-style-key', 'github-pat',
+          'github-fine-pat', 'slack-token', 'aws-access-key', 'airtable-pat',
+          'telegram-token', 'assigned-secret',
+        ],
+      },
+      {
+        sh: readFileSync(`${REPO_ROOT}scripts/red_boundary_scan.sh`, 'utf8'),
+        ps: readFileSync(`${REPO_ROOT}scripts/red_boundary_scan_phase0a.ps1`, 'utf8'),
+        labels: [
+          'network-call', 'web-fetch', 'remote-shell', 'mail-send',
+          'n8n-activation', 'sudo-use', 'recursive-delete', 'ps-delete',
+          'destructive-sql', 'hook-bypass', 'global-install',
+        ],
+      },
+    ];
+    for (const pair of pairs) {
+      for (const label of pair.labels) {
+        expect(pair.sh, `bash:${label}`).toContain(label);
+        expect(pair.ps, `powershell:${label}`).toContain(label);
+      }
+    }
+  });
+
   it('scripts/worktree_prepare.sh passes bash -n', () => {
     expect(() =>
-      execFileSync('bash', ['-n', 'scripts/worktree_prepare.sh'], { cwd: REPO_ROOT }),
+      execFileSync(BASH, ['-n', 'scripts/worktree_prepare.sh'], { cwd: REPO_ROOT }),
     ).not.toThrow();
   });
 
   it('scripts/secret_scan.sh passes bash -n', () => {
     expect(() =>
-      execFileSync('bash', ['-n', 'scripts/secret_scan.sh'], { cwd: REPO_ROOT }),
+      execFileSync(BASH, ['-n', 'scripts/secret_scan.sh'], { cwd: REPO_ROOT }),
     ).not.toThrow();
   });
 
   it('scripts/red_boundary_scan.sh passes bash -n', () => {
     expect(() =>
-      execFileSync('bash', ['-n', 'scripts/red_boundary_scan.sh'], { cwd: REPO_ROOT }),
+      execFileSync(BASH, ['-n', 'scripts/red_boundary_scan.sh'], { cwd: REPO_ROOT }),
     ).not.toThrow();
   });
 
-  // The two self-scans walk the whole tracked tree and take 5-12s on slow
-  // runners (CI, containers) - well past vitest's 5s default. The generous
-  // per-test timeout only removes that false-negative wall; the assertion
-  // (zero findings) is unchanged and the scan always runs to completion.
-  it('secret_scan.sh finds zero findings against the tracked worktree root', () => {
-    const out = execFileSync('bash', ['scripts/secret_scan.sh', REPO_ROOT], {
-      cwd: REPO_ROOT,
-      encoding: 'utf8',
-    });
+  // Run the platform-native parity implementation: spawning thousands of
+  // short-lived grep processes through MSYS is prohibitively slow on Windows.
+  // The bash ports remain syntax-checked above; rule-label parity is pinned
+  // by the first assertion in this block.
+  it('the secret scanner finds zero findings against the worktree root', () => {
+    const out = runScanner('secret');
     expect(out).toMatch(/== secret scan: 0 finding\(s\) ==/);
   }, 120_000);
 
-  it('red_boundary_scan.sh finds zero findings against the tracked worktree root', () => {
-    const out = execFileSync('bash', ['scripts/red_boundary_scan.sh', REPO_ROOT], {
-      cwd: REPO_ROOT,
-      encoding: 'utf8',
-    });
+  it('the RED-boundary scanner finds zero findings against the worktree root', () => {
+    const out = runScanner('red_boundary');
     expect(out).toMatch(/== RED boundary scan: 0 finding\(s\) ==/);
   }, 120_000);
 });

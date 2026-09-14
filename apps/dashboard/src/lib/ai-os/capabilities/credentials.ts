@@ -35,9 +35,17 @@ export interface ProviderCredential {
   expires_at_ms: number | null; // null = static until rotated on disk
 }
 
+export type CredentialResolutionFailure =
+  | 'provider_not_configured'
+  | 'credential_file_unreadable'
+  | 'credential_empty'
+  // Phase 3 sandbox broker (providers/sandbox-credentials.ts): the ONLY
+  // answer any business provider receives in this phase.
+  | 'no_credential';
+
 export type CredentialResolution =
   | { ok: true; credential: ProviderCredential }
-  | { ok: false; reason: 'provider_not_configured' | 'credential_file_unreadable' | 'credential_empty' };
+  | { ok: false; reason: CredentialResolutionFailure };
 
 export interface CredentialBrokerDeps {
   env: Record<string, string | undefined>;

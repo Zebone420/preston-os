@@ -1,0 +1,38 @@
+-- ============================================================================
+-- ROLLBACK 0030 (Phase 1 Lane C knowledge fabric) - OWNER-RUN ONLY.
+-- Exact, bounded. Named .sql.txt per RED-boundary scanner convention.
+-- Safe ONLY while no verified/authorized fact exists (re-ingestion of
+-- candidates is cheap; human verification work is not).
+-- Verify first:
+--   select count(*) from public.knowledge_facts
+--     where state in ('VERIFIED','AUTHORIZED_FOR_USE');   -- expect 0
+-- Drive originals are never touched by this rollback.
+-- ============================================================================
+drop policy if exists knowledge_eval_set_owner_upd on public.knowledge_eval_set;
+drop policy if exists knowledge_eval_set_owner_ins on public.knowledge_eval_set;
+drop policy if exists knowledge_eval_set_owner_runtime_sel on public.knowledge_eval_set;
+drop table if exists public.knowledge_eval_set;
+
+drop policy if exists knowledge_facts_owner_upd on public.knowledge_facts;
+drop policy if exists knowledge_facts_owner_runtime_ins on public.knowledge_facts;
+drop policy if exists knowledge_facts_owner_runtime_sel on public.knowledge_facts;
+drop index if exists public.idx_knowledge_facts_project;
+drop index if exists public.idx_knowledge_facts_domain_state;
+drop table if exists public.knowledge_facts;
+
+drop policy if exists knowledge_chunks_owner_runtime_ins on public.knowledge_chunks;
+drop policy if exists knowledge_chunks_owner_runtime_sel on public.knowledge_chunks;
+drop index if exists public.uq_knowledge_chunks_source_index;
+drop table if exists public.knowledge_chunks;
+
+drop policy if exists knowledge_sources_owner_upd on public.knowledge_sources;
+drop policy if exists knowledge_sources_owner_runtime_ins on public.knowledge_sources;
+drop policy if exists knowledge_sources_owner_runtime_sel on public.knowledge_sources;
+drop index if exists public.idx_knowledge_sources_document;
+drop index if exists public.idx_knowledge_sources_project;
+drop index if exists public.idx_knowledge_sources_domain_current;
+drop index if exists public.uq_knowledge_sources_sha_domain;
+drop table if exists public.knowledge_sources;
+
+drop policy if exists knowledge_domains_owner_runtime_sel on public.knowledge_domains;
+drop table if exists public.knowledge_domains;

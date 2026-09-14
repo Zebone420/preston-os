@@ -38,6 +38,15 @@ export interface ActionEnvelope {
 // Canonical serialization: keys sorted, no whitespace. EVERY field is bound
 // separately; any change to any field changes the digest. New fields are
 // coalesced to '' so non-job envelopes remain stable.
+// Shared canonical string-field binding used by the action envelope and AG-4.
+// Every caller supplies already-named fields; keys are sorted once here so a
+// second cryptographic canonicalization authority cannot drift into the repo.
+export function canonicalBindingJson(fields: Record<string, string>): string {
+  const ordered: Record<string, string> = {};
+  for (const key of Object.keys(fields).sort()) ordered[key] = String(fields[key]);
+  return JSON.stringify(ordered);
+}
+
 function canonicalize(e: ActionEnvelope): string {
   const ordered: Record<string, string> = {
     action: String(e.action),
@@ -53,7 +62,7 @@ function canonicalize(e: ActionEnvelope): string {
     owner_identity: String(e.owner_identity),
     risk_class: String(e.risk_class),
   };
-  return JSON.stringify(ordered, Object.keys(ordered).sort());
+  return canonicalBindingJson(ordered);
 }
 
 // SHA-256 hex digest of the canonical envelope. 256-bit; collision-resistant.

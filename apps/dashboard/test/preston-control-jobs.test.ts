@@ -139,12 +139,30 @@ describe('preston_get_job', () => {
     expect(r.reports[1].outcome).toBe('completed');
   });
 
-  it('absence of result events is a normal empty state, not an error', async () => {
+  it('absence of result events is a normal empty state, not an error - but IS flagged as a result evidence gap (M7)', async () => {
     const db = makeComposerFakeDb();
-    seedJob(db);
+    seedJob(db); // status: completed, attempts: 1, no JobResultRecorded row seeded
     const r = await prestonGetJob(ctxFor(db.client), JOB_ID);
     if (!r.found) throw new Error('expected found');
     expect(r.result_reports_read_ok).toBe(true);
     expect(r.result_reports).toEqual([]);
+    expect(r.result_evidence_gap).toBe(true);
+  });
+
+  it('M7: no evidence gap when the job never ran (attempts 0), even with zero result reports', async () => {
+    const db = makeComposerFakeDb();
+    seedJob(db, { status: 'ready', attempts: 0 });
+    const r = await prestonGetJob(ctxFor(db.client), JOB_ID);
+    if (!r.found) throw new Error('expected found');
+    expect(r.result_evidence_gap).toBe(false);
+  });
+
+  it('M7: no evidence gap when the terminal job has its expected result report', async () => {
+    const db = makeComposerFakeDb();
+    seedJob(db);
+    seedResultEvent(db, 1);
+    const r = await prestonGetJob(ctxFor(db.client), JOB_ID);
+    if (!r.found) throw new Error('expected found');
+    expect(r.result_evidence_gap).toBe(false);
   });
 });

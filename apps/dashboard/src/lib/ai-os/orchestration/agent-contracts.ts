@@ -20,7 +20,8 @@ export type Capability =
   | 'coordinate' // monitor/reconcile/escalate (no approve, no execute)
   | 'propose_command' // raise a proposal (never execute it)
   | 'intake_goal' // submit a master goal
-  | 'produce_recommendation';
+  | 'produce_recommendation'
+  | 'propose_github_change';
 
 // Actions no agent may ever do without a fresh owner mobile approval, and that
 // no agent contract may list as an owned capability. Enforced structurally.
@@ -38,6 +39,9 @@ export const UNIVERSAL_PROHIBITIONS: readonly string[] = [
   'self_approve',
   'weaken_rls',
   'weaken_scanner',
+  'force_push',
+  'merge_protected_branch',
+  'weaken_branch_protection',
 ] as const;
 
 const RISK_ORDER: Record<RiskClass, number> = {
@@ -83,6 +87,7 @@ export const AGENT_CONTRACTS: Readonly<Record<AgentRole, AgentContract>> =
       capabilities: RO<Capability>([
         'read_repo', 'edit_repo', 'run_tests', 'run_scanners',
         'local_commit', 'create_worktree', 'audit', 'propose_command',
+        'propose_github_change',
       ]),
       prohibitions: RO([]),
       max_risk: 'YELLOW', environment_scope: DEPLOYMENT_ENV,
@@ -94,6 +99,7 @@ export const AGENT_CONTRACTS: Readonly<Record<AgentRole, AgentContract>> =
       capabilities: RO<Capability>([
         'read_repo', 'edit_repo', 'run_tests', 'run_scanners',
         'local_commit', 'create_worktree', 'audit', 'propose_command',
+        'propose_github_change',
       ]),
       prohibitions: RO([]),
       max_risk: 'YELLOW', environment_scope: DEPLOYMENT_ENV,

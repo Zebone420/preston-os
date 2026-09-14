@@ -1,7 +1,7 @@
 name: CI
 
-# Lint, typecheck, and run the guard + dashboard test suites on every push
-# and PR to master. Read-only: no secrets, no deploys, no live connectors.
+# Security audit, lint, typecheck, OS-runtime build, and full tests on every
+# push and PR to master. Read-only: no secrets, deploys, or live connectors.
 on:
   push:
     branches: [master]
@@ -10,31 +10,37 @@ on:
 
 jobs:
   guards:
-    name: guards (typecheck + tests)
+    name: guards (security + typecheck + tests)
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: packages/guards
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
       - run: npm ci
+      - name: Dependency audit — block high/critical
+        run: npm audit --audit-level=high
       - run: npx tsc --noEmit -p tsconfig.json
       - run: npm test
 
   dashboard:
-    name: dashboard (typecheck + tests)
+    name: dashboard (security + lint + typecheck + runtime build + tests)
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: apps/dashboard
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
       - run: npm ci
+      - name: Dependency audit — block high/critical
+        run: npm audit --audit-level=high
+      - run: npm run lint
       - run: npx tsc --noEmit -p tsconfig.json
+      - run: npm run build:os-runtime
       - run: npm test

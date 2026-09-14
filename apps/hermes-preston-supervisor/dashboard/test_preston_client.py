@@ -93,7 +93,7 @@ class AllowlistTests(unittest.TestCase):
         joined = " ".join(pc.ALLOWED_OPS.values())
         for banned in ("decision", "cancel", "follow-up"):
             self.assertNotIn(banned, joined)
-        self.assertEqual(len(pc.ALLOWED_OPS), 7)
+        self.assertEqual(len(pc.ALLOWED_OPS), 8)
 
     def test_goal_id_must_be_uuid(self):
         out = pc.fetch_op(
@@ -115,6 +115,24 @@ class AllowlistTests(unittest.TestCase):
             token_resolver=fixed_token,
         )
         self.assertEqual(out["error"], "cursor_invalid")
+
+    def test_owner_view_query_is_strict_and_read_only(self):
+        captured = []
+        out = pc.fetch_op(
+            "owner_view", None,
+            {"view": "project", "project_ref": "P26-0041", "evil": "1"},
+            env=ENV_OK, opener=opener_capture(captured),
+            token_resolver=fixed_token,
+        )
+        self.assertEqual(out["ok"], True)
+        self.assertIn("view=project", captured[0].full_url)
+        self.assertIn("project_ref=P26-0041", captured[0].full_url)
+        self.assertNotIn("evil", captured[0].full_url)
+        bad = pc.fetch_op(
+            "owner_view", None, {"view": "execute"}, env=ENV_OK,
+            token_resolver=fixed_token,
+        )
+        self.assertEqual(bad["error"], "view_invalid")
 
 
 class RequestShapeTests(unittest.TestCase):
