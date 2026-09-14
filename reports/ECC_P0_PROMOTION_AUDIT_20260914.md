@@ -1,119 +1,126 @@
 # ECC P0 Promotion Audit — 2026-09-14
 
-Status: **BLOCKED FROM PROMOTION** pending the blockers below. This report is evidence-only; it does not authorize merge, deployment, environment changes, database changes, or policy changes.
+Status: **REPOSITORY-SIDE P0 CLEAN; PROMOTION STILL BLOCKED ON OFF-GITHUB GOVERNANCE / HEAD RECONCILIATION.**
 
-## Baseline
+This report is evidence-only. It does not authorize merge, deployment, environment changes, database changes, production execution, or policy weakening.
 
-- Base: `master` @ `2d447d52077719c76dd2d611958d3e774abb5b4a`
+## Baseline and scope
+
+- Base at branch creation: `master` @ `2d447d52077719c76dd2d611958d3e774abb5b4a`
 - P0 branch: `integration/ecc-p0-capability-pack`
-- PR: #2 (draft)
-- ECC behavior in P0: guidance/manifest only; no ECC hooks, installer, repair, control-plane, memory writer, tmux executor, or MCP mutation.
+- Draft PR: #2
+- ECC behavior in P0: subordinate guidance/capability layer only.
+- Explicitly disabled: ECC hooks, GateGuard enforcement, ECC setup/install/repair/auto-update, ECC control plane/control pane, ECC memory writes/MCP server, ECC tmux/worktree executor, MCP config mutation.
+- Preston Control remains sole authority for approvals, SSOT, routing, execution, safety, evidence, and owner gates.
 
-## Verification evidence
+## Repository-side verification
 
-GitHub Actions CI run `34804438058` / run #149 completed **SUCCESS** for the PR merge ref.
+Final hardened CI evidence before this report-only update: GitHub Actions run #162 (`34805372310`) on branch head `562f35373c33d7a8656dfa1f2b9e0e6c4fcf365d` / PR merge ref `049d32182ce2f403ecbd1f6a95699913b07a7c0f`.
 
-Dashboard job:
-- TypeScript check: PASS
+### Dashboard
+
+- `npm ci`: **0 vulnerabilities**
+- Blocking `npm audit --audit-level=high`: **0 vulnerabilities**
+- TypeScript: PASS
 - Vitest: **130 files passed**
-- Tests: **1798 passed, 1 expected fail**
-- Preston secret scanner: zero findings
-- Preston RED boundary scanner: zero findings
+- Tests: **1,798 passed + 1 expected fail**
+- Preston secret scanner: **0 findings**
+- Preston RED boundary scanner: **0 findings**
 
-Guards package job:
-- TypeScript check: PASS
+### Guards
+
+- `npm ci`: **0 vulnerabilities**
+- Blocking `npm audit --audit-level=high`: **0 vulnerabilities**
+- TypeScript: PASS
 - Tests: **25 passed**
 
-## Findings
+## Resolved findings
 
-### P0-F1 — HIGH — CI is green while npm reports high/critical dependency vulnerabilities
+### P0-F1 — RESOLVED — dependency security exposure
 
-Evidence from CI run #149:
+Initial audit discovered a green CI run with 13 dashboard vulnerabilities (including one critical) and four guard-package vulnerabilities.
 
-- `apps/dashboard` `npm ci`: **13 vulnerabilities** — 5 moderate, 7 high, **1 critical**.
-- `packages/guards` `npm ci`: **4 vulnerabilities** — 2 moderate, 2 high.
-- CI does not currently fail on these audit counts; typecheck/tests continue and the workflow concludes success.
+Narrow remediation completed:
 
-Additional dashboard install warning:
-- `sharp@0.34.5` has an install script not covered by `allowScripts`.
-- `unrs-resolver@1.12.2` has a postinstall script not covered by `allowScripts`.
+- `next` `16.2.10` -> `16.3.5`
+- matching `eslint-config-next` -> `16.3.5`
+- `vitest` `4.1.9` -> `4.1.11` in dashboard and guards
+- targeted lock refresh of vulnerable transitive packages, without install scripts or blanket `npm audit fix --force`
+- permanent CI security gate added: `npm audit --audit-level=high` now fails the job on high/critical advisories
 
-Assessment:
-- The counts alone do not prove runtime exploitability; exact advisory/package paths must be enumerated with `npm audit` on the authoritative checkout.
-- A green test result must not be treated as a clean supply-chain/security result.
+Issue #3 closed after final zero-vulnerability verification.
 
-Promotion requirement:
-1. run exact `npm audit` for dashboard and guards on the reconciled authoritative HEAD;
-2. classify each high/critical item as runtime/dev-only, reachable/unreachable, and fixed/accepted;
-3. apply narrow dependency updates where safe;
-4. rerun the full Preston regression and scanners;
-5. record any explicit risk acceptance as owner-governed evidence.
+A non-vulnerability supply-chain warning remains intentionally unapproved: `unrs-resolver@1.12.2` declares a postinstall script not covered by npm `allowScripts`. P0 did not approve or enable it.
 
-Do **not** run `npm audit fix --force` as an unattended blanket repair.
+### P0-F4 — RESOLVED — GitHub Actions Node runtime warning
 
-### P0-F2 — HIGH — GitHub `master` is unprotected
+The old workflow used `actions/checkout@v4` and `actions/setup-node@v4`, which GitHub warned were Node-20-targeted while the runner forced Node 24.
 
-GitHub branch metadata for `master` reports `protected: false` and required status-check enforcement off.
+Updated to:
 
-Risk:
-- repository-level policy does not independently prevent a direct push to the authoritative branch;
-- this weakens separation between the Preston approval model and GitHub branch mutation even if local operating rules remain strict.
+- `actions/checkout@v7`
+- `actions/setup-node@v7`
 
-Promotion requirement:
-- establish an owner-approved GitHub branch/ruleset policy appropriate to Preston's workflow (PR-only or otherwise explicitly controlled), with required CI checks and no force-push history rewriting.
-- if direct pushes are intentionally retained, document the compensating control and owner rationale explicitly.
+Final CI run #162 uses the v7 actions with Node 24 and does not emit the earlier Node-20 deprecation warning.
 
-### P0-F3 — HIGH — Authoritative-head reconciliation is incomplete outside GitHub
+### P0-F5 — PASS — committed-change confinement repair remains present
 
-The newest pushed `master` visible through GitHub is dated 2026-09-01. Recent Claude/Codex work discussed after that date may exist only on a local workstation, host, worktree, or other unpushed branch/state.
+Current `worktree-provision.ts` audits the normalized union of:
 
-Risk:
-- promoting P0 against GitHub `master` could integrate against a stale baseline;
-- review evidence could be valid for the wrong tree.
+- uncommitted/index/untracked paths from `git status --porcelain -uall`
+- committed paths from `git diff --name-only --no-renames <base> HEAD`
 
-Promotion requirement:
-- on the authoritative Preston host/workstation, capture `git status --short`, current branch, `git rev-parse HEAD`, `git worktree list`, and `git log --oneline --decorate -20`;
-- reconcile any unpushed commits/worktrees before merge;
-- rerun CI/security verification against the reconciled exact SHA.
+It fails closed when the authoritative base SHA is missing, malformed, or not comparable. Regression coverage remains green.
 
-### P0-F4 — MEDIUM — Actions dependency/runtime compatibility warning
+## Remaining promotion blockers
 
-GitHub Actions reports `actions/checkout@v4` and `actions/setup-node@v4` target Node.js 20 and are being forced to run on Node 24 by the current runner environment.
+### P0-B1 — HIGH — authoritative local/host HEAD is not proven from GitHub
 
-Current effect:
-- CI succeeds today.
+The newest pushed `master` available through GitHub was dated 2026-09-01 when this integration began. Work performed later through Claude/Codex may exist only on a workstation, server, worktree, or other unpushed state.
 
-Required follow-up:
-- track upstream action versions and update to Node-24-native action releases when appropriate; do not weaken CI to suppress the warning.
+Required on the authoritative Preston host/workstation before merge:
 
-### P0-F5 — PASS / historical high-risk confinement defect is repaired on current master
+```text
+git status --short
+git branch --show-current
+git rev-parse HEAD
+git worktree list
+git log --oneline --decorate -20
+```
 
-The earlier PF1 issue (post-run audit blind to worker changes hidden in a local commit) is repaired in current `worktree-provision.ts`.
+Reconcile any unpushed commits/worktrees, then rerun the same CI/security gates on the reconciled exact SHA.
 
-Current design audits the normalized union of:
-- uncommitted/index/untracked paths from `git status --porcelain -uall`;
-- committed paths from `git diff --name-only --no-renames <base> HEAD`.
+### P0-B2 — HIGH — `master` GitHub governance is still unresolved
 
-It fails closed when the authoritative base SHA is absent, malformed, or not comparable. This is the correct direction and should remain pinned by regression tests.
+GitHub branch metadata observed during this audit reported `master` as unprotected with required status-check enforcement off.
 
-## ECC P0 authority verdict
+Issue #4 tracks the owner-governed decision. Preferred posture is a PR/ruleset gate with required CI and no force-push/history rewriting. If direct pushes are intentionally retained, the compensating control and rationale must be documented explicitly.
 
-The P0 capability pack is architecturally acceptable **only as a subordinate guidance layer**:
+### P0-B3 — MEDIUM — independent bounded worker review still required on reconciled SHA
 
-- Preston Control remains sole authority for approvals, job state, routing, execution, safety, and evidence.
-- ECC skills may improve worker reasoning/review.
-- ECC/AgentShield may be an advisory security detector.
-- ECC memory, hooks, repair, control plane, worktree executor, and auto-update remain disabled in P0.
+Before promotion, run an independent bounded Claude/Codex (or equivalent) review against the exact reconciled candidate SHA. The reviewer must have no deployment/credential authority and must verify:
+
+- ECC cannot become an approval or execution authority;
+- hooks/memory/control-plane/tmux execution remain disabled;
+- dependency and CI hardening do not weaken Preston gates;
+- no unexpected allowed-path, approval, routing, RLS, production, or credential changes exist.
+
+## ECC P0 verdict
+
+The P0 capability pack is acceptable as a **subordinate worker-quality layer**:
+
+- ECC skills may improve architecture diagnostics, verification, security review, parallel planning, council critique, and cost-awareness.
+- ECC/AgentShield may provide advisory security findings.
+- Preston remains the single governing control plane.
 
 ## Promotion verdict
 
-**NOT MERGE-READY.**
+**DO NOT MERGE YET.**
 
-Blocking gates:
-1. reconcile true local/host HEAD;
-2. triage and remediate/accept all high + critical npm audit findings;
-3. decide and implement/document `master` branch governance;
-4. rerun exact-head full CI/scanners;
-5. independent worker review (Claude/Codex or equivalent bounded reviewer) against that exact reconciled SHA.
+The GitHub-visible repository candidate is clean and materially hardened, but promotion remains blocked until:
+
+1. authoritative local/host HEAD is reconciled;
+2. `master` governance decision in Issue #4 is resolved/documented;
+3. independent bounded review passes on the reconciled exact candidate SHA.
 
 No production action is authorized by this report.
