@@ -15,13 +15,15 @@ This report is evidence-only. It does not authorize merge, deployment, environme
 
 ## Repository-side verification
 
-Final hardened CI evidence before this report-only update: GitHub Actions run #162 (`34805372310`) on branch head `562f35373c33d7a8656dfa1f2b9e0e6c4fcf365d` / PR merge ref `049d32182ce2f403ecbd1f6a95699913b07a7c0f`.
+Strengthened CI evidence before this report-only update: GitHub Actions run #164 (`34805538845`) on branch head `25c834182a1bf624c1c1d5b5d649a8ef1a9a9539`.
 
 ### Dashboard
 
 - `npm ci`: **0 vulnerabilities**
-- Blocking `npm audit --audit-level=high`: **0 vulnerabilities**
+- Blocking `npm audit --audit-level=high`: PASS
+- ESLint: PASS
 - TypeScript: PASS
+- `npm run build:os-runtime`: PASS
 - Vitest: **130 files passed**
 - Tests: **1,798 passed + 1 expected fail**
 - Preston secret scanner: **0 findings**
@@ -30,9 +32,11 @@ Final hardened CI evidence before this report-only update: GitHub Actions run #1
 ### Guards
 
 - `npm ci`: **0 vulnerabilities**
-- Blocking `npm audit --audit-level=high`: **0 vulnerabilities**
+- Blocking `npm audit --audit-level=high`: PASS
 - TypeScript: PASS
 - Tests: **25 passed**
+
+The CI workflow uses `actions/checkout@v7` and `actions/setup-node@v7` with the repository's Node 24 runtime.
 
 ## Resolved findings
 
@@ -61,7 +65,7 @@ Updated to:
 - `actions/checkout@v7`
 - `actions/setup-node@v7`
 
-Final CI run #162 uses the v7 actions with Node 24 and does not emit the earlier Node-20 deprecation warning.
+The strengthened CI run uses these v7 actions under Node 24 without the earlier Node-20 action-runtime warning.
 
 ### P0-F5 — PASS — committed-change confinement repair remains present
 
