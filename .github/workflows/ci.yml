@@ -21,6 +21,9 @@ jobs:
         with:
           node-version-file: .nvmrc
       - run: npm ci
+      - name: ECC P0 dependency audit detail (advisory)
+        continue-on-error: true
+        run: npm audit --json
       - run: npx tsc --noEmit -p tsconfig.json
       - run: npm test
 
@@ -36,5 +39,8 @@ jobs:
         with:
           node-version-file: .nvmrc
       - run: npm ci
+      - name: ECC P0 dependency audit detail (advisory)
+        continue-on-error: true
+        run: npm audit --json
       - run: npx tsc --noEmit -p tsconfig.json
       - run: npm test
