@@ -1,11 +1,10 @@
-// Preston Super Brain v1 - Concrete Letta SDK Turn Client
-// Implements LettaTurnClient using @letta-ai/letta-agent-sdk/client.
-// Uses the portable /client entry point which excludes local process execution.
-// Uses backend="remote" ONLY. Fail-closed on all config errors.
-// The SDK client connects to an ISOLATED Letta App Server.
-// That server must have NO Preston repo, DB, secrets, or control-plane access.
+// Preston Super Brain v1 - Isolated Letta REST Turn Client
+// Uses the official zero-dependency @letta-ai/letta-client package.
+// Remote isolated server ONLY. Fail-closed on all config errors.
+// The bridge has no Preston repo, DB, approval, shell, deploy, payment,
+// customer-send, or production-control authority.
 
-import { LettaAgentClient } from '@letta-ai/letta-agent-sdk/client';
+import Letta from '@letta-ai/letta-client';
 import type { LettaTurnClient, LettaTurnInput, LettaTurnOutput } from './types.js';
 import type { LettaBrainConfig } from './config.js';
 import { validateLettaBrainConfig } from './config.js';
@@ -27,6 +26,8 @@ function buildUserMessage(input: LettaTurnInput): string {
     ? input.context.map((item) => `${item.memory_type}/${item.key}: ${JSON.stringify(item.value)}`).join('\n')
     : '(no context provided)';
   return [
+    buildSystemPrompt(input.mode),
+    '',
     `## Context (${input.context.length} items)`,
     contextSummary,
     '',
@@ -35,6 +36,35 @@ function buildUserMessage(input: LettaTurnInput): string {
     '',
     `You may propose up to ${input.max_memory_candidates} memory candidates.`,
   ].join('\n');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function textFromContent(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (!Array.isArray(value)) return '';
+  return value.map((part) => {
+    if (typeof part === 'string') return part;
+    if (!isRecord(part)) return '';
+    if (typeof part.text === 'string') return part.text;
+    if (typeof part.content === 'string') return part.content;
+    return '';
+  }).filter(Boolean).join('');
+}
+
+function extractAssistantText(response: unknown): string {
+  if (!isRecord(response) || !Array.isArray(response.messages)) return '';
+  const chunks: string[] = [];
+  for (const message of response.messages) {
+    if (!isRecord(message)) continue;
+    const kind = String(message.message_type ?? message.type ?? '').toLowerCase();
+    if (!kind.includes('assistant')) continue;
+    const text = textFromContent(message.content);
+    if (text) chunks.push(text);
+  }
+  return chunks.join('\n').trim();
 }
 
 export class SdkLettaTurnClient implements LettaTurnClient {
@@ -56,31 +86,24 @@ export class SdkLettaTurnClient implements LettaTurnClient {
       throw new Error(`SdkLettaTurnClient: config no longer valid: ${recheck.errors.join(', ')}`);
     }
 
-    let client: LettaAgentClient | undefined;
     try {
-      client = new LettaAgentClient({
-        backend: 'remote' as const,
-        url: this.config.url,
+      const apiKey = process.env.LETTA_API_KEY;
+      const client = new Letta({
+        baseURL: this.config.url,
+        ...(apiKey ? { apiKey } : {}),
+        maxRetries: 0,
+        timeout: 25_000,
+        logLevel: 'off',
       });
-
-      const session = client.resumeSession(this.config.agentId);
-      const userMessage = buildUserMessage(input);
-      await session.send(userMessage);
-
-      let responseText = '';
-      for await (const msg of session.stream()) {
-        if (msg.type === 'assistant') responseText += msg.content;
-        if (msg.type === 'result' && !msg.success) {
-          throw new Error(`Letta turn failed: ${msg.error ?? 'unknown'}`);
-        }
-      }
-
-      return { response: responseText || '(no response)' };
+      const response = await client.agents.messages.create(this.config.agentId, {
+        input: buildUserMessage(input),
+      });
+      const responseText = extractAssistantText(response as unknown);
+      if (!responseText) throw new Error('Letta returned no assistant response');
+      return { response: responseText };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       throw new Error(`SdkLettaTurnClient: turn failed (fail-closed): ${message}`);
-    } finally {
-      if (client) await client.close().catch(() => { /* best-effort cleanup */ });
     }
   }
 }

@@ -11,11 +11,11 @@
     "start": "node dist/server.js"
   },
   "dependencies": {
-    "@letta-ai/letta-agent-sdk": "0.8.9"
+    "@letta-ai/letta-client": "1.12.1"
   },
   "devDependencies": {
-    "@types/node": "^26.1.0",
-    "typescript": "^6.0.3",
-    "vitest": "^4.1.11"
+    "@types/node": "26.1.0",
+    "typescript": "6.0.3",
+    "vitest": "4.1.11"
   }
 }
