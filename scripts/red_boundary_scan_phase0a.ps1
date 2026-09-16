@@ -41,6 +41,7 @@ $files = Get-ChildItem @gci -ErrorAction SilentlyContinue |
     ($_.FullName -notmatch '\\node_modules\\') -and
     ($_.FullName -notmatch '\\\.next\\') -and
     ($selfNames -notcontains $_.Name) -and
+    ($_.Name -ne 'package-lock.json') -and
     ($exts -contains $_.Extension)
   }
 

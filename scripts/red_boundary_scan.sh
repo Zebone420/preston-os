@@ -71,6 +71,7 @@ while IFS= read -r -d '' f; do
   esac
   case "$f" in
     "$SELF_A"|"$SELF_B"|"$SELF_C"|"$SELF_D") continue ;;
+    */package-lock.json) continue ;;
   esac
   if ! is_included_ext "$f"; then
     continue
