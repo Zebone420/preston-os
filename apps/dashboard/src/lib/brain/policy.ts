@@ -75,7 +75,7 @@ export function evaluateMemoryCandidate(candidate: BrainMemoryCandidate): BrainP
 }
 
 export function assertBrainCapability(capability: string): BrainPolicyDecision {
-  if (capability === 'recall' || capability === 'propose_memory') {
+  if (capability === 'recall' || capability === 'reason' || capability === 'propose_memory') {
     return { allowed: true, reasons: [] };
   }
   return { allowed: false, reasons: ['forbidden_capability'] };
