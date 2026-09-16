@@ -1,7 +1,8 @@
-ARG LETTA_CODE_IMAGE=ghcr.io/letta-ai/letta-code:0.32.8
-FROM ${LETTA_CODE_IMAGE}
+FROM node:24-bookworm-slim
 
-USER root
+RUN npm install -g @letta-ai/letta-code@0.32.8 --omit=dev --ignore-scripts=false \
+    && npm cache clean --force
+
 WORKDIR /workspace
 COPY start-letta.sh /usr/local/bin/start-preston-letta
 RUN chmod 0755 /usr/local/bin/start-preston-letta \
