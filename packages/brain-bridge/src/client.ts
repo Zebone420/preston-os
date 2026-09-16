@@ -1,13 +1,15 @@
-// Preston Super Brain v1 - Isolated Letta REST Turn Client
-// Uses the official zero-dependency @letta-ai/letta-client package.
-// Remote isolated server ONLY. Fail-closed on all config errors.
+// Preston Super Brain v1 - Isolated Letta App Server Turn Client
+// Uses Node's native fetch against Letta App Server's OpenAI-compatible
+// Responses API. Remote isolated server ONLY. Fail-closed on all config errors.
 // The bridge has no Preston repo, DB, approval, shell, deploy, payment,
 // customer-send, or production-control authority.
 
-import Letta from '@letta-ai/letta-client';
 import type { LettaTurnClient, LettaTurnInput, LettaTurnOutput } from './types.ts';
 import type { LettaBrainConfig } from './config.ts';
 import { validateLettaBrainConfig } from './config.ts';
+
+const MAX_PROVIDER_BYTES = 256 * 1024;
+const PROVIDER_TIMEOUT_MS = 25_000;
 
 export function buildSystemPrompt(mode: string): string {
   return [
@@ -42,29 +44,51 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function textFromContent(value: unknown): string {
-  if (typeof value === 'string') return value;
-  if (!Array.isArray(value)) return '';
-  return value.map((part) => {
-    if (typeof part === 'string') return part;
-    if (!isRecord(part)) return '';
-    if (typeof part.text === 'string') return part.text;
-    if (typeof part.content === 'string') return part.content;
-    return '';
-  }).filter(Boolean).join('');
+function responsesUrl(baseUrl: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new Error('invalid Letta App Server URL');
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    throw new Error('Letta App Server URL must use HTTP(S)');
+  }
+  parsed.username = '';
+  parsed.password = '';
+  parsed.search = '';
+  parsed.hash = '';
+  parsed.pathname = parsed.pathname.replace(/\/+$/, '').replace(/\/v1$/, '') + '/v1/responses';
+  return parsed.toString();
 }
 
-function extractAssistantText(response: unknown): string {
-  if (!isRecord(response) || !Array.isArray(response.messages)) return '';
+function extractResponseText(value: unknown): string {
+  if (!isRecord(value)) return '';
+  if (typeof value.output_text === 'string' && value.output_text.trim()) return value.output_text.trim();
+
   const chunks: string[] = [];
-  for (const message of response.messages) {
-    if (!isRecord(message)) continue;
-    const kind = String(message.message_type ?? message.type ?? '').toLowerCase();
-    if (!kind.includes('assistant')) continue;
-    const text = textFromContent(message.content);
-    if (text) chunks.push(text);
+  if (Array.isArray(value.output)) {
+    for (const item of value.output) {
+      if (!isRecord(item)) continue;
+      if (typeof item.text === 'string') chunks.push(item.text);
+      if (typeof item.content === 'string') chunks.push(item.content);
+      if (Array.isArray(item.content)) {
+        for (const part of item.content) {
+          if (!isRecord(part)) continue;
+          if (typeof part.text === 'string') chunks.push(part.text);
+          else if (typeof part.content === 'string') chunks.push(part.content);
+        }
+      }
+    }
   }
-  return chunks.join('\n').trim();
+
+  if (chunks.length === 0 && Array.isArray(value.choices)) {
+    for (const choice of value.choices) {
+      if (!isRecord(choice) || !isRecord(choice.message)) continue;
+      if (typeof choice.message.content === 'string') chunks.push(choice.message.content);
+    }
+  }
+  return chunks.filter(Boolean).join('\n').trim();
 }
 
 export class SdkLettaTurnClient implements LettaTurnClient {
@@ -86,24 +110,45 @@ export class SdkLettaTurnClient implements LettaTurnClient {
       throw new Error(`SdkLettaTurnClient: config no longer valid: ${recheck.errors.join(', ')}`);
     }
 
+    const token = process.env.LETTA_APP_SERVER_TOKEN ?? '';
+    if (token.length < 32) {
+      throw new Error('SdkLettaTurnClient: missing or weak LETTA_APP_SERVER_TOKEN');
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), PROVIDER_TIMEOUT_MS);
     try {
-      const apiKey = process.env.LETTA_API_KEY;
-      const client = new Letta({
-        baseURL: this.config.url,
-        ...(apiKey ? { apiKey } : {}),
-        maxRetries: 0,
-        timeout: 25_000,
-        logLevel: 'off',
+      const response = await fetch(responsesUrl(this.config.url), {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+          'x-letta-chat-key': input.correlation_id,
+        },
+        body: JSON.stringify({
+          model: this.config.agentId,
+          input: buildUserMessage(input),
+        }),
+        signal: controller.signal,
+        redirect: 'error',
+        cache: 'no-store',
+        credentials: 'omit',
       });
-      const response = await client.agents.messages.create(this.config.agentId, {
-        input: buildUserMessage(input),
-      });
-      const responseText = extractAssistantText(response as unknown);
-      if (!responseText) throw new Error('Letta returned no assistant response');
+      if (!response.ok) {
+        throw new Error(`Letta App Server refused request (${response.status})`);
+      }
+      const raw = await response.text();
+      if (Buffer.byteLength(raw, 'utf8') > MAX_PROVIDER_BYTES) {
+        throw new Error('Letta App Server response exceeds provider limit');
+      }
+      const responseText = extractResponseText(JSON.parse(raw) as unknown);
+      if (!responseText) throw new Error('Letta App Server returned no assistant response');
       return { response: responseText };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       throw new Error(`SdkLettaTurnClient: turn failed (fail-closed): ${message}`);
+    } finally {
+      clearTimeout(timeout);
     }
   }
 }

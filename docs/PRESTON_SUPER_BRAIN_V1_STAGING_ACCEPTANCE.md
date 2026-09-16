@@ -7,7 +7,7 @@ Production merge/deploy: NOT AUTHORIZED / NOT PERFORMED
 
 ## Repository acceptance status
 
-**PASS, subject to the exact-head GitHub CI check remaining green.**
+Repository controls are implemented and must remain green on the exact deployment head.
 
 Implemented repository controls:
 
@@ -21,8 +21,9 @@ Implemented repository controls:
 - Brain Bridge protocol requires a strong bearer token, enforces the configured agent id, bounds request/response size and context, and redacts provider failures;
 - Brain Bridge has no Preston authority clients;
 - the prior `@letta-ai/letta-agent-sdk -> letta-code -> sharp` high-severity dependency chain was removed rather than waived;
-- Brain Bridge runtime dependency surface is reduced to pinned `@letta-ai/letta-client@1.12.1`, with Node 24 native TypeScript execution and built-in `node:test`;
+- Brain Bridge now has zero runtime npm dependencies and uses Node 24 native `fetch` against Letta App Server's official OpenAI-compatible `/v1/responses` interface;
 - bridge install uses `--ignore-scripts` in CI;
+- the bridge container build is a CI acceptance gate;
 - production runtime remains refused by configuration validation;
 - no database migration or production state change is required by this branch.
 
@@ -46,22 +47,23 @@ Provider output is untrusted. Provider-proposed durable memory is re-evaluated b
 
 ## Runtime acceptance status
 
-**BLOCKED BY OWNER-GATED EXTERNAL RUNTIME PROVISIONING — not by repository code.**
+**BLOCKED BY EXTERNAL STAGING RUNTIME CONNECTION / ACCOUNT AUTHORIZATION — not repository code.**
 
-A true `STAGING_OPERATIONAL` verdict requires evidence from an isolated reachable Letta staging server and staging Brain Bridge. The repository deliberately does not contain or manufacture the required URL, agent id, bridge token, or optional Letta API key.
+A true `STAGING_OPERATIONAL` verdict requires evidence from an isolated reachable Letta staging server and staging Brain Bridge. The repository deliberately does not contain the required hosting account connection, provider/subscription authorization, URL values, agent id, or bearer tokens.
 
-Required live proof after the owner provisions/authorizes the staging runtime:
+Required live proof after staging infrastructure is connected:
 
 1. isolation attestation for the Letta host/agent;
-2. Brain Bridge health response;
-3. successful synthetic authenticated round trip;
-4. synthetic cross-session memory -> retrieval -> reasoning drill;
-5. negative auth/wrong-agent/production/provider-failure probes;
-6. evidence that Letta/Bridge have no Preston execution/control credentials or clients;
-7. final exact-head CI remains green.
+2. Letta `/readyz` and Brain Bridge `/healthz` success;
+3. Letta staging agent visible through `/v1/models`;
+4. successful synthetic authenticated Preston -> Bridge -> Letta -> Preston round trip;
+5. synthetic cross-session memory -> retrieval -> reasoning drill;
+6. negative auth/wrong-agent/production/provider-failure probes;
+7. evidence that Letta/Bridge have no Preston execution/control credentials or clients;
+8. final exact-head CI remains green.
 
 Until those observations exist, the correct overall verdict is:
 
-**REPOSITORY_READY / RUNTIME_BLOCKED**
+**REPOSITORY_READY / RUNTIME_CONNECTION_REQUIRED**
 
-This report grants no merge, deployment, production activation, secret write, or owner approval.
+This report grants no merge, production deployment, DB write, or production activation.

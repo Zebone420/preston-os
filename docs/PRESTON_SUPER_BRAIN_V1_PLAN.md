@@ -42,17 +42,19 @@ Provider-neutral cognition
           - agent-bound
           - payload bounded
           - no Preston authority clients
-          - one runtime dependency: official Letta REST client
+          - zero runtime npm dependencies
+          - Node native fetch -> Letta /v1/responses
                |
                v
-          ISOLATED REMOTE LETTA SERVER
+          ISOLATED REMOTE LETTA APP SERVER
+          - OpenAI-compatible API enabled
           - no Preston filesystem
           - no Preston DB
           - no Preston credentials
           - no Preston approval/control plane
 ```
 
-The dashboard never imports Letta SDK/client packages. It can reach only the Brain Bridge. The Brain Bridge is the only component that can reach the isolated Letta server.
+The dashboard never imports Letta SDK/client packages. It can reach only the Brain Bridge. The Brain Bridge is the only Preston component that can reach the isolated Letta App Server.
 
 ## Configuration boundary
 
@@ -70,12 +72,12 @@ Brain Bridge configuration:
 
 - `PRESTON_BRAIN_ENABLED=true`
 - `PRESTON_BRAIN_LETTA_BACKEND=remote`
-- `PRESTON_BRAIN_LETTA_URL=<isolated Letta REST base URL>`
+- `PRESTON_BRAIN_LETTA_URL=<isolated Letta App Server HTTPS base URL>`
 - `PRESTON_BRAIN_LETTA_AGENT_ID=<same staging agent id>`
 - `PRESTON_BRAIN_LETTA_ISOLATION_ATTESTED=true`
 - `SUPABASE_RUNTIME_ENV=staging`
 - `PRESTON_BRAIN_BRIDGE_TOKEN=<same bridge token; secret store only>`
-- `LETTA_API_KEY=<only if the isolated Letta server requires it; secret store only>`
+- `LETTA_APP_SERVER_TOKEN=<App Server bearer token; secret store only>`
 - optional `PRESTON_BRAIN_BRIDGE_HOST` and `PRESTON_BRAIN_BRIDGE_PORT`
 
 Secrets are never committed and are never written into memory.
@@ -92,24 +94,25 @@ Secrets are never committed and are never written into memory.
 8. Dashboard has no Letta package dependency and cannot contact Letta directly.
 9. Brain Bridge is remote-only and staging-only, with explicit isolation attestation.
 10. Protocol requests are authenticated, bound to one agent, bounded, and fail closed.
-11. Provider errors do not leak across the protocol boundary.
-12. Production runtime is refused by configuration validation.
-13. Dependency audit, security guards, lint/typecheck/runtime build, dashboard tests, bridge checks, and bridge tests must be green on the exact head commit.
-14. No merge to `master`, production deployment, DB modification, production write, or authority change occurs as part of staging acceptance.
+11. Brain Bridge uses the current Letta App Server OpenAI-compatible Responses API, not legacy Letta REST paths.
+12. Provider errors do not leak across the protocol boundary.
+13. Production runtime is refused by configuration validation.
+14. Dependency audit, security guards, lint/typecheck/runtime build, dashboard tests, bridge checks, bridge tests, and bridge container build must be green on the exact head commit.
+15. No merge to `master`, production deployment, DB modification, production write, or authority change occurs as part of staging acceptance.
 
 ## Runtime acceptance — owner-gated
 
 Repository acceptance is not sufficient to claim a live staging Brain. Before `STAGING_OPERATIONAL` may be recorded, all of the following must be observed against an isolated reachable runtime:
 
-1. An isolated Letta server exists with no Preston filesystem, database, secrets, approval system, deployment system, payment system, customer-send system, or production-control access.
-2. A staging-only Letta agent exists with no Preston execution tools.
+1. An isolated Letta App Server exists with no Preston filesystem, database, secrets, approval system, deployment system, payment system, customer-send system, or production-control access.
+2. A staging-only Letta agent exists with no tools attached and advisory-only system instructions.
 3. Brain Bridge is provisioned separately and can reach Letta; Preston can reach only Brain Bridge.
 4. One synthetic Preston -> Brain Bridge -> Letta -> bounded response -> Preston round trip succeeds.
 5. A cross-session synthetic memory/retrieval/reasoning drill proves durable Preston memory remains authoritative.
 6. Negative runtime probes prove missing/invalid auth, wrong agent, provider failure, production environment, missing isolation attestation, and direct-dashboard-to-Letta configuration fail closed.
 7. No secret is logged, committed, or returned in evidence.
 
-Provisioning/deployment and secret injection are owner-gated operations and are not performed by repository acceptance work.
+Provisioning/deployment and secret/provider authorization remain explicit account-level actions and are not stored in the repository.
 
 ## Post-v1 integration
 

@@ -12,7 +12,7 @@ function validConfig(overrides: Partial<LettaBrainConfig> = {}): LettaBrainConfi
   return {
     enabled: true,
     backend: 'remote',
-    url: 'http://test.internal:8283',
+    url: 'https://letta-staging.example.test',
     agentId: 'agent-test-001',
     isolationAttested: true,
     runtimeEnv: 'staging',
@@ -40,11 +40,40 @@ test('Brain Bridge config accepts staging and refuses unsafe backends/environmen
   assert.equal(validateLettaBrainConfig(validConfig({ isolationAttested: false })).valid, false);
 });
 
-test('SDK wrapper fails closed and exposes no Preston authority properties', () => {
+test('provider wrapper fails closed and exposes no Preston authority properties', () => {
   assert.throws(() => new SdkLettaTurnClient(validConfig({ backend: 'local' })), /fail-closed/i);
   const client = new SdkLettaTurnClient(validConfig());
   const keys = Object.keys(client as unknown as Record<string, unknown>);
   assert.deepEqual(keys.filter((key) => /supabase|approval|shell|deploy|payment/i.test(key)), []);
+});
+
+test('provider wrapper uses the App Server OpenAI-compatible Responses API', async () => {
+  const savedFetch = globalThis.fetch;
+  const savedToken = process.env.LETTA_APP_SERVER_TOKEN;
+  process.env.LETTA_APP_SERVER_TOKEN = token;
+  let seenUrl = '';
+  let seenInit: RequestInit | undefined;
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    seenUrl = String(url);
+    seenInit = init;
+    return new Response(JSON.stringify({
+      output: [{ type: 'message', content: [{ type: 'output_text', text: 'synthetic-provider-ok' }] }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+  try {
+    const result = await new SdkLettaTurnClient(validConfig()).runTurn(input);
+    assert.equal(result.response, 'synthetic-provider-ok');
+    assert.equal(seenUrl, 'https://letta-staging.example.test/v1/responses');
+    assert.equal((seenInit?.headers as Record<string, string>).authorization, `Bearer ${token}`);
+    assert.equal((seenInit?.headers as Record<string, string>)['x-letta-chat-key'], input.correlation_id);
+    const body = JSON.parse(String(seenInit?.body));
+    assert.equal(body.model, 'agent-test-001');
+    assert.match(body.input, /synthetic staging data only/i);
+  } finally {
+    globalThis.fetch = savedFetch;
+    if (savedToken === undefined) delete process.env.LETTA_APP_SERVER_TOKEN;
+    else process.env.LETTA_APP_SERVER_TOKEN = savedToken;
+  }
 });
 
 test('protocol accepts one authenticated agent-bound synthetic turn', async () => {
