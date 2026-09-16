@@ -8,6 +8,7 @@
     "node": ">=24"
   },
   "scripts": {
+    "start": "node src/server.ts",
     "test": "node --test test/bridge.test.ts",
     "check": "node --check src/config.ts && node --check src/types.ts && node --check src/client.ts && node --check src/protocol.ts && node --check src/server.ts"
   },

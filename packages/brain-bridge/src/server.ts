@@ -32,8 +32,9 @@ export async function startBrainBridgeServer(): Promise<void> {
   const config = loadLettaBrainConfig();
   const client = new SdkLettaTurnClient(config);
   const host = process.env.PRESTON_BRAIN_BRIDGE_HOST ?? '127.0.0.1';
-  const port = Number.parseInt(process.env.PRESTON_BRAIN_BRIDGE_PORT ?? '8787', 10);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid PRESTON_BRAIN_BRIDGE_PORT');
+  const portText = process.env.PRESTON_BRAIN_BRIDGE_PORT ?? process.env.PORT ?? '8787';
+  const port = Number.parseInt(portText, 10);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid Brain Bridge port');
 
   const server = createServer(async (req, res) => {
     const pathname = new URL(req.url ?? '/', 'http://bridge.invalid').pathname;
