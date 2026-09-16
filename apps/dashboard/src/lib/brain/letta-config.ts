@@ -1,5 +1,6 @@
-// Preston Super Brain v1 - Letta SDK Configuration
+// Preston Super Brain v1 - Dashboard-side Brain Bridge configuration.
 // Only env var NAMES here. Never values.
+// The dashboard points at the isolated Brain Bridge, never directly at Letta.
 
 export interface LettaBrainConfig {
   enabled: boolean;
@@ -14,7 +15,7 @@ export function loadLettaBrainConfig(): LettaBrainConfig {
   return {
     enabled: process.env.PRESTON_BRAIN_ENABLED === 'true',
     backend: process.env.PRESTON_BRAIN_LETTA_BACKEND ?? '',
-    url: process.env.PRESTON_BRAIN_LETTA_URL ?? '',
+    url: process.env.PRESTON_BRAIN_BRIDGE_URL ?? '',
     agentId: process.env.PRESTON_BRAIN_LETTA_AGENT_ID ?? '',
     isolationAttested: process.env.PRESTON_BRAIN_LETTA_ISOLATION_ATTESTED === 'true',
     runtimeEnv: process.env.SUPABASE_RUNTIME_ENV ?? '',
