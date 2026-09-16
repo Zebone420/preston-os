@@ -1,10 +1,11 @@
 // Preston Super Brain v1 - Concrete Letta SDK Turn Client
-// Implements LettaTurnClient using @letta-ai/letta-agent-sdk.
+// Implements LettaTurnClient using @letta-ai/letta-agent-sdk/client.
+// Uses the portable /client entry point which excludes local process execution.
 // Uses backend="remote" ONLY. Fail-closed on all config errors.
 // The SDK client connects to an ISOLATED Letta App Server.
 // That server must have NO Preston repo, DB, secrets, or control-plane access.
 
-import { LettaAgentClient } from '@letta-ai/letta-agent-sdk';
+import { LettaAgentClient } from '@letta-ai/letta-agent-sdk/client';
 import type { LettaTurnClient, LettaTurnInput, LettaTurnOutput } from './types';
 import type { LettaBrainConfig } from './config';
 import { validateLettaBrainConfig } from './config';

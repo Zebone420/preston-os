@@ -36,7 +36,7 @@ PATTERNS=(
   'sudo-use|\<sudo[[:space:]]'
   'recursive-delete|rm[[:space:]]+-rf'
   'ps-delete|Remove-Item.+-Recurse.+-Force'
-  'destructive-sql|\<DROP[[:space:]]+TABLE\>|\<TRUNCATE[[:space:]]|\<DELETE[[:space:]]+FROM\>'
+  'destructive-sql|\<DROP[[:space:]]+TABLE\>|\<TRUNCATE\>|\<DELETE[[:space:]]+FROM\>'
   'hook-bypass|--no-verify'
   'global-install|npm[[:space:]]+(install|i)[[:space:]]+-g'
 )
@@ -71,6 +71,10 @@ while IFS= read -r -d '' f; do
   esac
   case "$f" in
     "$SELF_A"|"$SELF_B"|"$SELF_C"|"$SELF_D") continue ;;
+  esac
+  # package-lock.json: generated content, not authored SQL.
+  case "$f" in
+    */package-lock.json|package-lock.json) continue ;;
   esac
   if ! is_included_ext "$f"; then
     continue

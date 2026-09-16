@@ -25,7 +25,7 @@ $patterns = @{
   'sudo-use'         = '\bsudo\s'
   'recursive-delete' = 'rm\s+-rf'
   'ps-delete'        = 'Remove-Item.+-Recurse.+-Force'
-  'destructive-sql'  = '\bDROP\s+TABLE\b|\bTRUNCATE\s|\bDELETE\s+FROM\b'
+  'destructive-sql'  = '\bDROP\s+TABLE\b|\bTRUNCATE\b|\bDELETE\s+FROM\b'
   'hook-bypass'      = '--no-verify'
   'global-install'   = 'npm\s+(install|i)\s+-g'
 }
@@ -41,6 +41,7 @@ $files = Get-ChildItem @gci -ErrorAction SilentlyContinue |
     ($_.FullName -notmatch '\\node_modules\\') -and
     ($_.FullName -notmatch '\\\.next\\') -and
     ($selfNames -notcontains $_.Name) -and
+    ($_.Name -ne 'package-lock.json') -and
     ($exts -contains $_.Extension)
   }
 
