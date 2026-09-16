@@ -1,17 +1,18 @@
-import { describe, expect, it, vi } from 'vitest';
+import test from 'node:test';
+import assert from 'node:assert/strict';
 import {
   validateLettaBrainConfig,
   type LettaBrainConfig,
   SdkLettaTurnClient,
   handleBridgeProtocolRequest,
   type LettaTurnClient,
-} from '../src/index.js';
+} from '../src/index.ts';
 
 function validConfig(overrides: Partial<LettaBrainConfig> = {}): LettaBrainConfig {
   return {
     enabled: true,
     backend: 'remote',
-    url: 'ws://test.internal:8080',
+    url: 'http://test.internal:8283',
     agentId: 'agent-test-001',
     isolationAttested: true,
     runtimeEnv: 'staging',
@@ -27,73 +28,62 @@ const input = {
   context: [],
   max_memory_candidates: 2,
 };
-
 const token = 'b'.repeat(48);
 
-describe('Brain Bridge config', () => {
-  it('accepts valid staging', () => {
-    expect(validateLettaBrainConfig(validConfig()).valid).toBe(true);
-  });
-
-  it('refuses local, cloud, cloud-oauth, production, disabled, and missing isolation', () => {
-    expect(validateLettaBrainConfig(validConfig({ backend: 'local' })).valid).toBe(false);
-    expect(validateLettaBrainConfig(validConfig({ backend: 'cloud' })).valid).toBe(false);
-    expect(validateLettaBrainConfig(validConfig({ backend: 'cloud-oauth' })).valid).toBe(false);
-    expect(validateLettaBrainConfig(validConfig({ runtimeEnv: 'production' })).valid).toBe(false);
-    expect(validateLettaBrainConfig(validConfig({ enabled: false })).valid).toBe(false);
-    expect(validateLettaBrainConfig(validConfig({ isolationAttested: false })).valid).toBe(false);
-  });
-
-  it('SdkLettaTurnClient fails closed on invalid config', () => {
-    expect(() => new SdkLettaTurnClient(validConfig({ backend: 'local' }))).toThrow(/fail-closed/i);
-  });
-
-  it('SdkLettaTurnClient has no authority properties', () => {
-    const client = new SdkLettaTurnClient(validConfig());
-    const keys = Object.keys(client as unknown as Record<string, unknown>);
-    const bad = keys.filter(k => /supabase|approval|shell|deploy|payment/i.test(k));
-    expect(bad).toEqual([]);
-  });
+test('Brain Bridge config accepts staging and refuses unsafe backends/environments', () => {
+  assert.equal(validateLettaBrainConfig(validConfig()).valid, true);
+  assert.equal(validateLettaBrainConfig(validConfig({ backend: 'local' })).valid, false);
+  assert.equal(validateLettaBrainConfig(validConfig({ backend: 'cloud' })).valid, false);
+  assert.equal(validateLettaBrainConfig(validConfig({ backend: 'cloud-oauth' })).valid, false);
+  assert.equal(validateLettaBrainConfig(validConfig({ runtimeEnv: 'production' })).valid, false);
+  assert.equal(validateLettaBrainConfig(validConfig({ enabled: false })).valid, false);
+  assert.equal(validateLettaBrainConfig(validConfig({ isolationAttested: false })).valid, false);
 });
 
-describe('Brain Bridge protocol', () => {
-  it('accepts one authenticated, agent-bound, bounded synthetic turn', async () => {
-    const runTurn = vi.fn(async () => ({ response: 'synthetic-ok' }));
-    const client: LettaTurnClient = { runTurn };
-    const result = await handleBridgeProtocolRequest({
-      method: 'POST',
-      path: '/v1/turn',
-      authorization: `Bearer ${token}`,
-      body: JSON.stringify({ agent_id: 'agent-test-001', input }),
-    }, client, { token, agentId: 'agent-test-001' });
+test('SDK wrapper fails closed and exposes no Preston authority properties', () => {
+  assert.throws(() => new SdkLettaTurnClient(validConfig({ backend: 'local' })), /fail-closed/i);
+  const client = new SdkLettaTurnClient(validConfig());
+  const keys = Object.keys(client as unknown as Record<string, unknown>);
+  assert.deepEqual(keys.filter((key) => /supabase|approval|shell|deploy|payment/i.test(key)), []);
+});
 
-    expect(result).toEqual({ status: 200, body: { response: 'synthetic-ok', memory_candidates: [] } });
-    expect(runTurn).toHaveBeenCalledWith(input);
-  });
+test('protocol accepts one authenticated agent-bound synthetic turn', async () => {
+  let called = false;
+  const client: LettaTurnClient = { runTurn: async (received) => {
+    called = true;
+    assert.deepEqual(received, input);
+    return { response: 'synthetic-ok' };
+  } };
+  const result = await handleBridgeProtocolRequest({
+    method: 'POST', path: '/v1/turn', authorization: `Bearer ${token}`,
+    body: JSON.stringify({ agent_id: 'agent-test-001', input }),
+  }, client, { token, agentId: 'agent-test-001' });
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body, { response: 'synthetic-ok', memory_candidates: [] });
+  assert.equal(called, true);
+});
 
-  it('fails closed on missing auth and wrong agent without invoking Letta', async () => {
-    const runTurn = vi.fn(async () => ({ response: 'should-not-run' }));
-    const client: LettaTurnClient = { runTurn };
-    const noAuth = await handleBridgeProtocolRequest({
-      method: 'POST', path: '/v1/turn', body: JSON.stringify({ agent_id: 'agent-test-001', input }),
-    }, client, { token, agentId: 'agent-test-001' });
-    const wrongAgent = await handleBridgeProtocolRequest({
-      method: 'POST', path: '/v1/turn', authorization: `Bearer ${token}`,
-      body: JSON.stringify({ agent_id: 'other-agent', input }),
-    }, client, { token, agentId: 'agent-test-001' });
+test('protocol fails closed on missing auth and wrong agent', async () => {
+  let calls = 0;
+  const client: LettaTurnClient = { runTurn: async () => { calls += 1; return { response: 'bad' }; } };
+  const noAuth = await handleBridgeProtocolRequest({
+    method: 'POST', path: '/v1/turn', body: JSON.stringify({ agent_id: 'agent-test-001', input }),
+  }, client, { token, agentId: 'agent-test-001' });
+  const wrongAgent = await handleBridgeProtocolRequest({
+    method: 'POST', path: '/v1/turn', authorization: `Bearer ${token}`,
+    body: JSON.stringify({ agent_id: 'other-agent', input }),
+  }, client, { token, agentId: 'agent-test-001' });
+  assert.equal(noAuth.status, 401);
+  assert.equal(wrongAgent.status, 400);
+  assert.equal(calls, 0);
+});
 
-    expect(noAuth.status).toBe(401);
-    expect(wrongAgent.status).toBe(400);
-    expect(runTurn).not.toHaveBeenCalled();
-  });
-
-  it('does not leak provider errors through the protocol', async () => {
-    const client: LettaTurnClient = { runTurn: async () => { throw new Error('secret provider detail'); } };
-    const result = await handleBridgeProtocolRequest({
-      method: 'POST', path: '/v1/turn', authorization: `Bearer ${token}`,
-      body: JSON.stringify({ agent_id: 'agent-test-001', input }),
-    }, client, { token, agentId: 'agent-test-001' });
-    expect(result).toEqual({ status: 502, body: { error: 'brain_turn_failed' } });
-    expect(JSON.stringify(result)).not.toContain('secret provider detail');
-  });
+test('protocol does not leak provider errors', async () => {
+  const client: LettaTurnClient = { runTurn: async () => { throw new Error('secret provider detail'); } };
+  const result = await handleBridgeProtocolRequest({
+    method: 'POST', path: '/v1/turn', authorization: `Bearer ${token}`,
+    body: JSON.stringify({ agent_id: 'agent-test-001', input }),
+  }, client, { token, agentId: 'agent-test-001' });
+  assert.deepEqual(result, { status: 502, body: { error: 'brain_turn_failed' } });
+  assert.equal(JSON.stringify(result).includes('secret provider detail'), false);
 });

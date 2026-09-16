@@ -1,5 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
-import type { LettaTurnClient, LettaTurnInput, LettaTurnOutput } from './types.js';
+import type { LettaTurnClient, LettaTurnInput, LettaTurnOutput } from './types.ts';
 
 export const MAX_PROTOCOL_BYTES = 256 * 1024;
 

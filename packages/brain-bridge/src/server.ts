@@ -1,8 +1,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { pathToFileURL } from 'node:url';
-import { SdkLettaTurnClient } from './client.js';
-import { loadLettaBrainConfig } from './config.js';
-import { handleBridgeProtocolRequest, MAX_PROTOCOL_BYTES } from './protocol.js';
+import { SdkLettaTurnClient } from './client.ts';
+import { loadLettaBrainConfig } from './config.ts';
+import { handleBridgeProtocolRequest, MAX_PROTOCOL_BYTES } from './protocol.ts';
 
 async function readBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];

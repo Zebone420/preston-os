@@ -5,9 +5,9 @@
 // customer-send, or production-control authority.
 
 import Letta from '@letta-ai/letta-client';
-import type { LettaTurnClient, LettaTurnInput, LettaTurnOutput } from './types.js';
-import type { LettaBrainConfig } from './config.js';
-import { validateLettaBrainConfig } from './config.js';
+import type { LettaTurnClient, LettaTurnInput, LettaTurnOutput } from './types.ts';
+import type { LettaBrainConfig } from './config.ts';
+import { validateLettaBrainConfig } from './config.ts';
 
 export function buildSystemPrompt(mode: string): string {
   return [
