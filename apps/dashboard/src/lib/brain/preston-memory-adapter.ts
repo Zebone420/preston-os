@@ -80,6 +80,7 @@ function rowToContext(row: Record<string, unknown>): BrainContextItem | null {
 
   return {
     ...candidate,
+    audit_ref: candidate.audit_ref ?? null,
     value: policy.sanitized_value,
     created_at: String(row['created_at'] ?? ''),
   };
