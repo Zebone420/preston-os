@@ -54,6 +54,16 @@ describe('Letta SDK integration - configuration gates', () => {
     expect(result.errors).toContain('backend_not_remote');
   });
 
+  
+  // Test 2b: cloud-oauth backend is refused
+  it('refuses cloud-oauth backend', () => {
+    const config = validConfig({ backend: 'cloud-oauth' });
+    const result = validateLettaBrainConfig(config);
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain('backend_cloud_oauth_refused');
+    expect(result.errors).toContain('backend_not_remote');
+  });
+
   // Test 3: remote backend requires isolation attestation
   it('requires isolation attestation for remote backend', () => {
     const config = validConfig({ isolationAttested: false });
