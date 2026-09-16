@@ -72,6 +72,10 @@ while IFS= read -r -d '' f; do
   case "$f" in
     "$SELF_A"|"$SELF_B"|"$SELF_C"|"$SELF_D") continue ;;
   esac
+  # package-lock.json: generated content, not authored SQL.
+  case "$f" in
+    */package-lock.json|package-lock.json) continue ;;
+  esac
   if ! is_included_ext "$f"; then
     continue
   fi

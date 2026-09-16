@@ -26,6 +26,25 @@ jobs:
       - run: npx tsc --noEmit -p tsconfig.json
       - run: npm test
 
+  brain-bridge:
+    name: brain bridge (audit + native TS checks + tests + container)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/brain-bridge
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - run: npm ci --ignore-scripts
+      - name: Dependency audit — block high/critical
+        run: npm audit --audit-level=high
+      - run: npm run check
+      - run: npm test
+      - name: Build staging container
+        run: docker build --pull --tag preston-brain-bridge:staging .
+
   dashboard:
     name: dashboard (security + lint + typecheck + runtime build + tests)
     runs-on: ubuntu-latest
