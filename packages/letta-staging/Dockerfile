@@ -1,6 +1,9 @@
 FROM node:24-bookworm-slim
 
-RUN npm install -g @letta-ai/letta-code@0.32.8 --omit=dev --ignore-scripts=false \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 make g++ \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g @letta-ai/letta-code@0.32.8 --omit=dev --ignore-scripts=false \
     && npm cache clean --force
 
 WORKDIR /workspace
