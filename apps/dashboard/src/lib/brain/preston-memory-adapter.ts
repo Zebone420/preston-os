@@ -122,8 +122,8 @@ export class PrestonMemoryAdapter implements BrainProvider, BrainMemorySink {
     if (result.error) return [];
 
     const queryTerms = terms(query.query);
-    return (result.data ?? [])
-      .map((row) => {
+    const candidates: Array<BrainContextItem | null> = (result.data ?? []).map(
+      (row): BrainContextItem | null => {
         const item = rowToContext(row);
         if (!item) return null;
         if (query.memory_types && !query.memory_types.includes(item.memory_type)) return null;
@@ -131,7 +131,10 @@ export class PrestonMemoryAdapter implements BrainProvider, BrainMemorySink {
         const score = scoreRow(row, queryTerms);
         if (queryTerms.length > 0 && score === 0) return null;
         return { ...item, score };
-      })
+      },
+    );
+
+    return candidates
       .filter((item): item is BrainContextItem => item !== null)
       .sort((a, b) => (b.score ?? 0) - (a.score ?? 0) || b.created_at.localeCompare(a.created_at))
       .slice(0, limit);
