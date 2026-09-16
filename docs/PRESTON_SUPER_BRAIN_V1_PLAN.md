@@ -4,15 +4,15 @@
 
 Add persistent, provider-neutral cognition to Preston Control without moving any authority out of Preston Control.
 
-The Brain may recall bounded context, reason over that context, propose memory, summarize lessons, and serve context to approved workers.
+The Brain may recall bounded context, reason over that context, propose memory, summarize lessons, and serve bounded context to Preston-controlled consumers.
 
 The Brain may not approve actions, deploy, execute shell/SQL, change RLS/security policy, read or store credentials, send customer communications, make payments, create standing authorization, or bypass Preston Control.
 
-## Existing Preston substrate reused
+## Authority and memory model
 
-Preston already has an append-only `agent_memory` table plus provenance validation and secret redaction. Super Brain v1 reuses that substrate instead of creating a competing SSOT.
+Preston `agent_memory` remains the authoritative institutional-memory store. Letta is a replaceable reasoning/working-memory provider behind an isolated Brain Bridge. Any provider-proposed durable memory must pass Preston memory policy before persistence.
 
-Preston `agent_memory` remains the authoritative institutional-memory store. Letta is a stateful reasoning/working-memory engine behind a narrow adapter. Any Letta-proposed durable memory must pass Preston's memory policy before persistence.
+No Supabase client, approval client, shell, deployment client, payment client, customer-send client, Preston repository access, or production-control capability is passed to the Brain Bridge or Letta.
 
 ## Architecture
 
@@ -33,57 +33,90 @@ Provider-neutral cognition
       |
       +--> PRESTON MEMORY ADAPTER --> agent_memory SSOT
       |
-      +--> LETTA REASONER PORT --> Letta local/self-hosted runtime
-                                   (no Preston authority clients)
-
-All durable memory proposals
-      |
-      v
-MEMORY POLICY GATE
-- provenance required
-- secret-key detection
-- secret-value detection
-- authority-claim rejection
-- bounded capabilities
-      |
-      v
-Preston agent_memory
+      +--> HTTPS BOUNDED PROTOCOL
+               |
+               v
+          BRAIN BRIDGE
+          - staging only
+          - bearer-authenticated
+          - agent-bound
+          - payload bounded
+          - no Preston authority clients
+          - one runtime dependency: official Letta REST client
+               |
+               v
+          ISOLATED REMOTE LETTA SERVER
+          - no Preston filesystem
+          - no Preston DB
+          - no Preston credentials
+          - no Preston approval/control plane
 ```
 
-## Phase 1 - Core scaffold
+The dashboard never imports Letta SDK/client packages. It can reach only the Brain Bridge. The Brain Bridge is the only component that can reach the isolated Letta server.
 
-Branch: `feature/preston-super-brain-v1-staging`
+## Configuration boundary
 
-Acceptance:
+Dashboard-side configuration:
+
+- `PRESTON_BRAIN_ENABLED=true`
+- `PRESTON_BRAIN_LETTA_BACKEND=remote`
+- `PRESTON_BRAIN_BRIDGE_URL=<isolated Brain Bridge HTTPS base URL>`
+- `PRESTON_BRAIN_LETTA_AGENT_ID=<staging agent id>`
+- `PRESTON_BRAIN_LETTA_ISOLATION_ATTESTED=true`
+- `SUPABASE_RUNTIME_ENV=staging`
+- `PRESTON_BRAIN_BRIDGE_TOKEN=<shared bridge token; secret store only>`
+
+Brain Bridge configuration:
+
+- `PRESTON_BRAIN_ENABLED=true`
+- `PRESTON_BRAIN_LETTA_BACKEND=remote`
+- `PRESTON_BRAIN_LETTA_URL=<isolated Letta REST base URL>`
+- `PRESTON_BRAIN_LETTA_AGENT_ID=<same staging agent id>`
+- `PRESTON_BRAIN_LETTA_ISOLATION_ATTESTED=true`
+- `SUPABASE_RUNTIME_ENV=staging`
+- `PRESTON_BRAIN_BRIDGE_TOKEN=<same bridge token; secret store only>`
+- `LETTA_API_KEY=<only if the isolated Letta server requires it; secret store only>`
+- optional `PRESTON_BRAIN_BRIDGE_HOST` and `PRESTON_BRAIN_BRIDGE_PORT`
+
+Secrets are never committed and are never written into memory.
+
+## Core acceptance
+
 1. Brain capabilities are limited to `recall`, `reason`, and `propose_memory`.
-2. Secret-shaped nested keys are rejected.
-3. Secret-shaped values are rejected.
-4. Memory that claims blanket/standing authority is rejected.
-5. Approval-bypass instructions are rejected.
-6. Poisoned candidates never reach the memory sink.
-7. Recall and reasoning context are bounded.
-8. Provider-proposed memory is filtered before becoming eligible for persistence.
-9. No DB migration, production write, runtime authority change, or external service is required for the core scaffold.
+2. Secret-shaped nested keys and values are rejected.
+3. Memory claiming blanket/standing authority is rejected.
+4. Approval-bypass instructions are rejected.
+5. Poisoned candidates never reach the memory sink.
+6. Recall and reasoning context are bounded.
+7. Provider-proposed memory is filtered before persistence eligibility.
+8. Dashboard has no Letta package dependency and cannot contact Letta directly.
+9. Brain Bridge is remote-only and staging-only, with explicit isolation attestation.
+10. Protocol requests are authenticated, bound to one agent, bounded, and fail closed.
+11. Provider errors do not leak across the protocol boundary.
+12. Production runtime is refused by configuration validation.
+13. Dependency audit, security guards, lint/typecheck/runtime build, dashboard tests, bridge checks, and bridge tests must be green on the exact head commit.
+14. No merge to `master`, production deployment, DB modification, production write, or authority change occurs as part of staging acceptance.
 
-## Phase 2 - Preston memory adapter
+## Runtime acceptance — owner-gated
 
-Use a narrow adapter from `BrainMemorySink`/`BrainProvider` to the existing append-only Preston memory API. Keep owner/RLS boundaries unchanged. Retrieval is bounded and stored memory is re-evaluated by the Brain policy on read, so legacy or poisoned rows are not automatically trusted. No external provider receives a Supabase client.
+Repository acceptance is not sufficient to claim a live staging Brain. Before `STAGING_OPERATIONAL` may be recorded, all of the following must be observed against an isolated reachable runtime:
 
-## Phase 3 - Letta staging adapter
+1. An isolated Letta server exists with no Preston filesystem, database, secrets, approval system, deployment system, payment system, customer-send system, or production-control access.
+2. A staging-only Letta agent exists with no Preston execution tools.
+3. Brain Bridge is provisioned separately and can reach Letta; Preston can reach only Brain Bridge.
+4. One synthetic Preston -> Brain Bridge -> Letta -> bounded response -> Preston round trip succeeds.
+5. A cross-session synthetic memory/retrieval/reasoning drill proves durable Preston memory remains authoritative.
+6. Negative runtime probes prove missing/invalid auth, wrong agent, provider failure, production environment, missing isolation attestation, and direct-dashboard-to-Letta configuration fail closed.
+7. No secret is logged, committed, or returned in evidence.
 
-Use Letta self-hosted/local in staging only. The Preston-side adapter exposes a narrow `runTurn` port: bounded context in; reasoning text and proposed memories out. No owner token, service-role key, approval client, shell, deployment client, or database client enters Letta context. Provider removal must not break Preston Control or the authoritative memory store.
+Provisioning/deployment and secret injection are owner-gated operations and are not performed by repository acceptance work.
 
-The current Letta Agent SDK supports local and remote/self-hosted App Server backends. Actual SDK installation is a separate dependency change and remains staging-only until acceptance.
+## Post-v1 integration
 
-## Phase 4 - Worker context integration
+After runtime acceptance, bounded read-only Brain context can be exposed through Preston-controlled adapters to approved workers. Workers never write authoritative memory directly; memory candidates always pass the Preston policy gate.
 
-Expose bounded, read-only Brain context to Claude, Codex, Mini-SWE, and Hermes through Preston-controlled adapters. Workers cannot write authoritative memory directly; they submit candidates through the memory policy gate.
+The next locked foundation items remain separate from Super Brain v1 acceptance:
 
-## Phase 5 - Acceptance / red team
-
-Before real business ingestion: unit tests, typecheck/lint, security cleanup, memory-poisoning tests, fake-approval tests, secret-exfiltration tests, Letta-adapter isolation tests, and full Preston regression must pass.
-
-After Brain v1 is connected and green, the locked foundation roadmap is:
 1. OpenTelemetry + Langfuse
 2. Promptfoo
 3. dependency-cruiser
