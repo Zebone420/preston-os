@@ -26,6 +26,24 @@ jobs:
       - run: npx tsc --noEmit -p tsconfig.json
       - run: npm test
 
+  brain-bridge:
+    name: brain bridge (audit + typecheck + tests + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/brain-bridge
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - run: npm ci
+      - name: Dependency audit — block high/critical
+        run: npm audit --audit-level=high
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
   dashboard:
     name: dashboard (security + lint + typecheck + runtime build + tests)
     runs-on: ubuntu-latest

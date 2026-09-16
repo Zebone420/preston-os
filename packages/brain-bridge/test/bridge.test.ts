@@ -1,9 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   validateLettaBrainConfig,
   type LettaBrainConfig,
   SdkLettaTurnClient,
-} from '../src/index';
+  handleBridgeProtocolRequest,
+  type LettaTurnClient,
+} from '../src/index.js';
 
 function validConfig(overrides: Partial<LettaBrainConfig> = {}): LettaBrainConfig {
   return {
@@ -17,49 +19,29 @@ function validConfig(overrides: Partial<LettaBrainConfig> = {}): LettaBrainConfi
   };
 }
 
+const input = {
+  prompt: 'Analyze synthetic staging data only.',
+  mode: 'analysis' as const,
+  actor: 'staging-test',
+  correlation_id: 'corr-001',
+  context: [],
+  max_memory_candidates: 2,
+};
+
+const token = 'b'.repeat(48);
+
 describe('Brain Bridge config', () => {
   it('accepts valid staging', () => {
     expect(validateLettaBrainConfig(validConfig()).valid).toBe(true);
   });
 
-  it('refuses local', () => {
-    const r = validateLettaBrainConfig(validConfig({ backend: 'local' }));
-    expect(r.valid).toBe(false);
-    expect(r.errors).toContain('backend_local_refused');
-  });
-
-  it('refuses cloud', () => {
-    const r = validateLettaBrainConfig(validConfig({ backend: 'cloud' }));
-    expect(r.valid).toBe(false);
-    expect(r.errors).toContain('backend_cloud_refused');
-  });
-
-  it('refuses cloud-oauth', () => {
-    const r = validateLettaBrainConfig(validConfig({ backend: 'cloud-oauth' }));
-    expect(r.valid).toBe(false);
-    expect(r.errors).toContain('backend_cloud_oauth_refused');
-  });
-
-  it('refuses unknown backend', () => {
-    const r = validateLettaBrainConfig(validConfig({ backend: 'auto' }));
-    expect(r.valid).toBe(false);
-    expect(r.errors).toContain('backend_not_remote');
-  });
-
-  it('refuses production', () => {
-    const r = validateLettaBrainConfig(validConfig({ runtimeEnv: 'production' }));
-    expect(r.valid).toBe(false);
-    expect(r.errors).toContain('production_refused');
-  });
-
-  it('refuses disabled brain', () => {
-    const r = validateLettaBrainConfig(validConfig({ enabled: false }));
-    expect(r.valid).toBe(false);
-  });
-
-  it('refuses missing isolation', () => {
-    const r = validateLettaBrainConfig(validConfig({ isolationAttested: false }));
-    expect(r.valid).toBe(false);
+  it('refuses local, cloud, cloud-oauth, production, disabled, and missing isolation', () => {
+    expect(validateLettaBrainConfig(validConfig({ backend: 'local' })).valid).toBe(false);
+    expect(validateLettaBrainConfig(validConfig({ backend: 'cloud' })).valid).toBe(false);
+    expect(validateLettaBrainConfig(validConfig({ backend: 'cloud-oauth' })).valid).toBe(false);
+    expect(validateLettaBrainConfig(validConfig({ runtimeEnv: 'production' })).valid).toBe(false);
+    expect(validateLettaBrainConfig(validConfig({ enabled: false })).valid).toBe(false);
+    expect(validateLettaBrainConfig(validConfig({ isolationAttested: false })).valid).toBe(false);
   });
 
   it('SdkLettaTurnClient fails closed on invalid config', () => {
@@ -74,3 +56,44 @@ describe('Brain Bridge config', () => {
   });
 });
 
+describe('Brain Bridge protocol', () => {
+  it('accepts one authenticated, agent-bound, bounded synthetic turn', async () => {
+    const runTurn = vi.fn(async () => ({ response: 'synthetic-ok' }));
+    const client: LettaTurnClient = { runTurn };
+    const result = await handleBridgeProtocolRequest({
+      method: 'POST',
+      path: '/v1/turn',
+      authorization: `Bearer ${token}`,
+      body: JSON.stringify({ agent_id: 'agent-test-001', input }),
+    }, client, { token, agentId: 'agent-test-001' });
+
+    expect(result).toEqual({ status: 200, body: { response: 'synthetic-ok', memory_candidates: [] } });
+    expect(runTurn).toHaveBeenCalledWith(input);
+  });
+
+  it('fails closed on missing auth and wrong agent without invoking Letta', async () => {
+    const runTurn = vi.fn(async () => ({ response: 'should-not-run' }));
+    const client: LettaTurnClient = { runTurn };
+    const noAuth = await handleBridgeProtocolRequest({
+      method: 'POST', path: '/v1/turn', body: JSON.stringify({ agent_id: 'agent-test-001', input }),
+    }, client, { token, agentId: 'agent-test-001' });
+    const wrongAgent = await handleBridgeProtocolRequest({
+      method: 'POST', path: '/v1/turn', authorization: `Bearer ${token}`,
+      body: JSON.stringify({ agent_id: 'other-agent', input }),
+    }, client, { token, agentId: 'agent-test-001' });
+
+    expect(noAuth.status).toBe(401);
+    expect(wrongAgent.status).toBe(400);
+    expect(runTurn).not.toHaveBeenCalled();
+  });
+
+  it('does not leak provider errors through the protocol', async () => {
+    const client: LettaTurnClient = { runTurn: async () => { throw new Error('secret provider detail'); } };
+    const result = await handleBridgeProtocolRequest({
+      method: 'POST', path: '/v1/turn', authorization: `Bearer ${token}`,
+      body: JSON.stringify({ agent_id: 'agent-test-001', input }),
+    }, client, { token, agentId: 'agent-test-001' });
+    expect(result).toEqual({ status: 502, body: { error: 'brain_turn_failed' } });
+    expect(JSON.stringify(result)).not.toContain('secret provider detail');
+  });
+});

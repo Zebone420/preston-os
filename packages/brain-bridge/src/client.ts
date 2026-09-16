@@ -6,9 +6,9 @@
 // That server must have NO Preston repo, DB, secrets, or control-plane access.
 
 import { LettaAgentClient } from '@letta-ai/letta-agent-sdk/client';
-import type { LettaTurnClient, LettaTurnInput, LettaTurnOutput } from './types';
-import type { LettaBrainConfig } from './config';
-import { validateLettaBrainConfig } from './config';
+import type { LettaTurnClient, LettaTurnInput, LettaTurnOutput } from './types.js';
+import type { LettaBrainConfig } from './config.js';
+import { validateLettaBrainConfig } from './config.js';
 
 export function buildSystemPrompt(mode: string): string {
   return [
@@ -51,7 +51,6 @@ export class SdkLettaTurnClient implements LettaTurnClient {
   }
 
   async runTurn(input: LettaTurnInput): Promise<LettaTurnOutput> {
-    // Re-validate on every turn - fail closed if config drifted.
     const recheck = validateLettaBrainConfig(this.config);
     if (!recheck.valid) {
       throw new Error(`SdkLettaTurnClient: config no longer valid: ${recheck.errors.join(', ')}`);
@@ -66,14 +65,11 @@ export class SdkLettaTurnClient implements LettaTurnClient {
 
       const session = client.resumeSession(this.config.agentId);
       const userMessage = buildUserMessage(input);
-
       await session.send(userMessage);
 
       let responseText = '';
       for await (const msg of session.stream()) {
-        if (msg.type === 'assistant') {
-          responseText += msg.content;
-        }
+        if (msg.type === 'assistant') responseText += msg.content;
         if (msg.type === 'result' && !msg.success) {
           throw new Error(`Letta turn failed: ${msg.error ?? 'unknown'}`);
         }
@@ -81,13 +77,10 @@ export class SdkLettaTurnClient implements LettaTurnClient {
 
       return { response: responseText || '(no response)' };
     } catch (err) {
-      // Fail closed: SDK/network errors never silently return empty.
       const message = err instanceof Error ? err.message : String(err);
       throw new Error(`SdkLettaTurnClient: turn failed (fail-closed): ${message}`);
     } finally {
-      if (client) {
-        await client.close().catch(() => { /* best-effort cleanup */ });
-      }
+      if (client) await client.close().catch(() => { /* best-effort cleanup */ });
     }
   }
 }
