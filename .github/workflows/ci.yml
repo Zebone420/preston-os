@@ -27,7 +27,7 @@ jobs:
       - run: npm test
 
   brain-bridge:
-    name: brain bridge (audit + native TS checks + tests)
+    name: brain bridge (audit + native TS checks + tests + container)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -42,6 +42,8 @@ jobs:
         run: npm audit --audit-level=high
       - run: npm run check
       - run: npm test
+      - name: Build staging container
+        run: docker build --pull --tag preston-brain-bridge:staging .
 
   dashboard:
     name: dashboard (security + lint + typecheck + runtime build + tests)
