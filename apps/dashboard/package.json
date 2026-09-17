@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
+    "typecheck": "tsc --noEmit",
     "build:os-runtime": "tsc -p tsconfig.osruntime.json"
   },
   "dependencies": {

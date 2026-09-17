@@ -14,7 +14,7 @@ Authoritative build contract (supersedes older build-order documents where they 
 4. Never send emails, SMS, WhatsApp messages, or any client-facing messages.
 5. Never create, edit, or delete live calendar events.
 6. Never activate n8n workflows. `active: true` is forbidden in any workflow payload unless a later owner-approved RED gate explicitly allows it.
-7. Never bypass safety guards, git hooks, local policy guards, or owner approval gates.
+7. Safety guards, git hooks, local policy guards, and owner approval gates are mandatory and must remain enforced.
 8. Never run autonomous background loops.
 9. Use small commits with clear conventional commit messages when commits are authorized.
 10. Provide a structured result report at every gate close.
@@ -51,7 +51,7 @@ Every gate must close with:
 - `githooks/pre-commit` runs the local safety scanner before every commit.
 - Git must use `core.hooksPath=githooks`.
 - A user-level PreToolUse guard may block writes to credential-shaped paths such as `.env*`.
-- Respect all safety guards. Do not bypass, disable, weaken, or edit them outside an approved gate.
+- Respect all safety guards. They must remain enabled and enforced; editing them requires an approved gate.
 - The environment template is named `env.template` so it can list variable names without creating a credential-shaped `.env*` file.
 
 ## Verification Register rule

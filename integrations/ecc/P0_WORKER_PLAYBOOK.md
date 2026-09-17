@@ -56,9 +56,9 @@ Preston-specific rule: existing Preston secret scanners, RED boundary scanners, 
 Before claiming a Preston implementation task complete, run the verification allowed by the task scope. From `apps/dashboard/`, the canonical checks are:
 
 - focused tests for changed behavior;
-- `npx vitest run` when scope permits full regression;
-- `npx tsc --noEmit`;
-- `npx eslint .`;
+- `npm test` when scope permits full regression;
+- `npm run typecheck`;
+- `npm run lint`;
 - `npm run build:os-runtime` when runtime code is touched;
 - diff/status review of every changed path;
 - Preston safety scanner/hook evidence when a commit is permitted.

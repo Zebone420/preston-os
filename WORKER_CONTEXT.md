@@ -27,9 +27,9 @@ evidence are written back to the SSOT and read by the owner from ChatGPT.
 
 ## Commands (run from `apps/dashboard/`)
 
-- Tests: `npx vitest run` (full) or `npx vitest run test/<file>` (focused)
-- Types: `npx tsc --noEmit`
-- Lint: `npx eslint .`
+- Tests: `npm test` (full) or `npm test -- test/<file>` (focused)
+- Types: `npm run typecheck`
+- Lint: `npm run lint`
 - Runtime build check: `npm run build:os-runtime`
 
 ## Boundaries (your prompt's PROHIBITED section always wins)
